@@ -31,6 +31,11 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert "healthcheck" in services["postgres"]
     assert "postgres_data" in compose["volumes"]
 
+    app_healthcheck = " ".join(services["app"]["healthcheck"]["test"])
+    assert "python" in app_healthcheck
+    assert "urllib.request" in app_healthcheck
+    assert "curl" not in app_healthcheck
+
 
 def test_dockerignore_excludes_runtime_and_secret_files():
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
