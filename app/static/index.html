@@ -32,11 +32,45 @@
     <div class="text-slate-400 text-xs text-center px-2">{{ accountList.length }} 账号</div>
   </aside>
 
-  <section class="w-80 bg-white border-r border-slate-200 flex flex-col">
+  <section class="w-96 bg-white border-r border-slate-200 flex flex-col">
     <div class="p-4 border-b border-slate-100 space-y-3">
       <h1 class="font-semibold text-sm">多租户社交资产审计</h1>
-      <el-input v-model="searchQuery" placeholder="搜索群聊/联系人/记录..." clearable></el-input>
+      <el-input
+        v-model="searchQuery"
+        placeholder="全局搜索当前机器人视角消息..."
+        clearable
+        @keyup.enter="performSearch"
+        @clear="clearSearch"
+      >
+        <template #append>
+          <el-button @click="performSearch" :disabled="!currentRobot || !searchQuery.trim()">搜索</el-button>
+        </template>
+      </el-input>
     </div>
+
+    <div v-if="searchMode" class="border-b border-slate-100 bg-slate-50 flex flex-col max-h-[45%]">
+      <div class="px-4 py-2 flex items-center justify-between">
+        <span class="text-xs font-semibold text-slate-500">搜索结果 · {{ searchResults.length }}</span>
+        <button class="text-xs text-emerald-600 hover:underline" @click="clearSearch">返回会话</button>
+      </div>
+      <div class="overflow-y-auto">
+        <div v-if="searching" class="p-4 text-sm text-slate-400">正在搜索...</div>
+        <div v-else-if="searchResults.length === 0" class="p-4 text-sm text-slate-400">没有匹配消息</div>
+        <button
+          v-for="result in searchResults"
+          :key="result.msg_hash"
+          @click="selectSearchResult(result)"
+          class="w-full text-left px-4 py-3 hover:bg-white border-t border-slate-100"
+        >
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span>{{ result.room_id }} · {{ result.nickname || result.sender_id }}</span>
+            <span>{{ formatTs(result.timestamp) }}</span>
+          </div>
+          <p class="text-sm text-slate-700 line-clamp-2">{{ result.local_message }}</p>
+        </button>
+      </div>
+    </div>
+
     <div class="flex-1 overflow-y-auto">
       <div v-if="loadingRooms" class="p-4 text-sm text-slate-400">正在加载会话...</div>
       <div v-else-if="filteredRooms.length === 0" class="p-4 text-sm text-slate-400">暂无可见会话</div>
@@ -113,15 +147,14 @@ createApp({
     const currentRoom = ref(null);
     const messageList = ref([]);
     const searchQuery = ref('');
+    const searchResults = ref([]);
+    const searchMode = ref(false);
+    const searching = ref(false);
     const loadingRooms = ref(false);
     const loadingHistory = ref(false);
     const chatWindow = ref(null);
 
-    const filteredRooms = computed(() => {
-      const q = searchQuery.value.trim();
-      if (!q) return roomList.value;
-      return roomList.value.filter(room => room.room_id.includes(q));
-    });
+    const filteredRooms = computed(() => roomList.value);
 
     const apiGet = async (url) => {
       const response = await fetch(url);
@@ -140,6 +173,7 @@ createApp({
       currentRobot.value = acc;
       currentRoom.value = null;
       messageList.value = [];
+      clearSearch();
       loadingRooms.value = true;
       try {
         roomList.value = await apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`);
@@ -151,9 +185,37 @@ createApp({
     const selectRoom = async (room) => {
       currentRoom.value = room;
       messageList.value = [];
-      await loadMessages();
+      await reloadCurrentRoom();
+    };
+
+    const selectSearchResult = async (result) => {
+      let room = roomList.value.find(item => item.room_id === result.room_id);
+      if (!room) {
+        room = { room_id: result.room_id, last_timestamp: result.timestamp };
+        roomList.value = [room, ...roomList.value];
+      }
+      currentRoom.value = room;
+      messageList.value = [result];
       await nextTick();
       if (chatWindow.value) chatWindow.value.scrollTop = chatWindow.value.scrollHeight;
+    };
+
+    const performSearch = async () => {
+      if (!currentRobot.value || !searchQuery.value.trim()) return;
+      searchMode.value = true;
+      searching.value = true;
+      try {
+        const url = `/api/search?robot_id=${encodeURIComponent(currentRobot.value.id)}&keyword=${encodeURIComponent(searchQuery.value.trim())}&limit=50`;
+        searchResults.value = await apiGet(url);
+      } finally {
+        searching.value = false;
+      }
+    };
+
+    const clearSearch = () => {
+      searchMode.value = false;
+      searching.value = false;
+      searchResults.value = [];
     };
 
     const loadMessages = async (beforeTimestamp = null) => {
@@ -202,8 +264,8 @@ createApp({
 
     return {
       accountList, currentRobot, roomList, currentRoom, messageList, searchQuery,
-      loadingRooms, loadingHistory, chatWindow, filteredRooms,
-      switchAccount, selectRoom, reloadCurrentRoom, handleWindowScroll,
+      searchResults, searchMode, searching, loadingRooms, loadingHistory, chatWindow, filteredRooms,
+      switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, reloadCurrentRoom, handleWindowScroll,
       formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
     };
   }

@@ -17,5 +17,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/adapters" in html
     assert "/api/rooms" in html
     assert "/api/messages" in html
+    assert "/api/search" in html
+    assert "performSearch" in html
+    assert "searchResults" in html
+    assert "selectSearchResult" in html
+    assert "搜索结果" in html
     assert "before_timestamp" in html
     assert "static/storage" in html
