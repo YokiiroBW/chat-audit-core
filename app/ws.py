@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.onebot11 import normalize_message_event
@@ -19,12 +19,39 @@ async def get_media_http_client() -> AsyncIterator[Any]:
         yield client
 
 
+def get_onebot_access_token() -> str:
+    return get_settings().onebot_access_token
+
+
+def _extract_bearer_token(authorization):
+    if authorization is None or authorization == "":
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
+
+
+def _is_authorized(websocket: WebSocket, configured_token: str) -> bool:
+    if not configured_token:
+        return True
+
+    query_token = websocket.query_params.get("access_token")
+    bearer_token = _extract_bearer_token(websocket.headers.get("authorization"))
+    return query_token == configured_token or bearer_token == configured_token
+
+
 @router.websocket("/onebot/v11/ws")
 async def onebot11_reverse_ws(
     websocket: WebSocket,
     db: AsyncSession = Depends(get_db_session),
     media_http_client: Any = Depends(get_media_http_client),
+    configured_token: str = Depends(get_onebot_access_token),
 ) -> None:
+    if not _is_authorized(websocket, configured_token):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     await websocket.accept()
     try:
         while True:

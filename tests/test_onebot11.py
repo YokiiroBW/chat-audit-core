@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
 from app.database import get_db_session
 from app.main import app
@@ -127,3 +128,50 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
     assert "http://media.local" not in messages[0].local_message
     assert static_response.status_code == 200
     assert static_response.content == media_bytes
+
+
+def test_onebot_websocket_rejects_missing_or_invalid_access_token_when_configured():
+    from app.ws import get_onebot_access_token
+
+    def configured_token():
+        return "secret-token"
+
+    app.dependency_overrides[get_onebot_access_token] = configured_token
+    try:
+        with TestClient(app) as client:
+            with pytest.raises(WebSocketDisconnect) as missing_exc:
+                with client.websocket_connect("/onebot/v11/ws"):
+                    pass
+            with pytest.raises(WebSocketDisconnect) as invalid_exc:
+                with client.websocket_connect("/onebot/v11/ws?access_token=wrong"):
+                    pass
+            with client.websocket_connect("/onebot/v11/ws?access_token=secret-token") as websocket:
+                websocket.send_json({"post_type": "meta_event"})
+                ack = websocket.receive_json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert missing_exc.value.code == 1008
+    assert invalid_exc.value.code == 1008
+    assert ack == {"status": "ignored"}
+
+
+def test_onebot_websocket_accepts_bearer_authorization_header_when_configured():
+    from app.ws import get_onebot_access_token
+
+    def configured_token():
+        return "secret-token"
+
+    app.dependency_overrides[get_onebot_access_token] = configured_token
+    try:
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                "/onebot/v11/ws",
+                headers={"Authorization": "Bearer secret-token"},
+            ) as websocket:
+                websocket.send_json({"post_type": "meta_event"})
+                ack = websocket.receive_json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert ack == {"status": "ignored"}
