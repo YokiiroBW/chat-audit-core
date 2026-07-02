@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,7 +53,15 @@ class MessageService:
         return local_path
 
     @staticmethod
-    async def process_incoming_message(db: AsyncSession, robot_id: str, platform: str, msg_data: dict) -> str:
+    async def process_incoming_message(
+        db: AsyncSession,
+        robot_id: str,
+        platform: str,
+        msg_data: dict,
+        media_http_client: Any | None = None,
+        media_storage_root: str | Path | None = None,
+        media_public_prefix: str | None = None,
+    ) -> str:
         raw_message = msg_data["raw_message"]
         room_id = msg_data["room_id"]
         sender_id = msg_data["sender_id"]
@@ -62,6 +71,18 @@ class MessageService:
         result = await db.execute(select(Message).where(Message.msg_hash == msg_hash))
         existing_msg = result.scalar_one_or_none()
         if existing_msg is None:
+            local_message = msg_data.get("local_message", raw_message)
+            if media_http_client is not None:
+                from app.services.media_service import MediaService
+
+                local_message = await MediaService.rewrite_cq_media_to_local_paths(
+                    db,
+                    raw_message=raw_message,
+                    http_client=media_http_client,
+                    storage_root=media_storage_root,
+                    public_prefix=media_public_prefix,
+                )
+
             db.add(
                 Message(
                     msg_hash=msg_hash,
@@ -71,7 +92,7 @@ class MessageService:
                     sender_id=sender_id,
                     nickname=msg_data.get("nickname"),
                     raw_message=raw_message,
-                    local_message=msg_data.get("local_message", raw_message),
+                    local_message=local_message,
                     timestamp=msg_data["timestamp"],
                 )
             )
