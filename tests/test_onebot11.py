@@ -1,3 +1,4 @@
+import httpx
 from fastapi.testclient import TestClient
 import pytest
 from starlette.websockets import WebSocketDisconnect
@@ -7,15 +8,15 @@ from app.services.query_service import QueryService
 
 
 class StubAsyncClient:
-    def __init__(self, payloads: dict[str, bytes]):
+    def __init__(self, payloads: dict[str, bytes], status_codes: dict[str, int] | None = None):
         self.payloads = payloads
+        self.status_codes = status_codes or {}
         self.requested_urls: list[str] = []
 
     async def get(self, url: str):
-        import httpx
-
         self.requested_urls.append(url)
-        return httpx.Response(200, content=self.payloads[url])
+        status_code = self.status_codes.get(url, 200)
+        return httpx.Response(status_code, content=self.payloads.get(url, b""))
 
 
 class FakeOneBotWebSocket:
@@ -69,6 +70,28 @@ def test_normalize_group_message_event_maps_onebot_fields():
         "local_message": "hello from napcat",
         "timestamp": 1783000100,
     }
+
+
+def test_normalize_group_self_message_sent_event_maps_onebot_fields():
+    from app.adapters.onebot11 import normalize_message_event
+
+    event = {
+        "post_type": "message_sent",
+        "message_type": "group",
+        "self_id": 1449801200,
+        "group_id": 949040596,
+        "user_id": 1449801200,
+        "raw_message": "self message from napcat",
+        "time": 1783000600,
+        "sender": {"nickname": "BotSelf"},
+    }
+
+    normalized = normalize_message_event(event)
+
+    assert normalized.robot_id == "1449801200"
+    assert normalized.msg_data["room_id"] == "949040596"
+    assert normalized.msg_data["sender_id"] == "1449801200"
+    assert normalized.msg_data["raw_message"] == "self message from napcat"
 
 
 @pytest.mark.asyncio
@@ -132,6 +155,46 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
     assert "http://media.local" not in messages[0].local_message
     assert static_response.status_code == 200
     assert static_response.content == media_bytes
+
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_keeps_connection_and_stores_raw_message_when_media_download_fails(db_session):
+    from app.ws import onebot11_reverse_ws
+
+    stub_client = StubAsyncClient({}, {"http://media.local/expired.jpg": 400})
+    websocket = FakeOneBotWebSocket([
+        {
+            "post_type": "message_sent",
+            "message_type": "group",
+            "self_id": 1449801200,
+            "group_id": 949040596,
+            "user_id": 1449801200,
+            "raw_message": "self image [CQ:image,file=expired.image,url=http://media.local/expired.jpg]",
+            "time": 1783000700,
+            "sender": {"nickname": "BotSelf"},
+        },
+        {
+            "post_type": "message_sent",
+            "message_type": "group",
+            "self_id": 1449801200,
+            "group_id": 949040596,
+            "user_id": 1449801200,
+            "raw_message": "self text after failed media",
+            "time": 1783000710,
+            "sender": {"nickname": "BotSelf"},
+        },
+    ])
+
+    await onebot11_reverse_ws(websocket, db_session, media_http_client=stub_client, configured_token="")
+
+    messages = await QueryService.list_messages(db_session, robot_id="1449801200", room_id="949040596")
+    assert websocket.accepted is True
+    assert websocket.sent_json == []
+    assert [message.raw_message for message in messages] == [
+        "self image [CQ:image,file=expired.image,url=http://media.local/expired.jpg]",
+        "self text after failed media",
+    ]
+    assert messages[0].local_message == messages[0].raw_message
 
 
 @pytest.mark.asyncio

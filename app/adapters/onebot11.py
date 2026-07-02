@@ -20,7 +20,7 @@ def _pick_nickname(sender: dict[str, Any]) -> str | None:
 
 
 def normalize_message_event(event: dict[str, Any]) -> NormalizedMessageEvent | None:
-    if event.get("post_type") != "message":
+    if event.get("post_type") not in {"message", "message_sent"}:
         return None
 
     message_type = event.get("message_type")

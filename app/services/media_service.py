@@ -95,13 +95,12 @@ class MediaService:
         rewritten = raw_message
         try:
             for segment in segments:
-                response = await client.get(segment.url)
+                try:
+                    response = await client.get(segment.url)
+                except httpx.HTTPError:
+                    continue
                 if response.status_code >= 400:
-                    raise httpx.HTTPStatusError(
-                        f"failed to download media: HTTP {response.status_code}",
-                        request=getattr(response, "request", None),
-                        response=response,
-                    )
+                    continue
                 local_path = await MessageService.save_media_asset(
                     db,
                     file_content=response.content,
