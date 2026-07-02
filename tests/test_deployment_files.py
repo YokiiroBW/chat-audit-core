@@ -5,15 +5,17 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_dockerfile_installs_runtime_dependencies_and_runs_uvicorn():
+def test_dockerfile_uses_offline_friendly_runtime_and_runs_uvicorn():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
-    assert "ffmpeg" in dockerfile
+    assert "apt-get" not in dockerfile
+    assert "curl" not in dockerfile
     assert "pip install" in dockerfile
     assert "requirements.txt" in dockerfile
     assert "uvicorn" in dockerfile
     assert "app.main:app" in dockerfile
+    assert "urllib.request" in dockerfile
 
 
 def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
