@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend cache
+node_modules/
+dist/
+build/
+.vite/
+
+# Runtime data
+data/storage/*
+data/backups/*
+!data/storage/.gitkeep
+!data/backups/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets / credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
