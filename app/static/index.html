@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>社交资产多租户审计控制台</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+  <script src="https://unpkg.com/element-plus"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    [v-cloak] { display: none; }
+  </style>
+</head>
+<body class="bg-slate-100 h-screen overflow-hidden">
+<div id="app" v-cloak class="flex h-full w-full text-slate-800">
+  <aside class="w-20 bg-slate-950 flex flex-col items-center py-6 justify-between border-r border-slate-800">
+    <div class="space-y-6 flex flex-col items-center w-full">
+      <div class="text-white font-bold text-xs mb-4 tracking-wide">AUDIT V4</div>
+      <button
+        v-for="acc in accountList"
+        :key="acc.id"
+        @click="switchAccount(acc)"
+        :title="acc.id"
+        :class="['p-1 rounded-full cursor-pointer transition', currentRobot && currentRobot.id === acc.id ? 'ring-2 ring-emerald-400' : 'opacity-70 hover:opacity-100']"
+      >
+        <img :src="avatarUrl(acc.id)" class="w-12 h-12 rounded-full bg-slate-800" />
+      </button>
+    </div>
+    <div class="text-slate-400 text-xs text-center px-2">{{ accountList.length }} 账号</div>
+  </aside>
+
+  <section class="w-80 bg-white border-r border-slate-200 flex flex-col">
+    <div class="p-4 border-b border-slate-100 space-y-3">
+      <h1 class="font-semibold text-sm">多租户社交资产审计</h1>
+      <el-input v-model="searchQuery" placeholder="搜索群聊/联系人/记录..." clearable></el-input>
+    </div>
+    <div class="flex-1 overflow-y-auto">
+      <div v-if="loadingRooms" class="p-4 text-sm text-slate-400">正在加载会话...</div>
+      <div v-else-if="filteredRooms.length === 0" class="p-4 text-sm text-slate-400">暂无可见会话</div>
+      <button
+        v-for="room in filteredRooms"
+        :key="room.room_id"
+        @click="selectRoom(room)"
+        :class="['w-full flex items-center px-4 py-3 text-left cursor-pointer hover:bg-slate-50 transition', currentRoom && currentRoom.room_id === room.room_id ? 'bg-slate-100' : '']"
+      >
+        <img :src="roomAvatarUrl(room.room_id)" class="w-10 h-10 rounded-lg mr-3 bg-slate-100" />
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium truncate">{{ room.room_id }}</p>
+          <p class="text-xs text-slate-400 truncate">最近存盘: {{ formatTs(room.last_timestamp) }}</p>
+        </div>
+      </button>
+    </div>
+  </section>
+
+  <main class="flex-1 bg-slate-50 flex flex-col h-full">
+    <header class="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
+      <div>
+        <span class="font-semibold">{{ currentRoom ? currentRoom.room_id : '请选择会话' }}</span>
+        <span v-if="currentRobot" class="ml-2 text-xs text-slate-400">视角: {{ currentRobot.id }}</span>
+      </div>
+      <div class="space-x-2">
+        <el-button size="small" @click="reloadCurrentRoom" :disabled="!currentRoom">刷新</el-button>
+        <el-button size="small" type="primary" plain disabled>高级过滤导出</el-button>
+      </div>
+    </header>
+
+    <div v-if="!currentRoom" class="flex-1 flex items-center justify-center text-slate-400">
+      从左侧选择一个机器人账号和会话，开始审计聊天资产。
+    </div>
+
+    <div
+      v-else
+      ref="chatWindow"
+      class="flex-1 overflow-y-auto p-6 space-y-4"
+      @scroll="handleWindowScroll"
+    >
+      <div v-if="loadingHistory" class="text-center text-xs text-slate-400 py-2">正在加载更早记录...</div>
+      <div v-if="messageList.length === 0" class="text-center text-sm text-slate-400 py-12">暂无消息</div>
+      <div
+        v-for="msg in messageList"
+        :key="msg.msg_hash"
+        :class="['flex w-full items-start', currentRobot && msg.sender_id === currentRobot.id ? 'flex-row-reverse' : '']"
+      >
+        <img :src="avatarUrl(msg.sender_id)" class="w-10 h-10 rounded-full mx-2 bg-white" />
+        <div :class="['flex flex-col max-w-[65%]', currentRobot && msg.sender_id === currentRobot.id ? 'items-end' : 'items-start']">
+          <span class="text-xs text-slate-400 mb-1">{{ msg.nickname || msg.sender_id }} · {{ formatTs(msg.timestamp) }}</span>
+          <div :class="['p-3 rounded-xl text-sm shadow-sm leading-relaxed break-all', currentRobot && msg.sender_id === currentRobot.id ? 'bg-emerald-500 text-white rounded-tr-none' : 'bg-white text-slate-800 rounded-tl-none']">
+            <template v-if="isMedia(msg.local_message)">
+              <img v-if="isImg(msg.local_message)" :src="mediaUrl(msg.local_message)" class="max-w-xs rounded" />
+              <video v-else-if="isVideo(msg.local_message)" :src="mediaUrl(msg.local_message)" controls class="max-w-sm rounded"></video>
+              <audio v-else-if="isVoice(msg.local_message)" :src="mediaUrl(msg.local_message)" controls></audio>
+              <a v-else :href="mediaUrl(msg.local_message)" target="_blank" class="underline">打开媒体资产</a>
+            </template>
+            <template v-else>{{ msg.local_message }}</template>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted, nextTick } = Vue;
+
+createApp({
+  setup() {
+    const accountList = ref([]);
+    const currentRobot = ref(null);
+    const roomList = ref([]);
+    const currentRoom = ref(null);
+    const messageList = ref([]);
+    const searchQuery = ref('');
+    const loadingRooms = ref(false);
+    const loadingHistory = ref(false);
+    const chatWindow = ref(null);
+
+    const filteredRooms = computed(() => {
+      const q = searchQuery.value.trim();
+      if (!q) return roomList.value;
+      return roomList.value.filter(room => room.room_id.includes(q));
+    });
+
+    const apiGet = async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+      return await response.json();
+    };
+
+    const loadAdapters = async () => {
+      accountList.value = await apiGet('/api/adapters');
+      if (accountList.value.length > 0 && !currentRobot.value) {
+        await switchAccount(accountList.value[0]);
+      }
+    };
+
+    const switchAccount = async (acc) => {
+      currentRobot.value = acc;
+      currentRoom.value = null;
+      messageList.value = [];
+      loadingRooms.value = true;
+      try {
+        roomList.value = await apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`);
+      } finally {
+        loadingRooms.value = false;
+      }
+    };
+
+    const selectRoom = async (room) => {
+      currentRoom.value = room;
+      messageList.value = [];
+      await loadMessages();
+      await nextTick();
+      if (chatWindow.value) chatWindow.value.scrollTop = chatWindow.value.scrollHeight;
+    };
+
+    const loadMessages = async (beforeTimestamp = null) => {
+      if (!currentRobot.value || !currentRoom.value) return [];
+      let url = `/api/messages?robot_id=${encodeURIComponent(currentRobot.value.id)}&room_id=${encodeURIComponent(currentRoom.value.room_id)}&limit=50`;
+      if (beforeTimestamp !== null && beforeTimestamp !== undefined) {
+        url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
+      }
+      return await apiGet(url);
+    };
+
+    const reloadCurrentRoom = async () => {
+      if (!currentRoom.value) return;
+      messageList.value = await loadMessages();
+      await nextTick();
+      if (chatWindow.value) chatWindow.value.scrollTop = chatWindow.value.scrollHeight;
+    };
+
+    const handleWindowScroll = async () => {
+      if (!chatWindow.value || chatWindow.value.scrollTop !== 0 || loadingHistory.value || messageList.value.length === 0) return;
+      loadingHistory.value = true;
+      const oldScrollHeight = chatWindow.value.scrollHeight;
+      const cursorTimestamp = messageList.value[0].timestamp;
+      try {
+        const older = await loadMessages(cursorTimestamp);
+        if (older.length > 0) {
+          messageList.value = [...older, ...messageList.value];
+          await nextTick();
+          chatWindow.value.scrollTop = chatWindow.value.scrollHeight - oldScrollHeight;
+        }
+      } finally {
+        loadingHistory.value = false;
+      }
+    };
+
+    const formatTs = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '-';
+    const avatarUrl = (id) => `https://q.qlogo.cn/g?b=qq&nk=${encodeURIComponent(id)}&s=100`;
+    const roomAvatarUrl = (id) => `https://p.qlogo.cn/gh/${encodeURIComponent(id)}/${encodeURIComponent(id)}/100`;
+    const mediaUrl = (value) => value;
+    const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
+    const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
+    const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
+    const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
+
+    onMounted(loadAdapters);
+
+    return {
+      accountList, currentRobot, roomList, currentRoom, messageList, searchQuery,
+      loadingRooms, loadingHistory, chatWindow, filteredRooms,
+      switchAccount, selectRoom, reloadCurrentRoom, handleWindowScroll,
+      formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

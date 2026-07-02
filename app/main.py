@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -20,6 +22,8 @@ def create_app(
     active_settings = settings or get_settings()
     active_engine = engine or default_engine
     active_sessionmaker = sessionmaker or AsyncSessionLocal
+    static_dir = Path(__file__).resolve().parent / "static"
+    index_file = static_dir / "index.html"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -42,6 +46,10 @@ def create_app(
     )
     app.include_router(api_router, prefix="/api")
     app.include_router(ws_router)
+
+    @app.get("/")
+    async def index() -> FileResponse:
+        return FileResponse(index_file, media_type="text/html")
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
