@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db_session
-from app.schemas import AdapterResponse, MessageResponse, RoomResponse
+from app.schemas import AdapterResponse, ImportResultResponse, MessageResponse, RoomResponse
+from app.services.backup_service import BackupService
 from app.services.query_service import QueryService
 
 router = APIRouter()
@@ -39,3 +40,29 @@ async def list_messages(
         limit=limit,
     )
     return [MessageResponse.model_validate(message) for message in messages]
+
+
+@router.get("/export")
+async def export_data(
+    robot_id: str | None = Query(default=None, min_length=1),
+    room_id: str | None = Query(default=None, min_length=1),
+    start_timestamp: int | None = Query(default=None),
+    end_timestamp: int | None = Query(default=None),
+    db: AsyncSession = Depends(get_db_session),
+):
+    return await BackupService.export_package(
+        db,
+        robot_id=robot_id,
+        room_id=room_id,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+    )
+
+
+@router.post("/import", response_model=ImportResultResponse)
+async def import_data(package: dict, db: AsyncSession = Depends(get_db_session)) -> ImportResultResponse:
+    try:
+        result = await BackupService.import_package(db, package)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ImportResultResponse(**result)

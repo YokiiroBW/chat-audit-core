@@ -31,3 +31,9 @@ class MessageResponse(BaseModel):
     raw_message: str
     local_message: str
     timestamp: int
+
+
+class ImportResultResponse(BaseModel):
+    messages: int
+    robot_messages: int
+    media_assets: int
