@@ -1,4 +1,4 @@
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Adapter, Message, RobotMessage
@@ -49,3 +49,41 @@ class QueryService:
         result = await db.execute(stmt)
         messages = list(result.scalars().all())
         return list(reversed(messages))
+
+    @staticmethod
+    async def search_messages(
+        db: AsyncSession,
+        robot_id: str,
+        keyword: str | None = None,
+        room_id: str | None = None,
+        sender_id: str | None = None,
+        start_timestamp: int | None = None,
+        end_timestamp: int | None = None,
+        limit: int = 50,
+    ) -> list[Message]:
+        stmt = (
+            select(Message)
+            .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .where(RobotMessage.robot_id == robot_id)
+        )
+        if keyword:
+            pattern = f"%{keyword}%"
+            stmt = stmt.where(
+                or_(
+                    Message.raw_message.like(pattern),
+                    Message.local_message.like(pattern),
+                    Message.nickname.like(pattern),
+                )
+            )
+        if room_id:
+            stmt = stmt.where(Message.room_id == room_id)
+        if sender_id:
+            stmt = stmt.where(Message.sender_id == sender_id)
+        if start_timestamp is not None:
+            stmt = stmt.where(Message.timestamp >= start_timestamp)
+        if end_timestamp is not None:
+            stmt = stmt.where(Message.timestamp <= end_timestamp)
+
+        stmt = stmt.order_by(Message.timestamp.desc(), Message.msg_hash.desc()).limit(limit)
+        result = await db.execute(stmt)
+        return list(result.scalars().unique().all())

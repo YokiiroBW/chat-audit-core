@@ -42,6 +42,30 @@ async def list_messages(
     return [MessageResponse.model_validate(message) for message in messages]
 
 
+@router.get("/search", response_model=list[MessageResponse])
+async def search_messages(
+    robot_id: str = Query(..., min_length=1),
+    keyword: str | None = Query(default=None),
+    room_id: str | None = Query(default=None),
+    sender_id: str | None = Query(default=None),
+    start_timestamp: int | None = Query(default=None),
+    end_timestamp: int | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db_session),
+) -> list[MessageResponse]:
+    messages = await QueryService.search_messages(
+        db,
+        robot_id=robot_id,
+        keyword=keyword,
+        room_id=room_id,
+        sender_id=sender_id,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+        limit=limit,
+    )
+    return [MessageResponse.model_validate(message) for message in messages]
+
+
 @router.get("/export")
 async def export_data(
     robot_id: str | None = Query(default=None, min_length=1),
