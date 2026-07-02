@@ -23,18 +23,23 @@
         v-for="acc in accountList"
         :key="acc.id"
         @click="switchAccount(acc)"
-        :title="acc.id"
-        :class="['p-1 rounded-full cursor-pointer transition', currentRobot && currentRobot.id === acc.id ? 'ring-2 ring-emerald-400' : 'opacity-70 hover:opacity-100']"
+        :title="`${acc.id} · ${acc.status}`"
+        :class="['relative p-1 rounded-full cursor-pointer transition', currentRobot && currentRobot.id === acc.id ? 'ring-2 ring-emerald-400' : 'opacity-70 hover:opacity-100']"
       >
         <img :src="avatarUrl(acc.id)" class="w-12 h-12 rounded-full bg-slate-800" />
+        <span :class="['absolute right-0 bottom-0 w-3 h-3 rounded-full border border-slate-950', statusDotClass(acc.status)]"></span>
       </button>
     </div>
-    <div class="text-slate-400 text-xs text-center px-2">{{ accountList.length }} 账号</div>
+    <div class="text-slate-400 text-xs text-center px-2 space-y-2">
+      <button class="hover:text-white" @click="settingsMode = !settingsMode">账号设置</button>
+      <div>{{ accountList.length }} 账号</div>
+    </div>
   </aside>
 
   <section class="w-96 bg-white border-r border-slate-200 flex flex-col">
     <div class="p-4 border-b border-slate-100 space-y-3">
       <h1 class="font-semibold text-sm">多租户社交资产审计</h1>
+      <div class="text-[11px] text-slate-400">状态枚举：green/red/gray</div>
       <el-input
         v-model="searchQuery"
         placeholder="全局搜索当前机器人视角消息..."
@@ -46,6 +51,38 @@
           <el-button @click="performSearch" :disabled="!currentRobot || !searchQuery.trim()">搜索</el-button>
         </template>
       </el-input>
+    </div>
+
+    <div v-if="settingsMode" class="border-b border-slate-100 bg-white p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold">账号设置</span>
+        <button class="text-xs text-emerald-600 hover:underline" @click="resetAdapterForm">新增账号</button>
+      </div>
+      <div class="space-y-2">
+        <input v-model="adapterForm.id" :disabled="editingAdapterId" placeholder="机器人账号 / self_id" class="w-full border rounded px-2 py-1 text-sm" />
+        <select v-model="adapterForm.platform" class="w-full border rounded px-2 py-1 text-sm">
+          <option value="qq">qq</option>
+          <option value="wechat">wechat</option>
+        </select>
+        <select v-model="adapterForm.status" class="w-full border rounded px-2 py-1 text-sm">
+          <option value="gray">gray</option>
+          <option value="green">green</option>
+          <option value="red">red</option>
+        </select>
+        <textarea v-model="adapterForm.config_json" placeholder='配置 JSON，例如 {"token":"..."}' class="w-full border rounded px-2 py-1 text-xs h-16"></textarea>
+        <div class="flex gap-2">
+          <button class="flex-1 bg-emerald-500 text-white rounded py-1 text-sm disabled:opacity-50" @click="saveAdapter" :disabled="savingAdapter || !adapterForm.id || !adapterForm.platform">{{ editingAdapterId ? '保存修改' : '添加账号' }}</button>
+          <button class="px-3 border rounded text-sm" @click="resetAdapterForm">清空</button>
+        </div>
+      </div>
+      <div class="space-y-1 max-h-40 overflow-y-auto">
+        <div v-for="acc in accountList" :key="acc.id" class="flex items-center justify-between text-xs border rounded px-2 py-1">
+          <button class="truncate text-left" @click="editAdapter(acc)">
+            <span :class="['inline-block w-2 h-2 rounded-full mr-1', statusDotClass(acc.status)]"></span>{{ acc.id }} · {{ acc.platform }} · {{ acc.status }}
+          </button>
+          <button class="text-red-500 hover:underline" @click="deleteAdapter(acc.id)">删除</button>
+        </div>
+      </div>
     </div>
 
     <div v-if="searchMode" class="border-b border-slate-100 bg-slate-50 flex flex-col max-h-[45%]">
@@ -105,19 +142,10 @@
       从左侧选择一个机器人账号和会话，开始审计聊天资产。
     </div>
 
-    <div
-      v-else
-      ref="chatWindow"
-      class="flex-1 overflow-y-auto p-6 space-y-4"
-      @scroll="handleWindowScroll"
-    >
+    <div v-else ref="chatWindow" class="flex-1 overflow-y-auto p-6 space-y-4" @scroll="handleWindowScroll">
       <div v-if="loadingHistory" class="text-center text-xs text-slate-400 py-2">正在加载更早记录...</div>
       <div v-if="messageList.length === 0" class="text-center text-sm text-slate-400 py-12">暂无消息</div>
-      <div
-        v-for="msg in messageList"
-        :key="msg.msg_hash"
-        :class="['flex w-full items-start', currentRobot && msg.sender_id === currentRobot.id ? 'flex-row-reverse' : '']"
-      >
+      <div v-for="msg in messageList" :key="msg.msg_hash" :class="['flex w-full items-start', currentRobot && msg.sender_id === currentRobot.id ? 'flex-row-reverse' : '']">
         <img :src="avatarUrl(msg.sender_id)" class="w-10 h-10 rounded-full mx-2 bg-white" />
         <div :class="['flex flex-col max-w-[65%]', currentRobot && msg.sender_id === currentRobot.id ? 'items-end' : 'items-start']">
           <span class="text-xs text-slate-400 mb-1">{{ msg.nickname || msg.sender_id }} · {{ formatTs(msg.timestamp) }}</span>
@@ -150,6 +178,10 @@ createApp({
     const searchResults = ref([]);
     const searchMode = ref(false);
     const searching = ref(false);
+    const settingsMode = ref(false);
+    const savingAdapter = ref(false);
+    const editingAdapterId = ref(null);
+    const adapterForm = ref({ id: '', platform: 'qq', status: 'gray', config_json: '' });
     const loadingRooms = ref(false);
     const loadingHistory = ref(false);
     const chatWindow = ref(null);
@@ -162,11 +194,20 @@ createApp({
       return await response.json();
     };
 
+    const apiSend = async (url, method, body = null) => {
+      const response = await fetch(url, {
+        method,
+        headers: body !== null ? { 'Content-Type': 'application/json' } : {},
+        body: body !== null ? JSON.stringify(body) : null,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${method} ${url}`);
+      if (response.status === 204) return null;
+      return await response.json();
+    };
+
     const loadAdapters = async () => {
       accountList.value = await apiGet('/api/adapters');
-      if (accountList.value.length > 0 && !currentRobot.value) {
-        await switchAccount(accountList.value[0]);
-      }
+      if (accountList.value.length > 0 && !currentRobot.value) await switchAccount(accountList.value[0]);
     };
 
     const switchAccount = async (acc) => {
@@ -180,6 +221,52 @@ createApp({
       } finally {
         loadingRooms.value = false;
       }
+    };
+
+    const resetAdapterForm = () => {
+      editingAdapterId.value = null;
+      adapterForm.value = { id: '', platform: 'qq', status: 'gray', config_json: '' };
+    };
+
+    const editAdapter = (adapter) => {
+      editingAdapterId.value = adapter.id;
+      adapterForm.value = {
+        id: adapter.id,
+        platform: adapter.platform,
+        status: adapter.status,
+        config_json: adapter.config_json || '',
+      };
+    };
+
+    const saveAdapter = async () => {
+      savingAdapter.value = true;
+      try {
+        const payload = {
+          platform: adapterForm.value.platform,
+          status: adapterForm.value.status,
+          config_json: adapterForm.value.config_json ? adapterForm.value.config_json : null,
+        };
+        if (editingAdapterId.value) {
+          await apiSend(`/api/adapters/${encodeURIComponent(editingAdapterId.value)}`, 'PATCH', payload);
+        } else {
+          await apiSend('/api/adapters', 'POST', { id: adapterForm.value.id, ...payload });
+        }
+        resetAdapterForm();
+        await loadAdapters();
+      } finally {
+        savingAdapter.value = false;
+      }
+    };
+
+    const deleteAdapter = async (adapterId) => {
+      await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
+      if (currentRobot.value && currentRobot.value.id === adapterId) {
+        currentRobot.value = null;
+        currentRoom.value = null;
+        messageList.value = [];
+        roomList.value = [];
+      }
+      await loadAdapters();
     };
 
     const selectRoom = async (room) => {
@@ -221,9 +308,7 @@ createApp({
     const loadMessages = async (beforeTimestamp = null) => {
       if (!currentRobot.value || !currentRoom.value) return [];
       let url = `/api/messages?robot_id=${encodeURIComponent(currentRobot.value.id)}&room_id=${encodeURIComponent(currentRoom.value.room_id)}&limit=50`;
-      if (beforeTimestamp !== null && beforeTimestamp !== undefined) {
-        url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
-      }
+      if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
       return await apiGet(url);
     };
 
@@ -251,6 +336,7 @@ createApp({
       }
     };
 
+    const statusDotClass = (status) => ({ green: 'bg-emerald-400', red: 'bg-red-400', gray: 'bg-slate-400' }[status] || 'bg-slate-400');
     const formatTs = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '-';
     const avatarUrl = (id) => `https://q.qlogo.cn/g?b=qq&nk=${encodeURIComponent(id)}&s=100`;
     const roomAvatarUrl = (id) => `https://p.qlogo.cn/gh/${encodeURIComponent(id)}/${encodeURIComponent(id)}/100`;
@@ -264,9 +350,11 @@ createApp({
 
     return {
       accountList, currentRobot, roomList, currentRoom, messageList, searchQuery,
-      searchResults, searchMode, searching, loadingRooms, loadingHistory, chatWindow, filteredRooms,
+      searchResults, searchMode, searching, settingsMode, adapterForm, savingAdapter, editingAdapterId,
+      loadingRooms, loadingHistory, chatWindow, filteredRooms,
       switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, reloadCurrentRoom, handleWindowScroll,
-      formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
+      resetAdapterForm, editAdapter, saveAdapter, deleteAdapter,
+      statusDotClass, formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
     };
   }
 }).use(ElementPlus).mount('#app');

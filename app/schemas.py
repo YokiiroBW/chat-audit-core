@@ -11,7 +11,21 @@ class AdapterResponse(BaseModel):
 
     id: str
     platform: str
+    config_json: str | None = None
     status: str
+
+
+class AdapterCreateRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    platform: str = Field(min_length=1, max_length=20)
+    config_json: str | None = None
+    status: str = Field(default="gray", min_length=1, max_length=20)
+
+
+class AdapterUpdateRequest(BaseModel):
+    platform: str | None = Field(default=None, min_length=1, max_length=20)
+    config_json: str | None = None
+    status: str | None = Field(default=None, min_length=1, max_length=20)
 
 
 class RoomResponse(BaseModel):

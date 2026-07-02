@@ -24,3 +24,11 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "搜索结果" in html
     assert "before_timestamp" in html
     assert "static/storage" in html
+    assert "账号设置" in html
+    assert "adapterForm" in html
+    assert "saveAdapter" in html
+    assert "deleteAdapter" in html
+    assert "POST", "/api/adapters"
+    assert "PATCH" in html
+    assert "DELETE" in html
+    assert "green/red/gray" in html
