@@ -1,24 +1,53 @@
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.api import router as api_router
-from app.config import get_settings
+from app.config import Settings, get_settings
+from app.database import AsyncSessionLocal, create_all_tables, engine as default_engine, get_db_session
 from app.schemas import HealthResponse
 from app.ws import router as ws_router
 
-settings = get_settings()
-settings.storage_root.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title=settings.app_name)
-app.mount(
-    settings.public_storage_prefix,
-    StaticFiles(directory=settings.storage_root, check_dir=False),
-    name="storage",
-)
-app.include_router(api_router, prefix="/api")
-app.include_router(ws_router)
+def create_app(
+    settings: Settings | None = None,
+    engine: AsyncEngine | None = None,
+    sessionmaker: async_sessionmaker[AsyncSession] | None = None,
+) -> FastAPI:
+    active_settings = settings or get_settings()
+    active_engine = engine or default_engine
+    active_sessionmaker = sessionmaker or AsyncSessionLocal
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        active_settings.storage_root.mkdir(parents=True, exist_ok=True)
+        active_settings.backup_root.mkdir(parents=True, exist_ok=True)
+        await create_all_tables(active_engine)
+        yield
+
+    app = FastAPI(title=active_settings.app_name, lifespan=lifespan)
+
+    async def app_db_session() -> AsyncIterator[AsyncSession]:
+        async with active_sessionmaker() as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = app_db_session
+    app.mount(
+        active_settings.public_storage_prefix,
+        StaticFiles(directory=active_settings.storage_root, check_dir=False),
+        name="storage",
+    )
+    app.include_router(api_router, prefix="/api")
+    app.include_router(ws_router)
+
+    @app.get("/health", response_model=HealthResponse)
+    async def health() -> HealthResponse:
+        return HealthResponse(status="ok", app=active_settings.app_name)
+
+    return app
 
 
-@app.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
-    return HealthResponse(status="ok", app=settings.app_name)
+app = create_app()
