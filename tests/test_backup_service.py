@@ -203,3 +203,55 @@ def test_backup_service_calculates_tomorrow_when_daily_cron_time_has_passed():
     next_run = BackupService.next_run_from_cron("15 3 * * *", now)
 
     assert next_run == __import__("datetime").datetime(2026, 7, 4, 3, 15, 0)
+
+
+@pytest.mark.asyncio
+async def test_backup_service_export_includes_package_checksum(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-checksum",
+        "qq",
+        {
+            "room_id": "room-checksum",
+            "message_type": "group",
+            "sender_id": "user-checksum",
+            "nickname": "Checksum User",
+            "raw_message": "checksum payload",
+            "timestamp": 789,
+        },
+    )
+
+    package = await BackupService.export_package(db_session, robot_id="robot-checksum")
+
+    checksum = package["manifest"]["checksum"]
+    assert checksum["algorithm"] == "sha256"
+    assert len(checksum["value"]) == 64
+    assert checksum["value"] == BackupService.calculate_package_checksum(package)
+
+
+@pytest.mark.asyncio
+async def test_backup_service_import_rejects_checksum_mismatch(db_session):
+    package = {
+        "manifest": {
+            "schema": "chat-audit-core.backup.v1",
+            "checksum": {"algorithm": "sha256", "value": "0" * 64},
+        },
+        "messages": [
+            {
+                "msg_hash": "hash-checksum",
+                "platform": "qq",
+                "room_id": "room-checksum",
+                "message_type": "group",
+                "sender_id": "user-checksum",
+                "nickname": "Checksum User",
+                "raw_message": "tampered",
+                "local_message": "tampered",
+                "timestamp": 999,
+            }
+        ],
+        "robot_messages": [{"robot_id": "robot-checksum", "msg_hash": "hash-checksum"}],
+        "media_assets": [],
+    }
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        await BackupService.import_package(db_session, package)

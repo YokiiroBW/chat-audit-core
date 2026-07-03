@@ -111,6 +111,7 @@ data/backups/auto-backup-20260703T030000Z.json
 
 - 备份内容复用 `/api/export` 的包结构。
 - manifest 会标记 `backup_type=auto` 与 `created_by=auto_backup_scheduler`。
+- manifest 会写入 `checksum.algorithm=sha256` 与 `checksum.value`；导入时如校验值不匹配会拒绝导入，避免篡改包被静默回录。
 - `AUTO_BACKUP_KEEP_LATEST` 控制保留最近多少个 `auto-backup-*.json` 文件。
 - 如需禁用自动备份，可将 `AUTO_BACKUP_CRON` 设置为 `off`、`disabled`、`none`、`false` 或 `0`。
 

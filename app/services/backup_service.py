@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import datetime as dt
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,36 @@ BACKUP_SCHEMA = "chat-audit-core.backup.v1"
 
 
 class BackupService:
+    @staticmethod
+    def calculate_package_checksum(package: dict[str, Any]) -> str:
+        canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
+        manifest = canonical_package.setdefault("manifest", {})
+        manifest.pop("checksum", None)
+        payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def attach_package_checksum(package: dict[str, Any]) -> dict[str, Any]:
+        manifest = package.setdefault("manifest", {})
+        manifest.pop("checksum", None)
+        manifest["checksum"] = {
+            "algorithm": "sha256",
+            "value": BackupService.calculate_package_checksum(package),
+        }
+        return package
+
+    @staticmethod
+    def validate_package_checksum(package: dict[str, Any]) -> None:
+        checksum = (package.get("manifest") or {}).get("checksum")
+        if checksum is None:
+            return
+        if checksum.get("algorithm") != "sha256":
+            raise ValueError(f"unsupported checksum algorithm: {checksum.get('algorithm')!r}")
+        expected = checksum.get("value")
+        actual = BackupService.calculate_package_checksum(package)
+        if expected != actual:
+            raise ValueError("backup package checksum mismatch")
+
     @staticmethod
     def _message_to_dict(message: Message) -> dict[str, Any]:
         return {
@@ -83,7 +114,7 @@ class BackupService:
             media_result = await db.execute(select(MediaAsset).where(MediaAsset.local_path.in_(media_paths)).order_by(MediaAsset.file_hash.asc()))
             media_assets = [BackupService._media_asset_to_dict(asset) for asset in media_result.scalars().all()]
 
-        return {
+        package = {
             "manifest": {
                 "schema": BACKUP_SCHEMA,
                 "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -103,6 +134,7 @@ class BackupService:
             "robot_messages": robot_messages,
             "media_assets": media_assets,
         }
+        return BackupService.attach_package_checksum(package)
 
 
     @staticmethod
@@ -115,6 +147,7 @@ class BackupService:
         package = await BackupService.export_package(db)
         package["manifest"]["backup_type"] = "auto"
         package["manifest"]["created_by"] = "auto_backup_scheduler"
+        BackupService.attach_package_checksum(package)
 
         timestamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         backup_path = backup_root / f"auto-backup-{timestamp}.json"
@@ -160,6 +193,7 @@ class BackupService:
         schema = manifest.get("schema")
         if schema != BACKUP_SCHEMA:
             raise ValueError(f"unsupported backup schema: {schema!r}")
+        BackupService.validate_package_checksum(package)
 
         message_count = 0
         for item in package.get("messages", []):

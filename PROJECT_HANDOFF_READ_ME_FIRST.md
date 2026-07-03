@@ -154,6 +154,9 @@ POST   /api/import
 
 - `BackupService.export_package()`。
 - `BackupService.import_package()`。
+- `BackupService.calculate_package_checksum()`。
+- `BackupService.attach_package_checksum()`。
+- `BackupService.validate_package_checksum()`。
 - `BackupService.write_auto_backup_file()`。
 - `BackupService.next_run_from_cron()`。
 - `start_auto_backup_scheduler()`。
@@ -174,6 +177,8 @@ AUTO_BACKUP_KEEP_LATEST=7
 ```text
 data/backups/auto-backup-20260703T030000Z.json
 ```
+
+导出包 manifest 已包含 SHA256 checksum；导入时如果 `manifest.checksum.value` 与包内容不匹配，会拒绝导入并报 `checksum mismatch`。
 
 ## 4. 仓库连接/鉴权状态
 
@@ -279,7 +284,6 @@ ws://宿主机IP:8000/onebot/v11/ws?access_token=你的token
 
 ### 6.3 备份增强
 
-- manifest checksum。
 - 媒体文件校验。
 - 导入前校验报告。
 - 失败日志。
