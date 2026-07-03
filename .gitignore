@@ -14,6 +14,8 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+# uv transient lock until dependencies move from requirements.txt to pyproject.toml
+uv.lock
 
 # Node / frontend cache
 node_modules/
