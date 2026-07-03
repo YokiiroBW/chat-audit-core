@@ -51,3 +51,11 @@ class ImportResultResponse(BaseModel):
     messages: int
     robot_messages: int
     media_assets: int
+
+
+class ImportValidationResponse(BaseModel):
+    valid: bool
+    schema_: str | None = Field(default=None, alias="schema")
+    checksum_valid: bool | None = None
+    errors: list[str]
+    counts: dict[str, int]

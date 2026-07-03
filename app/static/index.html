@@ -134,6 +134,7 @@
       </div>
       <div class="space-x-2">
         <el-button size="small" @click="reloadCurrentRoom" :disabled="!currentRoom">刷新</el-button>
+        <el-button size="small" plain @click="openImportDialog">导入 JSON</el-button>
         <el-button size="small" type="primary" plain @click="openExportDialog" :disabled="!currentRobot">高级过滤导出</el-button>
       </div>
     </header>
@@ -162,6 +163,24 @@
       </div>
     </div>
   </main>
+
+  <el-dialog v-model="importDialogVisible" title="导入 JSON" width="620px">
+    <div class="space-y-3 text-sm">
+      <textarea v-model="importPackageText" class="w-full border rounded px-2 py-1 text-xs h-56" placeholder="粘贴 /api/export 导出的 JSON 包"></textarea>
+      <div v-if="importValidationReport" class="border rounded p-3 bg-slate-50 text-xs space-y-1">
+        <div>校验结果：<span :class="importValidationReport.valid ? 'text-emerald-600' : 'text-red-600'">{{ importValidationReport.valid ? '通过' : '失败' }}</span></div>
+        <div>schema：{{ importValidationReport.schema || '-' }}</div>
+        <div>checksum：{{ importValidationReport.checksum_valid === null ? '未提供' : (importValidationReport.checksum_valid ? '通过' : '失败') }}</div>
+        <div>counts：messages={{ importValidationReport.counts.messages }} / robot_messages={{ importValidationReport.counts.robot_messages }} / media_assets={{ importValidationReport.counts.media_assets }}</div>
+        <div v-if="importValidationReport.errors.length">errors：{{ importValidationReport.errors.join('; ') }}</div>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="importDialogVisible = false">取消</el-button>
+      <el-button @click="validateImportPackage" :loading="importValidating" :disabled="!importPackageText.trim()">校验</el-button>
+      <el-button type="primary" @click="submitImportPackage" :loading="importing" :disabled="!importValidationReport || !importValidationReport.valid">确认导入</el-button>
+    </template>
+  </el-dialog>
 
   <el-dialog v-model="exportDialogVisible" title="高级过滤导出" width="520px">
     <div class="space-y-3 text-sm">
@@ -216,6 +235,11 @@ createApp({
     const exportDialogVisible = ref(false);
     const exporting = ref(false);
     const exportForm = ref({ robot_id: '', room_id: '', start_timestamp: '', end_timestamp: '' });
+    const importDialogVisible = ref(false);
+    const importPackageText = ref('');
+    const importValidationReport = ref(null);
+    const importValidating = ref(false);
+    const importing = ref(false);
 
     const filteredRooms = computed(() => roomList.value);
 
@@ -375,6 +399,42 @@ createApp({
       }
     };
 
+    const openImportDialog = () => {
+      importPackageText.value = '';
+      importValidationReport.value = null;
+      importDialogVisible.value = true;
+    };
+
+    const parseImportPackage = () => JSON.parse(importPackageText.value);
+
+    const validateImportPackage = async () => {
+      if (!importPackageText.value.trim()) return;
+      importValidating.value = true;
+      try {
+        const response = await fetch('/api/import/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(parseImportPackage()),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: /api/import/validate`);
+        importValidationReport.value = await response.json();
+      } finally {
+        importValidating.value = false;
+      }
+    };
+
+    const submitImportPackage = async () => {
+      if (!importValidationReport.value || !importValidationReport.value.valid) return;
+      importing.value = true;
+      try {
+        await apiSend('/api/import', 'POST', parseImportPackage());
+        importDialogVisible.value = false;
+        if (currentRobot.value) await switchAccount(currentRobot.value);
+      } finally {
+        importing.value = false;
+      }
+    };
+
     const loadMessages = async (beforeTimestamp = null) => {
       if (!currentRobot.value || !currentRoom.value) return [];
       let url = `/api/messages?robot_id=${encodeURIComponent(currentRobot.value.id)}&room_id=${encodeURIComponent(currentRoom.value.room_id)}&limit=50`;
@@ -422,7 +482,9 @@ createApp({
       accountList, currentRobot, roomList, currentRoom, messageList, searchQuery,
       searchResults, searchMode, searching, settingsMode, adapterForm, savingAdapter, editingAdapterId,
       loadingRooms, loadingHistory, chatWindow, filteredRooms, exportDialogVisible, exporting, exportForm,
-      switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, openExportDialog, downloadExportPackage, reloadCurrentRoom, handleWindowScroll,
+      importDialogVisible, importPackageText, importValidationReport, importValidating, importing,
+      switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, openExportDialog, downloadExportPackage,
+      openImportDialog, validateImportPackage, submitImportPackage, reloadCurrentRoom, handleWindowScroll,
       resetAdapterForm, editAdapter, saveAdapter, deleteAdapter,
       statusDotClass, formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
     };

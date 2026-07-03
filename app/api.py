@@ -7,6 +7,7 @@ from app.schemas import (
     AdapterResponse,
     AdapterUpdateRequest,
     ImportResultResponse,
+    ImportValidationResponse,
     MessageResponse,
     RoomResponse,
 )
@@ -134,6 +135,11 @@ async def export_data(
         start_timestamp=start_timestamp,
         end_timestamp=end_timestamp,
     )
+
+
+@router.post("/import/validate", response_model=ImportValidationResponse)
+async def validate_import_data(package: dict) -> ImportValidationResponse:
+    return ImportValidationResponse(**BackupService.validate_import_package(package))
 
 
 @router.post("/import", response_model=ImportResultResponse)

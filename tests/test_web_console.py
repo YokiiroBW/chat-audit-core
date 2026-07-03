@@ -43,3 +43,12 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "start_timestamp" in html
     assert "end_timestamp" in html
     assert "chat-audit-export" in html
+    assert "导入 JSON" in html
+    assert "openImportDialog" in html
+    assert "importDialogVisible" in html
+    assert "importPackageText" in html
+    assert "importValidationReport" in html
+    assert "validateImportPackage" in html
+    assert "submitImportPackage" in html
+    assert "/api/import/validate" in html
+    assert "/api/import" in html

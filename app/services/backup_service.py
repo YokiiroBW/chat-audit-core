@@ -188,6 +188,39 @@ class BackupService:
         return candidate
 
     @staticmethod
+    def validate_import_package(package: dict[str, Any]) -> dict[str, Any]:
+        manifest = package.get("manifest") or {}
+        schema = manifest.get("schema")
+        errors: list[str] = []
+        checksum_valid: bool | None = None
+
+        if schema != BACKUP_SCHEMA:
+            errors.append(f"unsupported backup schema: {schema!r}")
+
+        checksum = manifest.get("checksum")
+        if checksum is not None:
+            try:
+                BackupService.validate_package_checksum(package)
+                checksum_valid = True
+            except ValueError as exc:
+                checksum_valid = False
+                errors.append(str(exc))
+
+        counts = {
+            "messages": len(package.get("messages", []) or []),
+            "robot_messages": len(package.get("robot_messages", []) or []),
+            "media_assets": len(package.get("media_assets", []) or []),
+        }
+
+        return {
+            "valid": not errors,
+            "schema": schema,
+            "checksum_valid": checksum_valid,
+            "errors": errors,
+            "counts": counts,
+        }
+
+    @staticmethod
     async def import_package(db: AsyncSession, package: dict[str, Any]) -> dict[str, int]:
         manifest = package.get("manifest") or {}
         schema = manifest.get("schema")

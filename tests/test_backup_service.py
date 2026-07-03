@@ -255,3 +255,68 @@ async def test_backup_service_import_rejects_checksum_mismatch(db_session):
 
     with pytest.raises(ValueError, match="checksum mismatch"):
         await BackupService.import_package(db_session, package)
+
+
+@pytest.mark.asyncio
+async def test_import_validate_api_reports_valid_package_without_writing(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-validate",
+        "qq",
+        {
+            "room_id": "room-validate",
+            "message_type": "group",
+            "sender_id": "user-validate",
+            "nickname": "Validate User",
+            "raw_message": "validate payload",
+            "timestamp": 1001,
+        },
+    )
+    package = await BackupService.export_package(db_session, robot_id="robot-validate")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/import/validate", json=package)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["valid"] is True
+    assert report["schema"] == "chat-audit-core.backup.v1"
+    assert report["checksum_valid"] is True
+    assert report["errors"] == []
+    assert report["counts"] == {"messages": 1, "robot_messages": 1, "media_assets": 0}
+
+
+@pytest.mark.asyncio
+async def test_import_validate_api_reports_checksum_mismatch(db_session):
+    package = {
+        "manifest": {
+            "schema": "chat-audit-core.backup.v1",
+            "checksum": {"algorithm": "sha256", "value": "0" * 64},
+        },
+        "messages": [],
+        "robot_messages": [],
+        "media_assets": [],
+    }
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/import/validate", json=package)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["valid"] is False
+    assert report["checksum_valid"] is False
+    assert any("checksum mismatch" in error for error in report["errors"])
