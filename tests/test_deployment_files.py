@@ -27,7 +27,10 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert "8000:8000" in services["app"]["ports"]
     assert "./data/storage:/app/data/storage" in services["app"]["volumes"]
     assert "./data/backups:/app/data/backups" in services["app"]["volumes"]
-    assert services["app"]["environment"]["DATABASE_URL"].startswith("postgresql+asyncpg://")
+    assert services["app"]["environment"]["DATABASE_URL"] == "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+    assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD}"
+    assert services["app"]["environment"]["APP_SECRET_KEY"] == "${APP_SECRET_KEY}"
+    assert services["app"]["environment"]["ONEBOT_ACCESS_TOKEN"] == "${ONEBOT_ACCESS_TOKEN}"
     assert services["app"]["environment"]["AUTO_BACKUP_CRON"] == "0 3 * * *"
     assert services["app"]["environment"]["AUTO_BACKUP_KEEP_LATEST"] == 7
     assert "healthcheck" in services["postgres"]

@@ -17,12 +17,24 @@ from app.services.backup_service import start_auto_backup_scheduler
 from app.ws import router as ws_router
 
 
+def validate_production_settings(settings: Settings) -> None:
+    if settings.app_env.lower() != "production":
+        return
+    unsafe_secret_values = {"", "change-me", "change-me-in-production", "replace-with-a-long-random-secret"}
+    if settings.app_secret_key in unsafe_secret_values:
+        raise ValueError("APP_SECRET_KEY must be set to a non-default value in production")
+    unsafe_onebot_values = {"", "replace-with-onebot-access-token"}
+    if settings.onebot_access_token.strip() in unsafe_onebot_values:
+        raise ValueError("ONEBOT_ACCESS_TOKEN must be set to a non-default value in production")
+
+
 def create_app(
     settings: Settings | None = None,
     engine: AsyncEngine | None = None,
     sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
+    validate_production_settings(active_settings)
     active_engine = engine or default_engine
     active_sessionmaker = sessionmaker or AsyncSessionLocal
     static_dir = Path(__file__).resolve().parent / "static"

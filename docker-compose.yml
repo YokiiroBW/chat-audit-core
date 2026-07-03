@@ -4,13 +4,13 @@ services:
     container_name: chat-audit-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: chat_audit
-      POSTGRES_USER: chat_audit
-      POSTGRES_PASSWORD: chat_audit_password
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chat_audit -d chat_audit"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,13 +29,13 @@ services:
       APP_ENV: production
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      APP_SECRET_KEY: change-me-in-production
-      DATABASE_URL: postgresql+asyncpg://chat_audit:chat_audit_password@postgres:5432/chat_audit
+      APP_SECRET_KEY: ${APP_SECRET_KEY}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       STORAGE_ROOT: /app/data/storage
       BACKUP_ROOT: /app/data/backups
       PUBLIC_STORAGE_PREFIX: /static/storage
       ONEBOT_WS_PATH: /onebot/v11/ws
-      ONEBOT_ACCESS_TOKEN: ""
+      ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN}
       MEDIA_DOWNLOAD_TIMEOUT_SECONDS: 30
       MEDIA_MAX_BYTES: 104857600
       FFMPEG_BIN: ffmpeg
