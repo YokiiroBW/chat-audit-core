@@ -158,6 +158,8 @@ POST   /api/import
 - `BackupService.attach_package_checksum()`。
 - `BackupService.validate_package_checksum()`。
 - `BackupService.validate_import_package()`。
+- `BackupService.preview_import_package()`。
+- `BackupService.write_failure_log()`。
 - `BackupService.write_auto_backup_file()`。
 - `BackupService.next_run_from_cron()`。
 - `start_auto_backup_scheduler()`。
@@ -181,7 +183,9 @@ data/backups/auto-backup-20260703T030000Z.json
 
 导出包 manifest 已包含 SHA256 checksum；导入时如果 `manifest.checksum.value` 与包内容不匹配，会拒绝导入并报 `checksum mismatch`。
 
-`/api/import/validate` 可在真正写库前返回校验报告，Web 控制台“导入 JSON”会先调用该接口，报告通过后才允许确认导入。
+`/api/import/validate` 可在真正写库前返回校验报告，包含 checksum、counts、数据库差异预览和媒体文件 checked/missing/mismatch；Web 控制台“导入 JSON”会先调用该接口，报告通过后才允许确认导入。
+
+导入失败与自动备份失败会追加 JSON 行到 `BACKUP_ROOT/failures.log`，用于后续审计和排障。
 
 ## 4. 仓库连接/鉴权状态
 
@@ -287,9 +291,8 @@ ws://宿主机IP:8000/onebot/v11/ws?access_token=你的token
 
 ### 6.3 备份增强
 
-- 媒体文件校验。
-- 失败日志。
-- 更完整的导入冲突预览与差异报告。
+- 媒体文件随导出包打包/恢复。
+- 更细粒度的冲突明细列表与字段级差异。
 
 ### 6.4 NAS / NapCat 真机验收
 

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.schemas import (
     AdapterCreateRequest,
@@ -138,14 +139,29 @@ async def export_data(
 
 
 @router.post("/import/validate", response_model=ImportValidationResponse)
-async def validate_import_data(package: dict) -> ImportValidationResponse:
-    return ImportValidationResponse(**BackupService.validate_import_package(package))
+async def validate_import_data(
+    package: dict,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> ImportValidationResponse:
+    report = await BackupService.preview_import_package(
+        db,
+        package,
+        storage_root=settings.storage_root,
+        public_storage_prefix=settings.public_storage_prefix,
+    )
+    return ImportValidationResponse(**report)
 
 
 @router.post("/import", response_model=ImportResultResponse)
-async def import_data(package: dict, db: AsyncSession = Depends(get_db_session)) -> ImportResultResponse:
+async def import_data(
+    package: dict,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> ImportResultResponse:
     try:
         result = await BackupService.import_package(db, package)
     except ValueError as exc:
+        BackupService.write_failure_log(settings.backup_root, event="import", error=str(exc), context={"schema": (package.get("manifest") or {}).get("schema")})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ImportResultResponse(**result)

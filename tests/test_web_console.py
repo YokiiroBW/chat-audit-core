@@ -52,3 +52,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "submitImportPackage" in html
     assert "/api/import/validate" in html
     assert "/api/import" in html
+    assert "diff.messages" in html
+    assert "media_files" in html
+    assert "新增/更新/不变" in html
+    assert "媒体文件" in html

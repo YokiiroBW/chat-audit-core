@@ -320,3 +320,150 @@ async def test_import_validate_api_reports_checksum_mismatch(db_session):
     assert report["valid"] is False
     assert report["checksum_valid"] is False
     assert any("checksum mismatch" in error for error in report["errors"])
+
+
+@pytest.mark.asyncio
+async def test_import_validate_api_reports_database_diff_preview(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-existing",
+        "qq",
+        {
+            "room_id": "room-existing",
+            "message_type": "group",
+            "sender_id": "user-existing",
+            "nickname": "Existing User",
+            "raw_message": "old payload",
+            "local_message": "old payload",
+            "timestamp": 111,
+        },
+    )
+    existing_package = await BackupService.export_package(db_session, robot_id="robot-existing")
+    existing_hash = existing_package["messages"][0]["msg_hash"]
+    package = {
+        "manifest": {"schema": "chat-audit-core.backup.v1"},
+        "messages": [
+            {
+                "msg_hash": existing_hash,
+                "platform": "qq",
+                "room_id": "room-existing",
+                "message_type": "group",
+                "sender_id": "user-existing",
+                "nickname": "Existing User Updated",
+                "raw_message": "updated payload",
+                "local_message": "updated payload",
+                "timestamp": 222,
+            },
+            {
+                "msg_hash": "hash-new-message",
+                "platform": "qq",
+                "room_id": "room-new",
+                "message_type": "group",
+                "sender_id": "user-new",
+                "nickname": "New User",
+                "raw_message": "new payload",
+                "local_message": "new payload",
+                "timestamp": 333,
+            },
+        ],
+        "robot_messages": [
+            {"robot_id": "robot-existing", "msg_hash": existing_hash},
+            {"robot_id": "robot-existing", "msg_hash": "hash-new-message"},
+        ],
+        "media_assets": [],
+    }
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/import/validate", json=package)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["valid"] is True
+    assert report["diff"]["messages"] == {"new": 1, "update": 1, "unchanged": 0}
+    assert report["diff"]["robot_messages"] == {"new": 1, "existing": 1}
+
+
+def test_backup_service_validates_media_file_checksum(tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    media_file = storage_root / "media-ok.bin"
+    media_file.write_bytes(b"media payload")
+    checksum = __import__("hashlib").sha256(b"media payload").hexdigest()
+    package = {
+        "manifest": {"schema": "chat-audit-core.backup.v1"},
+        "messages": [],
+        "robot_messages": [],
+        "media_assets": [
+            {
+                "file_hash": "media-ok",
+                "file_type": "image",
+                "file_size": len(b"media payload"),
+                "local_path": "/static/storage/media-ok.bin",
+                "file_checksum": {"algorithm": "sha256", "value": checksum},
+            }
+        ],
+    }
+
+    report = BackupService.validate_import_package(
+        package,
+        storage_root=storage_root,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert report["valid"] is True
+    assert report["media_files"] == {"checked": 1, "missing": 0, "mismatch": 0}
+
+
+def test_backup_service_reports_media_file_checksum_mismatch(tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    media_file = storage_root / "media-bad.bin"
+    media_file.write_bytes(b"actual payload")
+    package = {
+        "manifest": {"schema": "chat-audit-core.backup.v1"},
+        "messages": [],
+        "robot_messages": [],
+        "media_assets": [
+            {
+                "file_hash": "media-bad",
+                "file_type": "image",
+                "file_size": 999,
+                "local_path": "/static/storage/media-bad.bin",
+                "file_checksum": {"algorithm": "sha256", "value": "0" * 64},
+            }
+        ],
+    }
+
+    report = BackupService.validate_import_package(
+        package,
+        storage_root=storage_root,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert report["valid"] is False
+    assert report["media_files"] == {"checked": 1, "missing": 0, "mismatch": 1}
+    assert any("media checksum mismatch" in error for error in report["errors"])
+
+
+def test_backup_service_writes_failure_log(tmp_path):
+    log_path = BackupService.write_failure_log(
+        tmp_path,
+        event="import",
+        error="checksum mismatch",
+        context={"schema": "chat-audit-core.backup.v1"},
+    )
+
+    assert log_path == tmp_path / "failures.log"
+    line = log_path.read_text(encoding="utf-8").strip()
+    record = __import__("json").loads(line)
+    assert record["event"] == "import"
+    assert record["error"] == "checksum mismatch"
+    assert record["context"] == {"schema": "chat-audit-core.backup.v1"}
+    assert record["created_at"].endswith("Z")

@@ -188,7 +188,64 @@ class BackupService:
         return candidate
 
     @staticmethod
-    def validate_import_package(package: dict[str, Any]) -> dict[str, Any]:
+    def _local_media_file_path(local_path: str, storage_root: Path, public_storage_prefix: str) -> Path | None:
+        prefix = public_storage_prefix.rstrip("/") + "/"
+        if not local_path.startswith(prefix):
+            return None
+        relative = local_path[len(prefix):].lstrip("/")
+        candidate = (storage_root / relative).resolve()
+        storage_root_resolved = storage_root.resolve()
+        if storage_root_resolved != candidate and storage_root_resolved not in candidate.parents:
+            return None
+        return candidate
+
+    @staticmethod
+    def _validate_media_files(
+        package: dict[str, Any],
+        storage_root: Path | None,
+        public_storage_prefix: str,
+        errors: list[str],
+    ) -> dict[str, int]:
+        media_files = {"checked": 0, "missing": 0, "mismatch": 0}
+        if storage_root is None:
+            return media_files
+
+        for asset in package.get("media_assets", []) or []:
+            checksum = asset.get("file_checksum")
+            if checksum is None:
+                continue
+            media_files["checked"] += 1
+            if checksum.get("algorithm") != "sha256":
+                media_files["mismatch"] += 1
+                errors.append(f"unsupported media checksum algorithm for {asset.get('local_path')}: {checksum.get('algorithm')!r}")
+                continue
+
+            local_path = asset.get("local_path") or ""
+            file_path = BackupService._local_media_file_path(local_path, storage_root, public_storage_prefix)
+            if file_path is None or not file_path.exists():
+                media_files["missing"] += 1
+                errors.append(f"media file missing: {local_path}")
+                continue
+
+            mismatch = False
+            expected_size = asset.get("file_size")
+            if expected_size is not None and file_path.stat().st_size != expected_size:
+                mismatch = True
+            actual = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            if actual != checksum.get("value"):
+                mismatch = True
+            if mismatch:
+                media_files["mismatch"] += 1
+                errors.append(f"media checksum mismatch: {local_path}")
+
+        return media_files
+
+    @staticmethod
+    def validate_import_package(
+        package: dict[str, Any],
+        storage_root: Path | None = None,
+        public_storage_prefix: str = "/static/storage",
+    ) -> dict[str, Any]:
         manifest = package.get("manifest") or {}
         schema = manifest.get("schema")
         errors: list[str] = []
@@ -211,6 +268,7 @@ class BackupService:
             "robot_messages": len(package.get("robot_messages", []) or []),
             "media_assets": len(package.get("media_assets", []) or []),
         }
+        media_files = BackupService._validate_media_files(package, storage_root, public_storage_prefix, errors)
 
         return {
             "valid": not errors,
@@ -218,7 +276,91 @@ class BackupService:
             "checksum_valid": checksum_valid,
             "errors": errors,
             "counts": counts,
+            "media_files": media_files,
         }
+
+    @staticmethod
+    def _message_matches_existing(existing: Message, item: dict[str, Any]) -> bool:
+        return all(
+            getattr(existing, key) == item.get(key)
+            for key in ("platform", "room_id", "message_type", "sender_id", "nickname", "raw_message", "local_message", "timestamp")
+        )
+
+    @staticmethod
+    def _media_asset_matches_existing(existing: MediaAsset, item: dict[str, Any]) -> bool:
+        return all(
+            getattr(existing, key) == item.get(key)
+            for key in ("file_type", "file_size", "local_path")
+        )
+
+    @staticmethod
+    async def preview_import_package(
+        db: AsyncSession,
+        package: dict[str, Any],
+        storage_root: Path | None = None,
+        public_storage_prefix: str = "/static/storage",
+    ) -> dict[str, Any]:
+        report = BackupService.validate_import_package(
+            package,
+            storage_root=storage_root,
+            public_storage_prefix=public_storage_prefix,
+        )
+        message_diff = {"new": 0, "update": 0, "unchanged": 0}
+        robot_message_diff = {"new": 0, "existing": 0}
+        media_asset_diff = {"new": 0, "update": 0, "unchanged": 0}
+
+        for item in package.get("messages", []) or []:
+            result = await db.execute(select(Message).where(Message.msg_hash == item.get("msg_hash")))
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                message_diff["new"] += 1
+            elif BackupService._message_matches_existing(existing, item):
+                message_diff["unchanged"] += 1
+            else:
+                message_diff["update"] += 1
+
+        for item in package.get("robot_messages", []) or []:
+            result = await db.execute(
+                select(RobotMessage).where(
+                    RobotMessage.robot_id == item.get("robot_id"),
+                    RobotMessage.msg_hash == item.get("msg_hash"),
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                robot_message_diff["new"] += 1
+            else:
+                robot_message_diff["existing"] += 1
+
+        for item in package.get("media_assets", []) or []:
+            result = await db.execute(select(MediaAsset).where(MediaAsset.file_hash == item.get("file_hash")))
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                media_asset_diff["new"] += 1
+            elif BackupService._media_asset_matches_existing(existing, item):
+                media_asset_diff["unchanged"] += 1
+            else:
+                media_asset_diff["update"] += 1
+
+        report["diff"] = {
+            "messages": message_diff,
+            "robot_messages": robot_message_diff,
+            "media_assets": media_asset_diff,
+        }
+        return report
+
+    @staticmethod
+    def write_failure_log(backup_root: Path, event: str, error: str, context: dict[str, Any] | None = None) -> Path:
+        backup_root.mkdir(parents=True, exist_ok=True)
+        log_path = backup_root / "failures.log"
+        record = {
+            "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "event": event,
+            "error": error,
+            "context": context or {},
+        }
+        with log_path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        return log_path
 
     @staticmethod
     async def import_package(db: AsyncSession, package: dict[str, Any]) -> dict[str, int]:
@@ -301,11 +443,19 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
         now = dt.datetime.utcnow().replace(microsecond=0)
         next_run = BackupService.next_run_from_cron(settings.auto_backup_cron, now)
         await asyncio.sleep(max(0, (next_run - now).total_seconds()))
-        async with sessionmaker() as session:
-            await BackupService.write_auto_backup_file(
-                session,
-                backup_root=settings.backup_root,
-                keep_latest=getattr(settings, "auto_backup_keep_latest", 7),
+        try:
+            async with sessionmaker() as session:
+                await BackupService.write_auto_backup_file(
+                    session,
+                    backup_root=settings.backup_root,
+                    keep_latest=getattr(settings, "auto_backup_keep_latest", 7),
+                )
+        except Exception as exc:
+            BackupService.write_failure_log(
+                settings.backup_root,
+                event="auto_backup",
+                error=str(exc),
+                context={"cron": settings.auto_backup_cron},
             )
 
 

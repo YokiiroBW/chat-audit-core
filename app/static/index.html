@@ -172,6 +172,18 @@
         <div>schema：{{ importValidationReport.schema || '-' }}</div>
         <div>checksum：{{ importValidationReport.checksum_valid === null ? '未提供' : (importValidationReport.checksum_valid ? '通过' : '失败') }}</div>
         <div>counts：messages={{ importValidationReport.counts.messages }} / robot_messages={{ importValidationReport.counts.robot_messages }} / media_assets={{ importValidationReport.counts.media_assets }}</div>
+        <div v-if="importValidationReport.diff && importValidationReport.diff.messages">
+          diff.messages 新增/更新/不变：{{ importValidationReport.diff.messages.new }} / {{ importValidationReport.diff.messages.update }} / {{ importValidationReport.diff.messages.unchanged }}
+        </div>
+        <div v-if="importValidationReport.diff && importValidationReport.diff.robot_messages">
+          diff.robot_messages 新增/已存在：{{ importValidationReport.diff.robot_messages.new }} / {{ importValidationReport.diff.robot_messages.existing }}
+        </div>
+        <div v-if="importValidationReport.diff && importValidationReport.diff.media_assets">
+          diff.media_assets 新增/更新/不变：{{ importValidationReport.diff.media_assets.new }} / {{ importValidationReport.diff.media_assets.update }} / {{ importValidationReport.diff.media_assets.unchanged }}
+        </div>
+        <div v-if="importValidationReport.media_files">
+          媒体文件 media_files checked/missing/mismatch：{{ importValidationReport.media_files.checked }} / {{ importValidationReport.media_files.missing }} / {{ importValidationReport.media_files.mismatch }}
+        </div>
         <div v-if="importValidationReport.errors.length">errors：{{ importValidationReport.errors.join('; ') }}</div>
       </div>
     </div>

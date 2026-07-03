@@ -59,3 +59,5 @@ class ImportValidationResponse(BaseModel):
     checksum_valid: bool | None = None
     errors: list[str]
     counts: dict[str, int]
+    media_files: dict[str, int] = Field(default_factory=dict)
+    diff: dict[str, dict[str, int]] = Field(default_factory=dict)
