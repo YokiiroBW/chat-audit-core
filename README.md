@@ -90,6 +90,30 @@ data/backups  # 后续自动备份归档
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
+## 自动备份
+
+应用启动时会根据 `AUTO_BACKUP_CRON` 启动自动备份任务，将导出包写入 `BACKUP_ROOT`。
+
+当前支持每日固定时间格式：
+
+```text
+AUTO_BACKUP_CRON=0 3 * * *
+AUTO_BACKUP_KEEP_LATEST=7
+```
+
+输出文件示例：
+
+```text
+data/backups/auto-backup-20260703T030000Z.json
+```
+
+说明：
+
+- 备份内容复用 `/api/export` 的包结构。
+- manifest 会标记 `backup_type=auto` 与 `created_by=auto_backup_scheduler`。
+- `AUTO_BACKUP_KEEP_LATEST` 控制保留最近多少个 `auto-backup-*.json` 文件。
+- 如需禁用自动备份，可将 `AUTO_BACKUP_CRON` 设置为 `off`、`disabled`、`none`、`false` 或 `0`。
+
 ## Forgejo
 
 局域网仓库：
@@ -97,3 +121,28 @@ data/backups  # 后续自动备份归档
 ```text
 http://192.168.31.210:18085/YokiiroBW/chat-audit-core
 ```
+
+## 仓库连接检查
+
+新增检查脚本（双通道）：`scripts/git_connectivity_check.py`
+
+- SSH 与 token 两条链路都已具备检测：
+  - SSH：`python3 scripts/git_connectivity_check.py --remote origin`，通过私钥与主机密钥握手 + `git ls-remote`
+  - HTTPS + token：同命令会自动读取 Forgejo token 并做 API + git 授权校验
+
+常用命令（按环境覆盖）：
+```bash
+# 全量检查
+FORGEJO_TOKEN_FILE=/path/to/forgejo.token python3 scripts/git_connectivity_check.py --remote origin
+
+# 仅 HTTPS（当 SSH 尚未就绪）
+python3 scripts/git_connectivity_check.py --remote origin --skip-ssh
+
+# 仅 SSH（当 token 不可用）
+python3 scripts/git_connectivity_check.py --remote origin --skip-https
+
+# 跳过 SSH 口令/私钥错误导致阻塞时
+python3 scripts/git_connectivity_check.py --remote origin --skip-ssh
+```
+
+建议执行顺序：先执行 HTTPS（确认 token 与 API/仓库可达），再修复 SSH Key 后补跑 `--skip-https`。
