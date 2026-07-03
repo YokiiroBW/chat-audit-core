@@ -40,6 +40,7 @@ services:
       MEDIA_MAX_BYTES: 104857600
       FFMPEG_BIN: ffmpeg
       AUTO_BACKUP_CRON: 0 3 * * *
+      AUTO_BACKUP_KEEP_LATEST: 7
     ports:
       - "8000:8000"
     volumes:

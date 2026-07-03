@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -11,6 +13,7 @@ from app.api import router as api_router
 from app.config import Settings, get_settings
 from app.database import AsyncSessionLocal, create_all_tables, engine as default_engine, get_db_session
 from app.schemas import HealthResponse
+from app.services.backup_service import start_auto_backup_scheduler
 from app.ws import router as ws_router
 
 
@@ -30,7 +33,15 @@ def create_app(
         active_settings.storage_root.mkdir(parents=True, exist_ok=True)
         active_settings.backup_root.mkdir(parents=True, exist_ok=True)
         await create_all_tables(active_engine)
-        yield
+        backup_task = start_auto_backup_scheduler(settings=active_settings, sessionmaker=active_sessionmaker)
+        try:
+            yield
+        finally:
+            if backup_task is not None:
+                backup_task.cancel()
+                if hasattr(backup_task, "__await__"):
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await backup_task
 
     app = FastAPI(title=active_settings.app_name, lifespan=lifespan)
 

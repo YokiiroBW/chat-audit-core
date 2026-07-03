@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     ffmpeg_bin: str = "ffmpeg"
 
     auto_backup_cron: str = "0 3 * * *"
+    auto_backup_keep_latest: int = 7
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

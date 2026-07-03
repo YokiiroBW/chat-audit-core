@@ -150,3 +150,56 @@ async def test_export_import_api_roundtrip(db_session):
     assert export_response.json()["messages"][0]["raw_message"] == "api export"
     assert import_response.status_code == 200
     assert import_response.json() == {"messages": 1, "robot_messages": 1, "media_assets": 0}
+
+
+@pytest.mark.asyncio
+async def test_backup_service_writes_auto_backup_file_and_prunes_old_files(db_session, tmp_path):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-auto",
+        "qq",
+        {
+            "room_id": "room-auto",
+            "message_type": "group",
+            "sender_id": "user-auto",
+            "nickname": "Auto User",
+            "raw_message": "auto backup payload",
+            "timestamp": 456,
+        },
+    )
+    old_a = tmp_path / "auto-backup-20000101T000000Z.json"
+    old_b = tmp_path / "auto-backup-20000102T000000Z.json"
+    old_a.write_text("{}", encoding="utf-8")
+    old_b.write_text("{}", encoding="utf-8")
+
+    backup_path = await BackupService.write_auto_backup_file(
+        db_session,
+        backup_root=tmp_path,
+        keep_latest=2,
+    )
+
+    assert backup_path.exists()
+    assert backup_path.name.startswith("auto-backup-")
+    assert backup_path.suffix == ".json"
+    package = __import__("json").loads(backup_path.read_text(encoding="utf-8"))
+    assert package["manifest"]["schema"] == "chat-audit-core.backup.v1"
+    assert package["manifest"]["backup_type"] == "auto"
+    assert package["messages"][0]["raw_message"] == "auto backup payload"
+    remaining = sorted(path.name for path in tmp_path.glob("auto-backup-*.json"))
+    assert remaining == sorted([old_b.name, backup_path.name])
+
+
+def test_backup_service_calculates_next_daily_cron_run():
+    now = __import__("datetime").datetime(2026, 7, 3, 2, 30, 0)
+
+    next_run = BackupService.next_run_from_cron("15 3 * * *", now)
+
+    assert next_run == __import__("datetime").datetime(2026, 7, 3, 3, 15, 0)
+
+
+def test_backup_service_calculates_tomorrow_when_daily_cron_time_has_passed():
+    now = __import__("datetime").datetime(2026, 7, 3, 4, 0, 0)
+
+    next_run = BackupService.next_run_from_cron("15 3 * * *", now)
+
+    assert next_run == __import__("datetime").datetime(2026, 7, 4, 3, 15, 0)

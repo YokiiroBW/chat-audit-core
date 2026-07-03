@@ -37,3 +37,37 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
     import anyio
 
     assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters"}
+
+
+
+def test_create_app_lifespan_starts_auto_backup_scheduler(tmp_path, monkeypatch):
+    database_path = tmp_path / "audit.sqlite3"
+    storage_root = tmp_path / "storage"
+    backup_root = tmp_path / "backups"
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{database_path.as_posix()}",
+        storage_root=storage_root,
+        backup_root=backup_root,
+        public_storage_prefix="/static/storage",
+        auto_backup_cron="15 3 * * *",
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+    calls = []
+
+    class DummyTask:
+        def cancel(self):
+            calls.append("cancel")
+
+    def fake_start_auto_backup_scheduler(*, settings, sessionmaker):
+        calls.append((settings.auto_backup_cron, settings.backup_root))
+        return DummyTask()
+
+    monkeypatch.setattr("app.main.start_auto_backup_scheduler", fake_start_auto_backup_scheduler)
+    app = create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert calls[0] == ("15 3 * * *", backup_root)
+    assert calls[-1] == "cancel"

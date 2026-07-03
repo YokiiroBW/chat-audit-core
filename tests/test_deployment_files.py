@@ -28,6 +28,8 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert "./data/storage:/app/data/storage" in services["app"]["volumes"]
     assert "./data/backups:/app/data/backups" in services["app"]["volumes"]
     assert services["app"]["environment"]["DATABASE_URL"].startswith("postgresql+asyncpg://")
+    assert services["app"]["environment"]["AUTO_BACKUP_CRON"] == "0 3 * * *"
+    assert services["app"]["environment"]["AUTO_BACKUP_KEEP_LATEST"] == 7
     assert "healthcheck" in services["postgres"]
     assert "postgres_data" in compose["volumes"]
 

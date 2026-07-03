@@ -1,4 +1,8 @@
+import asyncio
+import contextlib
 import datetime as dt
+import json
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -100,6 +104,56 @@ class BackupService:
             "media_assets": media_assets,
         }
 
+
+    @staticmethod
+    async def write_auto_backup_file(
+        db: AsyncSession,
+        backup_root: Path,
+        keep_latest: int = 7,
+    ) -> Path:
+        backup_root.mkdir(parents=True, exist_ok=True)
+        package = await BackupService.export_package(db)
+        package["manifest"]["backup_type"] = "auto"
+        package["manifest"]["created_by"] = "auto_backup_scheduler"
+
+        timestamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        backup_path = backup_root / f"auto-backup-{timestamp}.json"
+        counter = 1
+        while backup_path.exists():
+            backup_path = backup_root / f"auto-backup-{timestamp}-{counter}.json"
+            counter += 1
+
+        backup_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        if keep_latest > 0:
+            backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name))
+            for old_path in backups[:-keep_latest]:
+                with contextlib.suppress(FileNotFoundError):
+                    old_path.unlink()
+
+        return backup_path
+
+    @staticmethod
+    def next_run_from_cron(cron_expr: str, now: dt.datetime | None = None) -> dt.datetime:
+        now = (now or dt.datetime.utcnow()).replace(microsecond=0)
+        parts = cron_expr.split()
+        if len(parts) != 5:
+            raise ValueError(f"unsupported cron expression: {cron_expr!r}")
+        minute_raw, hour_raw, day_raw, month_raw, weekday_raw = parts
+        if (day_raw, month_raw, weekday_raw) != ("*", "*", "*"):
+            raise ValueError(f"only daily cron is supported: {cron_expr!r}")
+        if not minute_raw.isdigit() or not hour_raw.isdigit():
+            raise ValueError(f"only fixed hour/minute cron is supported: {cron_expr!r}")
+        minute = int(minute_raw)
+        hour = int(hour_raw)
+        if not (0 <= minute <= 59 and 0 <= hour <= 23):
+            raise ValueError(f"invalid cron time: {cron_expr!r}")
+
+        candidate = now.replace(hour=hour, minute=minute, second=0)
+        if candidate <= now:
+            candidate += dt.timedelta(days=1)
+        return candidate
+
     @staticmethod
     async def import_package(db: AsyncSession, package: dict[str, Any]) -> dict[str, int]:
         manifest = package.get("manifest") or {}
@@ -174,3 +228,22 @@ class BackupService:
             "robot_messages": robot_message_count,
             "media_assets": media_asset_count,
         }
+
+async def _auto_backup_loop(settings, sessionmaker) -> None:
+    while True:
+        now = dt.datetime.utcnow().replace(microsecond=0)
+        next_run = BackupService.next_run_from_cron(settings.auto_backup_cron, now)
+        await asyncio.sleep(max(0, (next_run - now).total_seconds()))
+        async with sessionmaker() as session:
+            await BackupService.write_auto_backup_file(
+                session,
+                backup_root=settings.backup_root,
+                keep_latest=getattr(settings, "auto_backup_keep_latest", 7),
+            )
+
+
+def start_auto_backup_scheduler(*, settings, sessionmaker) -> asyncio.Task | None:
+    cron_expr = (settings.auto_backup_cron or "").strip()
+    if not cron_expr or cron_expr.lower() in {"off", "disabled", "none", "false", "0"}:
+        return None
+    return asyncio.create_task(_auto_backup_loop(settings, sessionmaker))
