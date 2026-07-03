@@ -32,3 +32,14 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "PATCH" in html
     assert "DELETE" in html
     assert "green/red/gray" in html
+    assert "高级过滤导出" in html
+    assert "openExportDialog" in html
+    assert "exportDialogVisible" in html
+    assert "exportForm" in html
+    assert "downloadExportPackage" in html
+    assert "/api/export" in html
+    assert "robot_id" in html
+    assert "room_id" in html
+    assert "start_timestamp" in html
+    assert "end_timestamp" in html
+    assert "chat-audit-export" in html

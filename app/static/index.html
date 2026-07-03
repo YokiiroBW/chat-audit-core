@@ -134,7 +134,7 @@
       </div>
       <div class="space-x-2">
         <el-button size="small" @click="reloadCurrentRoom" :disabled="!currentRoom">刷新</el-button>
-        <el-button size="small" type="primary" plain disabled>高级过滤导出</el-button>
+        <el-button size="small" type="primary" plain @click="openExportDialog" :disabled="!currentRobot">高级过滤导出</el-button>
       </div>
     </header>
 
@@ -162,6 +162,34 @@
       </div>
     </div>
   </main>
+
+  <el-dialog v-model="exportDialogVisible" title="高级过滤导出" width="520px">
+    <div class="space-y-3 text-sm">
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">机器人视角 robot_id</label>
+        <input v-model="exportForm.robot_id" class="w-full border rounded px-2 py-1" placeholder="robot_id" />
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">会话 room_id（可留空导出当前机器人全部会话）</label>
+        <input v-model="exportForm.room_id" class="w-full border rounded px-2 py-1" placeholder="room_id" />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">开始时间戳 start_timestamp</label>
+          <input v-model="exportForm.start_timestamp" type="number" class="w-full border rounded px-2 py-1" placeholder="可选" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">结束时间戳 end_timestamp</label>
+          <input v-model="exportForm.end_timestamp" type="number" class="w-full border rounded px-2 py-1" placeholder="可选" />
+        </div>
+      </div>
+      <p class="text-xs text-slate-400">导出包为 JSON，文件名以 chat-audit-export 开头。</p>
+    </div>
+    <template #footer>
+      <el-button @click="exportDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="exporting" @click="downloadExportPackage" :disabled="!exportForm.robot_id">下载 JSON</el-button>
+    </template>
+  </el-dialog>
 </div>
 
 <script>
@@ -185,6 +213,9 @@ createApp({
     const loadingRooms = ref(false);
     const loadingHistory = ref(false);
     const chatWindow = ref(null);
+    const exportDialogVisible = ref(false);
+    const exporting = ref(false);
+    const exportForm = ref({ robot_id: '', room_id: '', start_timestamp: '', end_timestamp: '' });
 
     const filteredRooms = computed(() => roomList.value);
 
@@ -305,6 +336,45 @@ createApp({
       searchResults.value = [];
     };
 
+    const openExportDialog = () => {
+      exportForm.value = {
+        robot_id: currentRobot.value ? currentRobot.value.id : '',
+        room_id: currentRoom.value ? currentRoom.value.room_id : '',
+        start_timestamp: '',
+        end_timestamp: '',
+      };
+      exportDialogVisible.value = true;
+    };
+
+    const downloadExportPackage = async () => {
+      if (!exportForm.value.robot_id) return;
+      exporting.value = true;
+      try {
+        const params = new URLSearchParams();
+        ['robot_id', 'room_id', 'start_timestamp', 'end_timestamp'].forEach((key) => {
+          const value = exportForm.value[key];
+          if (value !== null && value !== undefined && String(value).trim() !== '') {
+            params.append(key, String(value).trim());
+          }
+        });
+        const response = await fetch(`/api/export?${params.toString()}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}: /api/export`);
+        const packageJson = await response.json();
+        const blob = new Blob([JSON.stringify(packageJson, null, 2)], { type: 'application/json;charset=utf-8' });
+        const link = document.createElement('a');
+        const objectUrl = URL.createObjectURL(blob);
+        link.href = objectUrl;
+        link.download = `chat-audit-export-${Date.now()}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(objectUrl);
+        exportDialogVisible.value = false;
+      } finally {
+        exporting.value = false;
+      }
+    };
+
     const loadMessages = async (beforeTimestamp = null) => {
       if (!currentRobot.value || !currentRoom.value) return [];
       let url = `/api/messages?robot_id=${encodeURIComponent(currentRobot.value.id)}&room_id=${encodeURIComponent(currentRoom.value.room_id)}&limit=50`;
@@ -351,8 +421,8 @@ createApp({
     return {
       accountList, currentRobot, roomList, currentRoom, messageList, searchQuery,
       searchResults, searchMode, searching, settingsMode, adapterForm, savingAdapter, editingAdapterId,
-      loadingRooms, loadingHistory, chatWindow, filteredRooms,
-      switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, reloadCurrentRoom, handleWindowScroll,
+      loadingRooms, loadingHistory, chatWindow, filteredRooms, exportDialogVisible, exporting, exportForm,
+      switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, openExportDialog, downloadExportPackage, reloadCurrentRoom, handleWindowScroll,
       resetAdapterForm, editAdapter, saveAdapter, deleteAdapter,
       statusDotClass, formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
     };
