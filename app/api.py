@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -16,7 +16,33 @@ from app.services.adapter_service import AdapterService
 from app.services.backup_service import BackupService
 from app.services.query_service import QueryService
 
-router = APIRouter()
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token
+
+
+def require_admin_api_token(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> None:
+    configured_token = settings.admin_api_token.strip()
+    if not configured_token:
+        return
+
+    header_token = request.headers.get("x-admin-token")
+    bearer_token = _extract_bearer_token(request.headers.get("authorization"))
+    if header_token == configured_token or bearer_token == configured_token:
+        return
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid admin api token")
+
+
+router = APIRouter(dependencies=[Depends(require_admin_api_token)])
 
 
 @router.get("/adapters", response_model=list[AdapterResponse])
@@ -128,6 +154,7 @@ async def export_data(
     start_timestamp: int | None = Query(default=None),
     end_timestamp: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ):
     return await BackupService.export_package(
         db,
@@ -135,6 +162,9 @@ async def export_data(
         room_id=room_id,
         start_timestamp=start_timestamp,
         end_timestamp=end_timestamp,
+        storage_root=settings.storage_root,
+        public_storage_prefix=settings.public_storage_prefix,
+        max_media_bytes=settings.media_max_bytes,
     )
 
 
@@ -160,7 +190,12 @@ async def import_data(
     settings: Settings = Depends(get_settings),
 ) -> ImportResultResponse:
     try:
-        result = await BackupService.import_package(db, package)
+        result = await BackupService.import_package(
+            db,
+            package,
+            storage_root=settings.storage_root,
+            public_storage_prefix=settings.public_storage_prefix,
+        )
     except ValueError as exc:
         BackupService.write_failure_log(settings.backup_root, event="import", error=str(exc), context={"schema": (package.get("manifest") or {}).get("schema")})
         raise HTTPException(status_code=400, detail=str(exc)) from exc

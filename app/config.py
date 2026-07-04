@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     app_secret_key: str = "change-me"
+    admin_api_token: str = ""
 
     database_url: str = "sqlite+aiosqlite:///./data/chat_audit.sqlite3"
 

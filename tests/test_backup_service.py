@@ -290,7 +290,7 @@ async def test_import_validate_api_reports_valid_package_without_writing(db_sess
     assert report["schema"] == "chat-audit-core.backup.v1"
     assert report["checksum_valid"] is True
     assert report["errors"] == []
-    assert report["counts"] == {"messages": 1, "robot_messages": 1, "media_assets": 0}
+    assert report["counts"] == {"messages": 1, "robot_messages": 1, "media_assets": 0, "media_files": 0}
 
 
 @pytest.mark.asyncio
@@ -320,6 +320,36 @@ async def test_import_validate_api_reports_checksum_mismatch(db_session):
     assert report["valid"] is False
     assert report["checksum_valid"] is False
     assert any("checksum mismatch" in error for error in report["errors"])
+
+
+@pytest.mark.asyncio
+async def test_import_api_rejects_malformed_package_with_400(db_session, tmp_path, monkeypatch):
+    package = {
+        "manifest": {"schema": "chat-audit-core.backup.v1"},
+        "messages": [{"platform": "qq"}],
+        "robot_messages": [],
+        "media_assets": [],
+    }
+
+    from app.config import Settings
+    from app.api import get_settings
+
+    settings = Settings(storage_root=tmp_path / "storage", backup_root=tmp_path / "backups")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/import", json=package)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "missing required field" in response.json()["detail"]
+    assert (tmp_path / "backups" / "failures.log").exists()
 
 
 @pytest.mark.asyncio
@@ -419,6 +449,103 @@ def test_backup_service_validates_media_file_checksum(tmp_path):
 
     assert report["valid"] is True
     assert report["media_files"] == {"checked": 1, "missing": 0, "mismatch": 0}
+
+
+@pytest.mark.asyncio
+async def test_backup_service_exports_and_restores_embedded_media_file(db_session, tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    media_file = storage_root / "media-restore.jpg"
+    media_content = b"restorable media payload"
+    media_file.write_bytes(media_content)
+
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-media-backup",
+        "qq",
+        {
+            "room_id": "room-media-backup",
+            "message_type": "group",
+            "sender_id": "user-media-backup",
+            "nickname": "Media Backup User",
+            "raw_message": "photo",
+            "local_message": "before /static/storage/media-restore.jpg after",
+            "timestamp": 1500,
+        },
+    )
+    db_session.add(
+        MediaAsset(
+            file_hash="media-restore",
+            file_type="image",
+            file_size=len(media_content),
+            local_path="/static/storage/media-restore.jpg",
+        )
+    )
+    await db_session.commit()
+
+    package = await BackupService.export_package(
+        db_session,
+        robot_id="robot-media-backup",
+        storage_root=storage_root,
+        public_storage_prefix="/static/storage",
+    )
+    media_file.unlink()
+
+    await BackupService.import_package(
+        db_session,
+        package,
+        storage_root=storage_root,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert package["manifest"]["counts"]["media_files"] == 1
+    assert package["media_assets"][0]["file_checksum"]["algorithm"] == "sha256"
+    assert package["media_files"][0]["local_path"] == "/static/storage/media-restore.jpg"
+    assert media_file.read_bytes() == media_content
+
+
+@pytest.mark.asyncio
+async def test_backup_service_skips_embedding_media_file_over_size_limit(db_session, tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    media_file = storage_root / "media-large.jpg"
+    media_file.write_bytes(b"large media payload")
+
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-media-large",
+        "qq",
+        {
+            "room_id": "room-media-large",
+            "message_type": "group",
+            "sender_id": "user-media-large",
+            "nickname": "Media Large User",
+            "raw_message": "photo",
+            "local_message": "/static/storage/media-large.jpg",
+            "timestamp": 1600,
+        },
+    )
+    db_session.add(
+        MediaAsset(
+            file_hash="media-large",
+            file_type="image",
+            file_size=19,
+            local_path="/static/storage/media-large.jpg",
+        )
+    )
+    await db_session.commit()
+
+    package = await BackupService.export_package(
+        db_session,
+        robot_id="robot-media-large",
+        storage_root=storage_root,
+        public_storage_prefix="/static/storage",
+        max_media_bytes=4,
+    )
+
+    assert package["manifest"]["counts"]["media_assets"] == 1
+    assert package["manifest"]["counts"]["media_files"] == 0
+    assert package["media_files"] == []
 
 
 def test_backup_service_reports_media_file_checksum_mismatch(tmp_path):

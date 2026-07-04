@@ -28,7 +28,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "adapterForm" in html
     assert "saveAdapter" in html
     assert "deleteAdapter" in html
-    assert "POST", "/api/adapters"
+    assert "POST" in html
+    assert "/api/adapters" in html
     assert "PATCH" in html
     assert "DELETE" in html
     assert "green/red/gray" in html
@@ -50,6 +51,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "importValidationReport" in html
     assert "validateImportPackage" in html
     assert "submitImportPackage" in html
+    assert "chatAuditAdminApiToken" in html
+    assert "Authorization" in html
     assert "/api/import/validate" in html
     assert "/api/import" in html
     assert "diff.messages" in html

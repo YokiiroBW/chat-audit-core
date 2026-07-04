@@ -1,6 +1,7 @@
 from httpx import ASGITransport, AsyncClient
 import pytest
 
+from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
 
@@ -75,3 +76,27 @@ async def test_adapter_crud_api_rejects_duplicate_and_missing_adapter(db_session
     assert duplicate.status_code == 409
     assert missing_patch.status_code == 404
     assert missing_delete.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_api_token_is_required_when_configured(db_session):
+    settings = Settings(admin_api_token="admin-secret")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            missing = await client.get("/api/adapters")
+            invalid = await client.get("/api/adapters", headers={"Authorization": "Bearer wrong"})
+            bearer = await client.get("/api/adapters", headers={"Authorization": "Bearer admin-secret"})
+            custom_header = await client.get("/api/adapters", headers={"X-Admin-Token": "admin-secret"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert bearer.status_code == 200
+    assert custom_header.status_code == 200

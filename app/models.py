@@ -1,7 +1,7 @@
-import datetime as dt
-
 from sqlalchemy import Column, DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
+
+from app.time_utils import utc_now
 
 Base = declarative_base()
 
@@ -15,7 +15,7 @@ class Adapter(Base):
     platform = Column(String(20), nullable=False)
     config_json = Column(Text, nullable=True)
     status = Column(String(20), default="gray", nullable=False)
-    updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class Message(Base):
@@ -32,7 +32,7 @@ class Message(Base):
     raw_message = Column(Text, nullable=False)
     local_message = Column(Text, nullable=False)
     timestamp = Column(Integer, nullable=False, index=True)
-    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
 
     __table_args__ = (Index("idx_room_timestamp", "room_id", "timestamp"),)
 
@@ -58,4 +58,4 @@ class MediaAsset(Base):
     file_type = Column(String(20), nullable=False)
     file_size = Column(Integer, nullable=False)
     local_path = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)

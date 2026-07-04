@@ -72,6 +72,26 @@ def test_normalize_group_message_event_maps_onebot_fields():
     }
 
 
+def test_normalize_message_event_preserves_message_id_when_present():
+    from app.adapters.onebot11 import normalize_message_event
+
+    event = {
+        "post_type": "message",
+        "message_type": "group",
+        "self_id": 123456,
+        "message_id": -9001,
+        "group_id": 998877,
+        "user_id": 445566,
+        "raw_message": "hello from napcat",
+        "time": 1783000100,
+        "sender": {"nickname": "Alice"},
+    }
+
+    normalized = normalize_message_event(event)
+
+    assert normalized.msg_data["message_id"] == "-9001"
+
+
 def test_normalize_group_self_message_sent_event_maps_onebot_fields():
     from app.adapters.onebot11 import normalize_message_event
 

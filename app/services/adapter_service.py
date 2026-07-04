@@ -1,9 +1,8 @@
-import datetime as dt
-
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Adapter
+from app.time_utils import utc_now
 
 
 class AdapterService:
@@ -44,7 +43,7 @@ class AdapterService:
             adapter.config_json = config_json
         if status is not None:
             adapter.status = status
-        adapter.updated_at = dt.datetime.utcnow()
+        adapter.updated_at = utc_now()
         await db.commit()
         await db.refresh(adapter)
         return adapter

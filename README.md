@@ -110,6 +110,7 @@ data/backups/auto-backup-20260703T030000Z.json
 说明：
 
 - 备份内容复用 `/api/export` 的包结构。
+- 导出包会尽量携带本地媒体文件内容，单个媒体文件超过 `MEDIA_MAX_BYTES` 时只导出索引与校验信息，不嵌入文件内容。
 - manifest 会标记 `backup_type=auto` 与 `created_by=auto_backup_scheduler`。
 - manifest 会写入 `checksum.algorithm=sha256` 与 `checksum.value`；导入时如校验值不匹配会拒绝导入，避免篡改包被静默回录。
 - `/api/import/validate` 可在真正写库前返回 schema、checksum、counts、数据库差异预览、媒体文件校验结果与错误列表。
@@ -117,6 +118,24 @@ data/backups/auto-backup-20260703T030000Z.json
 - 导入失败与自动备份失败会写入 `BACKUP_ROOT/failures.log`，每行一条 JSON 失败记录。
 - `AUTO_BACKUP_KEEP_LATEST` 控制保留最近多少个 `auto-backup-*.json` 文件。
 - 如需禁用自动备份，可将 `AUTO_BACKUP_CRON` 设置为 `off`、`disabled`、`none`、`false` 或 `0`。
+
+## 管理 API 鉴权
+
+开发环境中 `ADMIN_API_TOKEN` 留空时，`/api/*` 管理接口默认开放，便于本地调试。
+
+生产环境 `APP_ENV=production` 时必须配置非默认 `ADMIN_API_TOKEN`。配置后，请求 `/api/*` 需要携带：
+
+```text
+Authorization: Bearer 你的管理API Token
+```
+
+或：
+
+```text
+X-Admin-Token: 你的管理API Token
+```
+
+内置 Web 控制台遇到 401 时会提示输入该 token，并缓存在浏览器本地存储中。
 
 ## Forgejo
 

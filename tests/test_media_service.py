@@ -64,6 +64,27 @@ async def test_rewrite_cq_media_downloads_assets_and_rewrites_local_paths(db_ses
 
 
 @pytest.mark.asyncio
+async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_path):
+    client = StubAsyncClient({"http://media.local/large.jpg": b"too large"})
+    raw = "[CQ:image,file=large.jpg,url=http://media.local/large.jpg]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        max_bytes=4,
+    )
+
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert rewritten == raw
+    assert assets == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_process_incoming_message_rewrites_cq_media_when_http_client_is_supplied(db_session, tmp_path):
     client = StubAsyncClient({"http://media.local/a.jpg": b"image bytes"})
     payload = {

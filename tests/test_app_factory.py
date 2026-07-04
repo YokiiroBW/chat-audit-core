@@ -79,6 +79,7 @@ def test_create_app_rejects_default_secret_in_production(tmp_path):
         app_env="production",
         app_secret_key="change-me-in-production",
         onebot_access_token="secret-token",
+        admin_api_token="admin-token",
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
         storage_root=tmp_path / "storage",
         backup_root=tmp_path / "backups",
@@ -96,6 +97,7 @@ def test_create_app_rejects_missing_onebot_token_in_production(tmp_path):
         app_env="production",
         app_secret_key="strong-production-secret",
         onebot_access_token="",
+        admin_api_token="admin-token",
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
         storage_root=tmp_path / "storage",
         backup_root=tmp_path / "backups",
@@ -114,6 +116,7 @@ def test_create_app_rejects_placeholder_secret_in_production(tmp_path):
         app_env="production",
         app_secret_key="replace-with-a-long-random-secret",
         onebot_access_token="secret-token",
+        admin_api_token="admin-token",
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
         storage_root=tmp_path / "storage",
         backup_root=tmp_path / "backups",
@@ -131,6 +134,7 @@ def test_create_app_rejects_placeholder_onebot_token_in_production(tmp_path):
         app_env="production",
         app_secret_key="strong-production-secret",
         onebot_access_token="replace-with-onebot-access-token",
+        admin_api_token="admin-token",
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
         storage_root=tmp_path / "storage",
         backup_root=tmp_path / "backups",
@@ -140,4 +144,22 @@ def test_create_app_rejects_placeholder_onebot_token_in_production(tmp_path):
     import pytest
 
     with pytest.raises(ValueError, match="ONEBOT_ACCESS_TOKEN"):
+        create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+
+
+def test_create_app_rejects_missing_admin_api_token_in_production(tmp_path):
+    settings = Settings(
+        app_env="production",
+        app_secret_key="strong-production-secret",
+        onebot_access_token="secret-token",
+        admin_api_token="",
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="ADMIN_API_TOKEN"):
         create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)

@@ -252,21 +252,47 @@ createApp({
     const importValidationReport = ref(null);
     const importValidating = ref(false);
     const importing = ref(false);
+    const adminApiToken = ref(localStorage.getItem('chatAuditAdminApiToken') || '');
 
     const filteredRooms = computed(() => roomList.value);
 
+    const promptForAdminApiToken = () => {
+      const token = window.prompt('请输入管理 API Token');
+      if (token && token.trim()) {
+        adminApiToken.value = token.trim();
+        localStorage.setItem('chatAuditAdminApiToken', adminApiToken.value);
+        return true;
+      }
+      return false;
+    };
+
+    const authHeaders = (headers = {}) => {
+      if (!adminApiToken.value) return headers;
+      return { ...headers, Authorization: `Bearer ${adminApiToken.value}` };
+    };
+
     const apiGet = async (url) => {
-      const response = await fetch(url);
+      let response = await fetch(url, { headers: authHeaders() });
+      if (response.status === 401 && promptForAdminApiToken()) {
+        response = await fetch(url, { headers: authHeaders() });
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
       return await response.json();
     };
 
     const apiSend = async (url, method, body = null) => {
-      const response = await fetch(url, {
+      let response = await fetch(url, {
         method,
-        headers: body !== null ? { 'Content-Type': 'application/json' } : {},
+        headers: authHeaders(body !== null ? { 'Content-Type': 'application/json' } : {}),
         body: body !== null ? JSON.stringify(body) : null,
       });
+      if (response.status === 401 && promptForAdminApiToken()) {
+        response = await fetch(url, {
+          method,
+          headers: authHeaders(body !== null ? { 'Content-Type': 'application/json' } : {}),
+          body: body !== null ? JSON.stringify(body) : null,
+        });
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${method} ${url}`);
       if (response.status === 204) return null;
       return await response.json();
@@ -393,7 +419,10 @@ createApp({
             params.append(key, String(value).trim());
           }
         });
-        const response = await fetch(`/api/export?${params.toString()}`);
+        let response = await fetch(`/api/export?${params.toString()}`, { headers: authHeaders() });
+        if (response.status === 401 && promptForAdminApiToken()) {
+          response = await fetch(`/api/export?${params.toString()}`, { headers: authHeaders() });
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}: /api/export`);
         const packageJson = await response.json();
         const blob = new Blob([JSON.stringify(packageJson, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -423,11 +452,18 @@ createApp({
       if (!importPackageText.value.trim()) return;
       importValidating.value = true;
       try {
-        const response = await fetch('/api/import/validate', {
+        let response = await fetch('/api/import/validate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(parseImportPackage()),
         });
+        if (response.status === 401 && promptForAdminApiToken()) {
+          response = await fetch('/api/import/validate', {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(parseImportPackage()),
+          });
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}: /api/import/validate`);
         importValidationReport.value = await response.json();
       } finally {

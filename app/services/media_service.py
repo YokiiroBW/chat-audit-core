@@ -7,6 +7,8 @@ from urllib.parse import unquote, urlparse
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
+
 
 @dataclass(frozen=True)
 class CQMediaSegment:
@@ -83,6 +85,7 @@ class MediaService:
         http_client: Any | None = None,
         storage_root: str | Path | None = None,
         public_prefix: str | None = None,
+        max_bytes: int | None = None,
     ) -> str:
         from app.services.message_service import MessageService
 
@@ -90,6 +93,7 @@ class MediaService:
         if not segments:
             return raw_message
 
+        media_max_bytes = max_bytes if max_bytes is not None else get_settings().media_max_bytes
         owns_client = http_client is None
         client = http_client or httpx.AsyncClient()
         rewritten = raw_message
@@ -100,6 +104,11 @@ class MediaService:
                 except httpx.HTTPError:
                     continue
                 if response.status_code >= 400:
+                    continue
+                content_length = response.headers.get("content-length")
+                if content_length is not None and content_length.isdigit() and int(content_length) > media_max_bytes:
+                    continue
+                if len(response.content) > media_max_bytes:
                     continue
                 local_path = await MessageService.save_media_asset(
                     db,

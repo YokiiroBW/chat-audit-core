@@ -65,7 +65,10 @@ class MessageService:
         raw_message = msg_data["raw_message"]
         room_id = msg_data["room_id"]
         sender_id = msg_data["sender_id"]
-        raw_string = f"{platform}_{room_id}_{sender_id}_{raw_message}"
+        event_identity = msg_data.get("message_id")
+        if event_identity is None:
+            event_identity = f"{msg_data['timestamp']}_{raw_message}"
+        raw_string = f"{platform}_{room_id}_{sender_id}_{event_identity}"
         msg_hash = MessageService.generate_md5(raw_string.encode("utf-8"))
 
         result = await db.execute(select(Message).where(Message.msg_hash == msg_hash))

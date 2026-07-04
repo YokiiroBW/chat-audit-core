@@ -51,4 +51,6 @@ def normalize_message_event(event: dict[str, Any]) -> NormalizedMessageEvent | N
         "local_message": str(raw_message),
         "timestamp": int(timestamp),
     }
+    if event.get("message_id") is not None:
+        msg_data["message_id"] = str(event["message_id"])
     return NormalizedMessageEvent(robot_id=str(self_id), platform="qq", msg_data=msg_data)

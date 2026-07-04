@@ -26,6 +26,9 @@ def validate_production_settings(settings: Settings) -> None:
     unsafe_onebot_values = {"", "replace-with-onebot-access-token"}
     if settings.onebot_access_token.strip() in unsafe_onebot_values:
         raise ValueError("ONEBOT_ACCESS_TOKEN must be set to a non-default value in production")
+    unsafe_admin_values = {"", "replace-with-admin-api-token"}
+    if settings.admin_api_token.strip() in unsafe_admin_values:
+        raise ValueError("ADMIN_API_TOKEN must be set to a non-default value in production")
 
 
 def create_app(
