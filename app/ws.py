@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.database import get_db_session
 from app.services.bot_profile_service import BotProfileService
 from app.services.message_service import MessageService
+from app.services.onebot_rpc_service import OneBotRPCService
 
 router = APIRouter()
 
@@ -58,6 +59,9 @@ async def onebot11_reverse_ws(
     try:
         while True:
             event = await websocket.receive_json()
+            if OneBotRPCService.resolve_response(event):
+                continue
+
             normalized = normalize_message_event(event)
             if normalized is None:
                 continue
@@ -72,6 +76,7 @@ async def onebot11_reverse_ws(
                 display_name=display_name,
                 adapter_id=adapter_id,
             )
+            OneBotRPCService.register_connection(normalized.robot_id, websocket)
 
             await MessageService.process_incoming_message(
                 db,
@@ -81,4 +86,5 @@ async def onebot11_reverse_ws(
                 media_http_client=media_http_client,
             )
     except WebSocketDisconnect:
+        OneBotRPCService.unregister_connection(websocket)
         return

@@ -302,6 +302,72 @@
     }
     .media-img { max-width: min(340px, 100%); border-radius: 6px; display: block; }
     .media-video { max-width: min(420px, 100%); border-radius: 6px; display: block; }
+    .json-card {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      max-width: 360px;
+      white-space: normal;
+    }
+    .json-card-img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: 6px;
+      background: #e2e8f0;
+    }
+    .json-card-body { min-width: 0; }
+    .json-card-title {
+      display: block;
+      color: inherit;
+      font-weight: 700;
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .json-card-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      margin-top: 4px;
+    }
+    .cq-parts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
+    .cq-text { white-space: pre-wrap; }
+    .cq-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .forward-card {
+      width: min(360px, 100%);
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+      color: #0f172a;
+    }
+    .forward-card button { width: 100%; justify-content: flex-start; }
+    .forward-detail {
+      margin-top: 8px;
+      display: grid;
+      gap: 6px;
+      max-height: 360px;
+      overflow: auto;
+    }
+    .forward-message {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 6px;
+      font-size: 13px;
+    }
+    .forward-meta { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -547,6 +613,11 @@
     const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
+    const decodeHtmlEntities = (value) => {
+      const textarea = document.createElement('textarea');
+      textarea.innerHTML = value;
+      return textarea.value;
+    };
 
     const clearNode = (node) => {
       while (node.firstChild) node.removeChild(node.firstChild);
@@ -721,11 +792,24 @@
 
     const renderMessageContent = (container, value) => {
       clearNode(container);
+      if (renderCQParts(container, value)) return;
+      const cqImage = parseCQSegment(value, 'image');
+      if (cqImage && cqImage.url) {
+        renderImageLink(container, cqImage.url, cqImage.file || '媒体图片');
+        return;
+      }
+      const cqJson = parseCQSegment(value, 'json');
+      if (cqJson && cqJson.data) {
+        renderCQJsonCard(container, cqJson.data);
+        return;
+      }
       if (!isMedia(value)) {
         container.textContent = value;
         return;
       }
       if (isImg(value)) {
+        renderImageLink(container, value, '媒体图片');
+        return;
         const img = document.createElement('img');
         img.className = 'media-img';
         img.src = value;
@@ -754,6 +838,186 @@
       link.rel = 'noreferrer';
       link.textContent = '打开媒体资产';
       container.appendChild(link);
+    };
+
+    const parseCQParams = (paramsText) => {
+      const params = {};
+      paramsText.split(',').forEach((item) => {
+        const index = item.indexOf('=');
+        if (index <= 0) return;
+        const key = item.slice(0, index);
+        const raw = item.slice(index + 1);
+        try {
+          params[key] = decodeURIComponent(decodeHtmlEntities(raw));
+        } catch {
+          params[key] = decodeHtmlEntities(raw);
+        }
+      });
+      return params;
+    };
+
+    const renderCQParts = (container, value) => {
+      if (typeof value !== 'string' || !value.includes('[CQ:')) return false;
+      const pattern = /\[CQ:(\w+),([\s\S]*?)\]/g;
+      let cursor = 0;
+      let matched = false;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'cq-parts';
+
+      const appendText = (textValue) => {
+        if (!textValue) return;
+        const span = document.createElement('span');
+        span.className = 'cq-text';
+        span.textContent = textValue;
+        wrapper.appendChild(span);
+      };
+
+      let match = null;
+      while ((match = pattern.exec(value)) !== null) {
+        matched = true;
+        appendText(value.slice(cursor, match.index));
+        const kind = match[1];
+        const params = parseCQParams(match[2]);
+        if (kind === 'image' && params.url) {
+          renderImageLink(wrapper, params.url, params.summary || params.file || '媒体图片');
+        } else if (kind === 'json' && params.data) {
+          renderCQJsonCard(wrapper, params.data);
+        } else if (kind === 'at') {
+          renderCQChip(wrapper, `@${params.qq || 'unknown'}`);
+        } else if (kind === 'reply') {
+          renderCQChip(wrapper, `回复 #${params.id || '-'}`);
+        } else if (kind === 'forward') {
+          renderForwardCard(wrapper, params);
+        } else {
+          renderCQChip(wrapper, `[${kind}]`);
+        }
+        cursor = pattern.lastIndex;
+      }
+      appendText(value.slice(cursor));
+      if (!matched) return false;
+      container.appendChild(wrapper);
+      return true;
+    };
+
+    const renderImageLink = (container, src, alt) => {
+      const link = document.createElement('a');
+      link.href = src;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      const img = document.createElement('img');
+      img.className = 'media-img';
+      img.src = src;
+      img.alt = alt;
+      link.appendChild(img);
+      container.appendChild(link);
+    };
+
+    const renderCQChip = (container, label) => {
+      const chip = document.createElement('span');
+      chip.className = 'cq-chip';
+      chip.textContent = label;
+      container.appendChild(chip);
+    };
+
+    const renderForwardCard = (container, params) => {
+      const card = document.createElement('div');
+      card.className = 'forward-card';
+      const action = button(`合并转发消息 ${params.id || ''}`, 'btn link', async () => {
+        await toggleForwardDetail(params.id, detail);
+      });
+      const detail = document.createElement('div');
+      detail.className = 'forward-detail';
+      detail.hidden = true;
+      card.append(action, detail);
+      container.appendChild(card);
+    };
+
+    const toggleForwardDetail = async (forwardId, detail) => {
+      if (!forwardId || !state.currentRobot) return;
+      if (detail.dataset.loaded === 'true') {
+        detail.hidden = !detail.hidden;
+        return;
+      }
+      detail.hidden = false;
+      detail.textContent = '正在加载合并消息...';
+      try {
+        const payload = await apiGet(`/api/forward?robot_id=${encodeURIComponent(state.currentRobot.id)}&forward_id=${encodeURIComponent(forwardId)}`);
+        renderForwardPayload(detail, payload);
+        detail.dataset.loaded = 'true';
+      } catch (error) {
+        detail.textContent = `加载失败：${error.message}`;
+      }
+    };
+
+    const renderForwardPayload = (container, payload) => {
+      clearNode(container);
+      const data = payload && payload.data ? payload.data : payload;
+      const messages = Array.isArray(data) ? data : (data && (data.messages || data.message)) || [];
+      if (!Array.isArray(messages) || messages.length === 0) {
+        container.textContent = '没有可显示的合并消息内容';
+        return;
+      }
+      messages.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'forward-message';
+        const meta = document.createElement('div');
+        meta.className = 'forward-meta';
+        const sender = item.sender && (item.sender.nickname || item.sender.card || item.sender.user_id);
+        meta.textContent = sender ? String(sender) : 'forward';
+        const body = document.createElement('div');
+        const content = item.raw_message || item.message || item.content || '';
+        renderMessageContent(body, Array.isArray(content) ? JSON.stringify(content) : String(content));
+        row.append(meta, body);
+        container.appendChild(row);
+      });
+    };
+
+    const parseCQSegment = (value, kind) => {
+      if (typeof value !== 'string') return null;
+      const match = value.trim().match(new RegExp(`^\\[CQ:${kind},([\\s\\S]*)\\]$`));
+      if (!match) return null;
+      return parseCQParams(match[1]);
+    };
+
+    const renderCQJsonCard = (container, data) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        container.textContent = data;
+        return;
+      }
+      const detail = payload.meta && (payload.meta.detail_1 || Object.values(payload.meta)[0]);
+      const title = detail && detail.title ? detail.title : payload.prompt || payload.app || 'JSON 卡片';
+      const desc = detail && detail.desc ? detail.desc : payload.prompt || '';
+      const url = detail && (detail.qqdocurl || detail.url);
+      const preview = detail && (detail.preview || detail.icon);
+
+      const card = document.createElement('div');
+      card.className = 'json-card';
+      if (preview) {
+        const img = document.createElement('img');
+        img.className = 'json-card-img';
+        img.src = preview.startsWith('http') ? preview : `https://${preview}`;
+        img.alt = title;
+        card.appendChild(img);
+      }
+      const body = document.createElement('div');
+      body.className = 'json-card-body';
+      const heading = document.createElement(url ? 'a' : 'div');
+      heading.className = 'json-card-title';
+      heading.textContent = title;
+      if (url) {
+        heading.href = url.startsWith('http') ? url : `https://${url}`;
+        heading.target = '_blank';
+        heading.rel = 'noreferrer';
+      }
+      const summary = document.createElement('div');
+      summary.className = 'json-card-desc';
+      summary.textContent = desc;
+      body.append(heading, summary);
+      card.appendChild(body);
+      container.appendChild(card);
     };
 
     const renderAll = () => {

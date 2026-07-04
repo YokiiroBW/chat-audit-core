@@ -1,3 +1,4 @@
+import html
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,7 @@ def _parse_cq_params(params: str) -> dict[str, str]:
         if "=" not in item:
             continue
         key, value = item.split("=", 1)
-        pairs.append((key, unquote(value)))
+        pairs.append((key, unquote(html.unescape(value))))
     return dict(pairs)
 
 

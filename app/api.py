@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +17,7 @@ from app.schemas import (
 )
 from app.services.adapter_service import AdapterService
 from app.services.backup_service import BackupService
+from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.query_service import QueryService
 
 
@@ -155,6 +158,19 @@ async def search_messages(
         limit=limit,
     )
     return [MessageResponse.model_validate(message) for message in messages]
+
+
+@router.get("/forward")
+async def get_forward_message(
+    robot_id: str = Query(..., min_length=1),
+    forward_id: str = Query(..., min_length=1),
+) -> dict:
+    try:
+        return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="onebot action timed out") from exc
 
 
 @router.get("/export")

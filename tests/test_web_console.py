@@ -29,6 +29,11 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "搜索结果" in html
     assert "before_timestamp" in html
     assert "static/storage" in html
+    assert "parseCQSegment" in html
+    assert "renderCQJsonCard" in html
+    assert "decodeHtmlEntities" in html
+    assert "renderForwardCard" in html
+    assert "/api/forward" in html
     assert "账号设置" in html
     assert "adapterId" in html
     assert "saveAdapter" in html

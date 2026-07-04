@@ -32,6 +32,20 @@ def test_parse_cq_media_segments_extracts_supported_media():
     assert segments[1].ext == "silk"
 
 
+def test_parse_cq_media_segments_decodes_html_escaped_ntqq_url():
+    raw = (
+        "[CQ:image,file=A963374C89F794FAD63222CFB5CB2EE5.png,"
+        "url=https://multimedia.nt.qq.com.cn/download?appid=1407&amp;fileid=abc&amp;rkey=def,"
+        "file_size=3231236]"
+    )
+
+    segments = parse_cq_media_segments(raw)
+
+    assert len(segments) == 1
+    assert segments[0].url == "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=def"
+    assert segments[0].ext == "png"
+
+
 @pytest.mark.asyncio
 async def test_rewrite_cq_media_downloads_assets_and_rewrites_local_paths(db_session, tmp_path):
     client = StubAsyncClient(
