@@ -48,6 +48,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "findReplyMessage" in html
     assert "external_message_id" in html
     assert "media-file" in html
+    assert "room.display_name" in html
+    assert "room.avatar_path" in html
     assert "账号设置" in html
     assert "adapterId" in html
     assert "saveAdapter" in html

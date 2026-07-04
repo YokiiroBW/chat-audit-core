@@ -1,7 +1,7 @@
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Adapter, BotProfile, Message, RobotMessage
+from app.models import Adapter, BotProfile, Message, RobotMessage, RoomProfile
 
 
 class QueryService:
@@ -21,14 +21,22 @@ class QueryService:
             select(
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
+                func.max(RoomProfile.display_name).label("display_name"),
+                func.max(RoomProfile.avatar_path).label("avatar_path"),
             )
             .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(RoomProfile, RoomProfile.room_id == Message.room_id)
             .where(RobotMessage.robot_id == robot_id)
             .group_by(Message.room_id)
             .order_by(desc("last_timestamp"), Message.room_id.asc())
         )
         return [
-            {"room_id": row.room_id, "last_timestamp": row.last_timestamp}
+            {
+                "room_id": row.room_id,
+                "last_timestamp": row.last_timestamp,
+                "display_name": row.display_name,
+                "avatar_path": row.avatar_path,
+            }
             for row in result.all()
         ]
 

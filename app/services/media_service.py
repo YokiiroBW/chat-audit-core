@@ -342,6 +342,52 @@ class MediaService:
         return rewritten.strip()
 
     @staticmethod
+    async def cache_cq_forward_payloads(
+        db: AsyncSession,
+        local_message: str,
+        forward_loader: Any,
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+    ) -> str:
+        from app.services.message_service import MessageService
+
+        rewritten = local_message
+        for match in list(_CQ_PATTERN.finditer(local_message)):
+            if match.group("kind") != "forward":
+                continue
+            params = _parse_cq_params(match.group("params"))
+            forward_id = params.get("id")
+            if not forward_id or params.get("local"):
+                continue
+            try:
+                payload = await forward_loader(forward_id)
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            localized = await MediaService.localize_onebot_payload(
+                db,
+                payload,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+            )
+            local_path = await MessageService.save_media_asset(
+                db,
+                file_content=json.dumps(localized, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                file_type="forward",
+                ext="json",
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+            params["local"] = local_path
+            rewritten = rewritten.replace(match.group(0), _build_cq_segment("forward", params), 1)
+        return rewritten
+
+    @staticmethod
     async def localize_onebot_content(
         db: AsyncSession,
         content: Any,

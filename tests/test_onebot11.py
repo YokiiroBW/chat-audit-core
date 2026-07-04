@@ -63,6 +63,10 @@ async def register_adapter(db_session, robot_id: str = "123456"):
     await db_session.commit()
 
 
+def assert_only_group_info_actions(websocket):
+    assert all(payload.get("action") == "get_group_info" for payload in websocket.sent_json)
+
+
 def test_normalize_group_message_event_maps_onebot_fields():
     from app.adapters.onebot11 import normalize_message_event
 
@@ -183,8 +187,8 @@ async def test_onebot_websocket_persists_group_message_with_robot_view(db_sessio
     messages = await QueryService.list_messages(db_session, robot_id="123456", room_id="998877")
 
     assert websocket.accepted is True
-    assert websocket.sent_json == []
-    assert rooms == [{"room_id": "998877", "last_timestamp": 1783000200}]
+    assert_only_group_info_actions(websocket)
+    assert rooms == [{"room_id": "998877", "last_timestamp": 1783000200, "display_name": None, "avatar_path": None}]
     assert len(messages) == 1
     assert messages[0].raw_message == "websocket hello"
 
@@ -215,7 +219,7 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
     with TestClient(app) as client:
         static_response = client.get(messages[0].local_message)
 
-    assert websocket.sent_json == []
+    assert_only_group_info_actions(websocket)
     assert stub_client.requested_urls == ["http://media.local/ws-image.jpg"]
     assert len(messages) == 1
     assert messages[0].local_message.startswith("/static/storage/")
@@ -257,7 +261,7 @@ async def test_onebot_websocket_keeps_connection_and_stores_raw_message_when_med
 
     messages = await QueryService.list_messages(db_session, robot_id="1449801200", room_id="949040596")
     assert websocket.accepted is True
-    assert websocket.sent_json == []
+    assert_only_group_info_actions(websocket)
     assert [message.raw_message for message in messages] == [
         "self image [CQ:image,file=expired.image,url=http://media.local/expired.jpg]",
         "self text after failed media",
@@ -288,7 +292,7 @@ async def test_onebot_websocket_does_not_send_ack_frames_to_napcat(db_session):
 
     messages = await QueryService.list_messages(db_session, robot_id="123456", room_id="998877")
     assert websocket.accepted is True
-    assert websocket.sent_json == []
+    assert_only_group_info_actions(websocket)
     assert len(messages) == 1
     assert messages[0].raw_message == "no ack please"
 

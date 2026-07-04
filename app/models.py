@@ -33,6 +33,18 @@ class BotProfile(Base):
     last_seen_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 
+class RoomProfile(Base):
+    """Cached conversation metadata for local browsing."""
+
+    __tablename__ = "room_profiles"
+
+    room_id = Column(String(64), primary_key=True)
+    platform = Column(String(20), nullable=False)
+    display_name = Column(String(128), nullable=True)
+    avatar_path = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
 class Message(Base):
     """全局消息池表。"""
 

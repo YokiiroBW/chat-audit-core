@@ -208,3 +208,46 @@ async def test_process_incoming_message_rewrites_cq_media_when_http_client_is_su
     assert len(assets) == 1
     assert messages[0].raw_message == payload["raw_message"]
     assert messages[0].local_message == assets[0].local_path
+
+
+@pytest.mark.asyncio
+async def test_process_incoming_message_caches_forward_payload_when_loader_is_supplied(db_session, tmp_path):
+    client = StubAsyncClient({"http://media.local/in-forward.jpg": b"inside forward"})
+
+    async def load_forward(forward_id):
+        assert forward_id == "forward-1"
+        return {
+            "status": "ok",
+            "data": {
+                "messages": [
+                    {
+                        "raw_message": "[CQ:image,file=f.jpg,url=http://media.local/in-forward.jpg]",
+                    }
+                ]
+            },
+        }
+
+    await MessageService.process_incoming_message(
+        db_session,
+        robot_id="robot-forward",
+        platform="qq",
+        msg_data={
+            "room_id": "group-forward",
+            "message_type": "group",
+            "sender_id": "user-forward",
+            "nickname": "Forward User",
+            "raw_message": "[CQ:forward,id=forward-1]",
+            "timestamp": 1783000300,
+        },
+        media_http_client=client,
+        media_storage_root=tmp_path,
+        media_public_prefix="/static/storage",
+        forward_payload_loader=load_forward,
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert "local=/static/storage/" in messages[0].local_message
+    assert "forward-1" in messages[0].local_message
+    assert {asset.file_type for asset in assets} == {"image", "forward"}

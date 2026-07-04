@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -7,10 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.onebot11 import normalize_message_event
 from app.config import get_settings
-from app.database import get_db_session
+from app.database import AsyncSessionLocal, get_db_session
+from app.models import Message, RoomProfile
 from app.services.bot_profile_service import BotProfileService
+from app.services.media_service import MediaService
 from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
+from app.services.room_profile_service import RoomProfileService
 
 router = APIRouter()
 
@@ -48,6 +52,60 @@ def _extract_robot_id(event: dict[str, Any]) -> str | None:
     if self_id is None:
         return None
     return str(self_id)
+
+
+async def _hydrate_forward_payloads(robot_id: str, msg_hash: str) -> None:
+    settings = get_settings()
+    async with AsyncSessionLocal() as session, httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        message = await session.get(Message, msg_hash)
+        if message is None:
+            return
+        local_message = message.local_message
+
+        async def load_forward(forward_id: str) -> dict[str, Any]:
+            return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
+
+        updated = await MediaService.cache_cq_forward_payloads(
+            session,
+            local_message=local_message,
+            forward_loader=load_forward,
+            http_client=client,
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+            max_bytes=settings.media_max_bytes,
+        )
+        if updated == local_message:
+            return
+        message.local_message = updated
+        await session.commit()
+
+
+async def _hydrate_group_profile(robot_id: str, platform: str, room_id: str) -> None:
+    settings = get_settings()
+    async with AsyncSessionLocal() as session:
+        existing = await session.get(RoomProfile, room_id)
+        if existing is not None and existing.display_name and existing.avatar_path:
+            return
+
+    group_info = None
+    try:
+        payload = await OneBotRPCService.call_action(robot_id, "get_group_info", {"group_id": int(room_id), "no_cache": False})
+        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+            group_info = payload["data"]
+    except Exception:
+        group_info = None
+
+    async with AsyncSessionLocal() as session, httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        await RoomProfileService.cache_qq_group_profile(
+            session,
+            room_id=room_id,
+            platform=platform,
+            group_info=group_info,
+            http_client=client,
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+            max_bytes=settings.media_max_bytes,
+        )
 
 
 @router.websocket("/onebot/v11/ws")
@@ -88,13 +146,17 @@ async def onebot11_reverse_ws(
                 adapter_id=adapter_id,
             )
 
-            await MessageService.process_incoming_message(
+            msg_hash = await MessageService.process_incoming_message(
                 db,
                 robot_id=normalized.robot_id,
                 platform=normalized.platform,
                 msg_data=normalized.msg_data,
                 media_http_client=media_http_client,
             )
+            if "[CQ:forward," in normalized.msg_data.get("raw_message", ""):
+                asyncio.create_task(_hydrate_forward_payloads(normalized.robot_id, msg_hash))
+            if normalized.msg_data.get("message_type") == "group":
+                asyncio.create_task(_hydrate_group_profile(normalized.robot_id, normalized.platform, normalized.msg_data["room_id"]))
     except WebSocketDisconnect:
         OneBotRPCService.unregister_connection(websocket)
         return

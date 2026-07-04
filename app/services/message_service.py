@@ -61,6 +61,7 @@ class MessageService:
         media_http_client: Any | None = None,
         media_storage_root: str | Path | None = None,
         media_public_prefix: str | None = None,
+        forward_payload_loader: Any | None = None,
     ) -> str:
         raw_message = msg_data["raw_message"]
         room_id = msg_data["room_id"]
@@ -85,6 +86,15 @@ class MessageService:
                     storage_root=media_storage_root,
                     public_prefix=media_public_prefix,
                 )
+                if forward_payload_loader is not None:
+                    local_message = await MediaService.cache_cq_forward_payloads(
+                        db,
+                        local_message=local_message,
+                        forward_loader=forward_payload_loader,
+                        http_client=media_http_client,
+                        storage_root=media_storage_root,
+                        public_prefix=media_public_prefix,
+                    )
 
             db.add(
                 Message(
