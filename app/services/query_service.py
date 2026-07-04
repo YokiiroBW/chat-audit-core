@@ -21,6 +21,7 @@ class QueryService:
             select(
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
+                func.max(Message.message_type).label("message_type"),
                 func.max(RoomProfile.display_name).label("display_name"),
                 func.max(RoomProfile.avatar_path).label("avatar_path"),
             )
@@ -34,6 +35,7 @@ class QueryService:
             {
                 "room_id": row.room_id,
                 "last_timestamp": row.last_timestamp,
+                "message_type": row.message_type,
                 "display_name": row.display_name,
                 "avatar_path": row.avatar_path,
             }

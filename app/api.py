@@ -25,6 +25,7 @@ from app.services.media_service import MediaService, _build_cq_segment, _parse_c
 from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.query_service import QueryService
+from app.services.room_profile_service import RoomProfileService
 from app.models import Message, RobotMessage
 
 
@@ -120,9 +121,48 @@ async def delete_adapter(adapter_id: str, db: AsyncSession = Depends(get_db_sess
 async def list_rooms(
     robot_id: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[RoomResponse]:
     rooms = await QueryService.list_rooms(db, robot_id=robot_id)
+    if await _hydrate_missing_room_profiles(db, robot_id=robot_id, rooms=rooms, settings=settings):
+        rooms = await QueryService.list_rooms(db, robot_id=robot_id)
     return [RoomResponse(**room) for room in rooms]
+
+
+async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms: list[dict], settings: Settings) -> bool:
+    missing_rooms = [
+        room
+        for room in rooms
+        if room.get("message_type") == "group"
+        and str(room.get("room_id") or "").isdigit()
+        and (not room.get("display_name") or not room.get("avatar_path"))
+    ]
+    if not missing_rooms:
+        return False
+
+    changed = False
+    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        for room in missing_rooms[:20]:
+            room_id = str(room["room_id"])
+            group_info = None
+            try:
+                payload = await OneBotRPCService.call_action(robot_id, "get_group_info", {"group_id": int(room_id), "no_cache": False})
+                if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+                    group_info = payload["data"]
+            except (LookupError, asyncio.TimeoutError, ValueError):
+                group_info = None
+            await RoomProfileService.cache_qq_group_profile(
+                db,
+                room_id=room_id,
+                platform="qq",
+                group_info=group_info,
+                http_client=client,
+                storage_root=settings.storage_root,
+                public_prefix=settings.public_storage_prefix,
+                max_bytes=settings.media_max_bytes,
+            )
+            changed = True
+    return changed
 
 
 @router.get("/messages", response_model=list[MessageResponse])

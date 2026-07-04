@@ -188,7 +188,7 @@ async def test_onebot_websocket_persists_group_message_with_robot_view(db_sessio
 
     assert websocket.accepted is True
     assert_only_group_info_actions(websocket)
-    assert rooms == [{"room_id": "998877", "last_timestamp": 1783000200, "display_name": None, "avatar_path": None}]
+    assert rooms == [{"room_id": "998877", "last_timestamp": 1783000200, "message_type": "group", "display_name": None, "avatar_path": None}]
     assert len(messages) == 1
     assert messages[0].raw_message == "websocket hello"
 

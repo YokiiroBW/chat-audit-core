@@ -47,6 +47,7 @@ class BotProfileResponse(BaseModel):
 class RoomResponse(BaseModel):
     room_id: str
     last_timestamp: int
+    message_type: str | None = None
     display_name: str | None = None
     avatar_path: str | None = None
 
