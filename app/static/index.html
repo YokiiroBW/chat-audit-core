@@ -335,6 +335,16 @@
     }
     .cq-parts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
     .cq-text { white-space: pre-wrap; }
+    .reply-card {
+      width: 100%;
+      border-left: 3px solid #94a3b8;
+      background: #f1f5f9;
+      color: #475569;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
     .cq-chip {
       display: inline-flex;
       align-items: center;
@@ -885,7 +895,9 @@
         } else if (kind === 'at') {
           renderCQChip(wrapper, `@${params.qq || 'unknown'}`);
         } else if (kind === 'reply') {
-          renderCQChip(wrapper, `回复 #${params.id || '-'}`);
+          renderReplyCard(wrapper, params);
+          cursor = pattern.lastIndex;
+          continue;
         } else if (kind === 'forward') {
           renderForwardCard(wrapper, params);
         } else {
@@ -900,13 +912,15 @@
     };
 
     const renderImageLink = (container, src, alt) => {
+      const cleanSrc = decodeHtmlEntities(String(src || ''));
       const link = document.createElement('a');
-      link.href = src;
+      link.href = cleanSrc;
       link.target = '_blank';
       link.rel = 'noreferrer';
       const img = document.createElement('img');
       img.className = 'media-img';
-      img.src = src;
+      img.src = cleanSrc;
+      img.referrerPolicy = 'no-referrer';
       img.alt = alt;
       link.appendChild(img);
       container.appendChild(link);
@@ -917,6 +931,13 @@
       chip.className = 'cq-chip';
       chip.textContent = label;
       container.appendChild(chip);
+    };
+
+    const renderReplyCard = (container, params) => {
+      const card = document.createElement('div');
+      card.className = 'reply-card';
+      card.textContent = params.id ? `回复消息 #${params.id}` : '回复消息';
+      container.appendChild(card);
     };
 
     const renderForwardCard = (container, params) => {
@@ -966,10 +987,68 @@
         meta.textContent = sender ? String(sender) : 'forward';
         const body = document.createElement('div');
         const content = item.raw_message || item.message || item.content || '';
-        renderMessageContent(body, Array.isArray(content) ? JSON.stringify(content) : String(content));
+        renderOneBotContent(body, content);
         row.append(meta, body);
         container.appendChild(row);
       });
+    };
+
+    const renderOneBotContent = (container, content) => {
+      clearNode(container);
+      if (Array.isArray(content)) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'cq-parts';
+        content.forEach((segment) => renderOneBotSegment(wrapper, segment));
+        container.appendChild(wrapper);
+        return;
+      }
+      if (content && typeof content === 'object') {
+        renderOneBotSegment(container, content);
+        return;
+      }
+      renderMessageContent(container, String(content || ''));
+    };
+
+    const renderOneBotSegment = (container, segment) => {
+      if (!segment || typeof segment !== 'object') {
+        const span = document.createElement('span');
+        span.className = 'cq-text';
+        span.textContent = String(segment || '');
+        container.appendChild(span);
+        return;
+      }
+      const type = segment.type || segment.kind || '';
+      const data = segment.data || segment;
+      if (type === 'text') {
+        const span = document.createElement('span');
+        span.className = 'cq-text';
+        span.textContent = data.text || '';
+        container.appendChild(span);
+      } else if (type === 'image') {
+        const src = data.url || data.path || data.file;
+        if (src) {
+          renderImageLink(container, src, data.summary || data.file || '媒体图片');
+        } else {
+          renderCQChip(container, '[图片]');
+        }
+      } else if (type === 'at') {
+        renderCQChip(container, `@${data.qq || 'unknown'}`);
+      } else if (type === 'reply') {
+        renderReplyCard(container, data);
+      } else if (type === 'json') {
+        renderCQJsonCard(container, data.data || '{}');
+      } else if (type === 'forward') {
+        renderForwardCard(container, data);
+      } else if (data.text) {
+        const span = document.createElement('span');
+        span.className = 'cq-text';
+        span.textContent = data.text;
+        container.appendChild(span);
+      } else if (data.url || data.file) {
+        renderImageLink(container, data.url || data.file, data.summary || data.file || '媒体');
+      } else {
+        renderCQChip(container, `[${type || '消息'}]`);
+      }
     };
 
     const parseCQSegment = (value, kind) => {
