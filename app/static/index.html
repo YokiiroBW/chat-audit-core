@@ -310,6 +310,13 @@
       border-top-left-radius: 8px;
       border-top-right-radius: 2px;
     }
+    .media-image-button {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      display: block;
+      cursor: zoom-in;
+    }
     .media-img { max-width: min(340px, 100%); border-radius: 6px; display: block; }
     .media-video { max-width: min(420px, 100%); border-radius: 6px; display: block; }
     .json-card {
@@ -426,6 +433,37 @@
       overflow: auto;
       display: grid;
       gap: 12px;
+    }
+    .image-preview-backdrop {
+      z-index: 30;
+      background: rgba(15, 23, 42, .78);
+    }
+    .image-preview {
+      position: relative;
+      width: min(960px, 100%);
+      max-height: 92vh;
+      display: grid;
+      gap: 10px;
+      justify-items: center;
+    }
+    .image-preview img {
+      max-width: 100%;
+      max-height: 82vh;
+      border-radius: 8px;
+      object-fit: contain;
+      background: #0f172a;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, .35);
+    }
+    .image-preview-close {
+      justify-self: end;
+      background: #fff;
+    }
+    .image-preview-caption {
+      max-width: 100%;
+      color: #e2e8f0;
+      font-size: 12px;
+      text-align: center;
+      word-break: break-all;
     }
     .report {
       border: 1px solid var(--line);
@@ -566,6 +604,14 @@
     </div>
   </div>
 
+  <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop">
+    <div class="image-preview">
+      <button class="btn image-preview-close" data-close-modal="imagePreviewModal">关闭</button>
+      <img id="imagePreviewImg" alt="" />
+      <div id="imagePreviewCaption" class="image-preview-caption"></div>
+    </div>
+  </div>
+
   <script>
     const state = {
       accountList: [],
@@ -602,6 +648,21 @@
       return { ...headers, Authorization: `Bearer ${state.adminApiToken}` };
     };
 
+    const responseErrorMessage = async (response, url) => {
+      let detail = '';
+      try {
+        const payload = await response.clone().json();
+        detail = payload && (payload.detail || payload.message || payload.error || JSON.stringify(payload));
+      } catch {
+        try {
+          detail = await response.text();
+        } catch {
+          detail = '';
+        }
+      }
+      return detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}: ${url}`;
+    };
+
     const requestJson = async (url, options = {}) => {
       const withAuth = {
         ...options,
@@ -611,7 +672,7 @@
       if (response.status === 401 && promptForAdminApiToken()) {
         response = await fetch(url, { ...options, headers: authHeaders(options.headers || {}) });
       }
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+      if (!response.ok) throw new Error(await responseErrorMessage(response, url));
       if (response.status === 204) return null;
       return await response.json();
     };
@@ -1003,17 +1064,18 @@
 
     const renderImageLink = (container, src, alt) => {
       const cleanSrc = decodeHtmlEntities(String(src || ''));
-      const link = document.createElement('a');
-      link.href = cleanSrc;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
+      const preview = document.createElement('button');
+      preview.className = 'media-image-button';
+      preview.type = 'button';
+      preview.title = '预览图片';
+      preview.addEventListener('click', () => openImagePreview(cleanSrc, alt));
       const img = document.createElement('img');
       img.className = 'media-img';
       img.src = cleanSrc;
       img.referrerPolicy = 'no-referrer';
       img.alt = alt;
-      link.appendChild(img);
-      container.appendChild(link);
+      preview.appendChild(img);
+      container.appendChild(preview);
     };
 
     const renderCQChip = (container, label) => {
@@ -1426,7 +1488,20 @@
     };
 
     const openModal = (id) => el(id).classList.add('open');
-    const closeModal = (id) => el(id).classList.remove('open');
+    const closeModal = (id) => {
+      el(id).classList.remove('open');
+      if (id === 'imagePreviewModal') {
+        el('imagePreviewImg').removeAttribute('src');
+        el('imagePreviewCaption').textContent = '';
+      }
+    };
+
+    const openImagePreview = (src, alt) => {
+      el('imagePreviewImg').src = src;
+      el('imagePreviewImg').alt = alt || '';
+      el('imagePreviewCaption').textContent = alt || src;
+      openModal('imagePreviewModal');
+    };
 
     const bindEvents = () => {
       el('settingsToggle').addEventListener('click', () => { state.settingsMode = !state.settingsMode; renderSettings(); });
@@ -1445,6 +1520,16 @@
       el('submitImportButton').addEventListener('click', submitImportPackage);
       document.querySelectorAll('[data-close-modal]').forEach((node) => {
         node.addEventListener('click', () => closeModal(node.dataset.closeModal));
+      });
+      document.querySelectorAll('.modal-backdrop').forEach((node) => {
+        node.addEventListener('click', (event) => {
+          if (event.target === node) closeModal(node.id);
+        });
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          document.querySelectorAll('.modal-backdrop.open').forEach((node) => closeModal(node.id));
+        }
       });
     };
 

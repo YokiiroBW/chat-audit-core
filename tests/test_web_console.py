@@ -40,6 +40,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "qqUserAvatarUrl" in html
     assert "qqGroupAvatarUrl" in html
     assert "qlogo.cn" in html
+    assert "responseErrorMessage" in html
+    assert "imagePreviewModal" in html
+    assert "openImagePreview" in html
+    assert "media-image-button" in html
     assert "账号设置" in html
     assert "adapterId" in html
     assert "saveAdapter" in html

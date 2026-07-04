@@ -43,6 +43,13 @@ def _is_authorized(websocket: WebSocket, configured_token: str) -> bool:
     return query_token == configured_token or bearer_token == configured_token
 
 
+def _extract_robot_id(event: dict[str, Any]) -> str | None:
+    self_id = event.get("self_id")
+    if self_id is None:
+        return None
+    return str(self_id)
+
+
 @router.websocket("/onebot/v11/ws")
 async def onebot11_reverse_ws(
     websocket: WebSocket,
@@ -62,6 +69,10 @@ async def onebot11_reverse_ws(
             if OneBotRPCService.resolve_response(event):
                 continue
 
+            robot_id = _extract_robot_id(event)
+            if robot_id:
+                OneBotRPCService.register_connection(robot_id, websocket)
+
             normalized = normalize_message_event(event)
             if normalized is None:
                 continue
@@ -76,7 +87,6 @@ async def onebot11_reverse_ws(
                 display_name=display_name,
                 adapter_id=adapter_id,
             )
-            OneBotRPCService.register_connection(normalized.robot_id, websocket)
 
             await MessageService.process_incoming_message(
                 db,

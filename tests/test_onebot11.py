@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 from fastapi.testclient import TestClient
 import pytest
@@ -42,6 +44,18 @@ class FakeOneBotWebSocket:
 
     async def send_json(self, payload):
         self.sent_json.append(payload)
+
+
+class BlockingOneBotWebSocket(FakeOneBotWebSocket):
+    def __init__(self, events, query_params=None, headers=None):
+        super().__init__(events, query_params, headers)
+        self.blocker = asyncio.Event()
+
+    async def receive_json(self):
+        if self.events:
+            return self.events.pop(0)
+        await self.blocker.wait()
+        raise WebSocketDisconnect()
 
 
 async def register_adapter(db_session, robot_id: str = "123456"):
@@ -118,6 +132,31 @@ def test_normalize_group_self_message_sent_event_maps_onebot_fields():
     assert normalized.msg_data["room_id"] == "949040596"
     assert normalized.msg_data["sender_id"] == "1449801200"
     assert normalized.msg_data["raw_message"] == "self message from napcat"
+
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_registers_rpc_connection_from_meta_event(db_session):
+    from app.services.onebot_rpc_service import OneBotRPCService
+    from app.ws import onebot11_reverse_ws
+
+    OneBotRPCService._connections.clear()
+    OneBotRPCService._pending.clear()
+    websocket = BlockingOneBotWebSocket([{"post_type": "meta_event", "self_id": "123456"}])
+
+    task = asyncio.create_task(onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token=""))
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert websocket.accepted is True
+        assert OneBotRPCService._connections["123456"] is websocket
+    finally:
+        task.cancel()
+        OneBotRPCService.unregister_connection(websocket)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 @pytest.mark.asyncio
