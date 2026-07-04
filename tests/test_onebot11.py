@@ -4,6 +4,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
+from app.models import Adapter
 from app.services.query_service import QueryService
 
 
@@ -41,6 +42,11 @@ class FakeOneBotWebSocket:
 
     async def send_json(self, payload):
         self.sent_json.append(payload)
+
+
+async def register_adapter(db_session, robot_id: str = "123456"):
+    db_session.add(Adapter(id=robot_id, platform="qq", status="gray"))
+    await db_session.commit()
 
 
 def test_normalize_group_message_event_maps_onebot_fields():
@@ -118,6 +124,7 @@ def test_normalize_group_self_message_sent_event_maps_onebot_fields():
 async def test_onebot_websocket_persists_group_message_with_robot_view(db_session):
     from app.ws import onebot11_reverse_ws
 
+    await register_adapter(db_session)
     websocket = FakeOneBotWebSocket([
         {
             "post_type": "message",
@@ -147,6 +154,7 @@ async def test_onebot_websocket_persists_group_message_with_robot_view(db_sessio
 async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db_session):
     from app.ws import onebot11_reverse_ws
 
+    await register_adapter(db_session)
     media_bytes = b"ws image bytes unique"
     stub_client = StubAsyncClient({"http://media.local/ws-image.jpg": media_bytes})
     websocket = FakeOneBotWebSocket([
@@ -181,6 +189,7 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
 async def test_onebot_websocket_keeps_connection_and_stores_raw_message_when_media_download_fails(db_session):
     from app.ws import onebot11_reverse_ws
 
+    await register_adapter(db_session, "1449801200")
     stub_client = StubAsyncClient({}, {"http://media.local/expired.jpg": 400})
     websocket = FakeOneBotWebSocket([
         {
@@ -221,6 +230,7 @@ async def test_onebot_websocket_keeps_connection_and_stores_raw_message_when_med
 async def test_onebot_websocket_does_not_send_ack_frames_to_napcat(db_session):
     from app.ws import onebot11_reverse_ws
 
+    await register_adapter(db_session)
     websocket = FakeOneBotWebSocket([
         {"post_type": "meta_event"},
         {
@@ -242,6 +252,31 @@ async def test_onebot_websocket_does_not_send_ack_frames_to_napcat(db_session):
     assert websocket.sent_json == []
     assert len(messages) == 1
     assert messages[0].raw_message == "no ack please"
+
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_ignores_unregistered_robot_id(db_session):
+    from app.ws import onebot11_reverse_ws
+
+    await register_adapter(db_session, "registered-bot")
+    websocket = FakeOneBotWebSocket([
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": "unknown-bot",
+            "group_id": 998877,
+            "user_id": 445566,
+            "raw_message": "should not be stored",
+            "time": 1783000800,
+            "sender": {"nickname": "Alice"},
+        }
+    ])
+
+    await onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token="")
+
+    messages = await QueryService.list_messages(db_session, robot_id="unknown-bot", room_id="998877")
+    assert websocket.accepted is True
+    assert messages == []
 
 
 def test_onebot_websocket_rejects_missing_or_invalid_access_token_when_configured():
