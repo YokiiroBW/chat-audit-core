@@ -76,6 +76,7 @@
     }
     .avatar-button.active { opacity: 1; outline: 2px solid #34d399; }
     .avatar, .room-avatar {
+      position: relative;
       width: 100%;
       height: 100%;
       background: #e5e7eb;
@@ -85,7 +86,16 @@
       color: #475569;
       font-size: 12px;
       font-weight: 800;
+      overflow: hidden;
       user-select: none;
+    }
+    .avatar img, .room-avatar img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
     }
     .avatar { border-radius: 999px; }
     .room-avatar { border-radius: 10px; }
@@ -619,6 +629,29 @@
       const value = text(id).trim();
       return value ? value.slice(-2).toUpperCase() : '--';
     };
+    const isNumericId = (id) => /^\d+$/.test(text(id).trim());
+    const qqUserAvatarUrl = (id) => {
+      const value = text(id).trim();
+      return isNumericId(value) ? `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(value)}&s=100` : '';
+    };
+    const qqGroupAvatarUrl = (id) => {
+      const value = text(id).trim();
+      return isNumericId(value) ? `https://p.qlogo.cn/gh/${encodeURIComponent(value)}/${encodeURIComponent(value)}/100` : '';
+    };
+    const renderAvatar = (container, id, type = 'user') => {
+      clearNode(container);
+      container.textContent = avatarText(id);
+      const url = type === 'group' ? qqGroupAvatarUrl(id) : qqUserAvatarUrl(id);
+      if (!url) return;
+      const img = document.createElement('img');
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => img.remove(), { once: true });
+      img.src = url;
+      container.appendChild(img);
+    };
     const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
     const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
@@ -654,7 +687,7 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'avatar';
-        avatar.textContent = avatarText(acc.id);
+        renderAvatar(avatar, acc.id);
         node.appendChild(avatar);
 
         const dot = document.createElement('span');
@@ -700,7 +733,7 @@
         thumb.className = 'room-thumb';
         const avatar = document.createElement('div');
         avatar.className = 'room-avatar';
-        avatar.textContent = avatarText(room.room_id);
+        renderAvatar(avatar, room.room_id, 'group');
         thumb.appendChild(avatar);
 
         const body = document.createElement('div');
@@ -785,7 +818,7 @@
         row.className = `message${mine ? ' mine' : ''}`;
         const avatar = document.createElement('div');
         avatar.className = 'avatar message-avatar';
-        avatar.textContent = avatarText(msg.sender_id);
+        renderAvatar(avatar, msg.sender_id);
         const body = document.createElement('div');
         body.className = 'message-body';
         const meta = document.createElement('div');
