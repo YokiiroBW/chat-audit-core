@@ -1,6 +1,10 @@
 import asyncio
+import json
+import re
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -17,8 +21,11 @@ from app.schemas import (
 )
 from app.services.adapter_service import AdapterService
 from app.services.backup_service import BackupService
+from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
+from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.query_service import QueryService
+from app.models import Message, RobotMessage
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -164,13 +171,58 @@ async def search_messages(
 async def get_forward_message(
     robot_id: str = Query(..., min_length=1),
     forward_id: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     try:
-        return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
+        payload = await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="onebot action timed out") from exc
+    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        localized = await MediaService.localize_onebot_payload(
+            db,
+            payload,
+            http_client=client,
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+            max_bytes=settings.media_max_bytes,
+        )
+    local_path = await MessageService.save_media_asset(
+        db,
+        file_content=json.dumps(localized, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        file_type="forward",
+        ext="json",
+        storage_root=settings.storage_root,
+        public_prefix=settings.public_storage_prefix,
+    )
+    await _attach_local_forward_payload(db, robot_id=robot_id, forward_id=forward_id, local_path=local_path)
+    return localized
+
+
+async def _attach_local_forward_payload(db: AsyncSession, robot_id: str, forward_id: str, local_path: str) -> None:
+    result = await db.execute(
+        select(Message)
+        .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+        .where(RobotMessage.robot_id == robot_id, Message.local_message.like(f"%{forward_id}%"))
+    )
+    for message in result.scalars().unique().all():
+        message.local_message = _rewrite_forward_segment_with_local_path(message.local_message, forward_id, local_path)
+    await db.commit()
+
+
+def _rewrite_forward_segment_with_local_path(local_message: str, forward_id: str, local_path: str) -> str:
+    pattern = r"\[CQ:forward,(?P<params>[^\]]+)\]"
+
+    def replace(match: re.Match[str]) -> str:
+        params = _parse_cq_params(match.group("params"))
+        if params.get("id") != forward_id:
+            return match.group(0)
+        params["local"] = local_path
+        return _build_cq_segment("forward", params)
+
+    return re.sub(pattern, replace, local_message)
 
 
 @router.get("/export")

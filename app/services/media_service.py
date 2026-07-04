@@ -1,5 +1,7 @@
 import html
+import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,53 @@ _SUPPORTED_MEDIA_TYPES = {
     "image": "image",
     "record": "voice",
     "video": "video",
+    "file": "file",
+}
+_URL_PATTERN = re.compile(r"https?://[^\s\"'<>\\\]]+")
+_CARD_MEDIA_KEYS = {
+    "audio",
+    "avatar",
+    "cover",
+    "coverurl",
+    "icon",
+    "image",
+    "imageurl",
+    "pic",
+    "picture",
+    "preview",
+    "previewurl",
+    "src",
+    "thumb",
+    "thumbnail",
+}
+_KNOWN_MEDIA_HOST_PARTS = (
+    "gchat.qpic.cn",
+    "multimedia.nt.qq.com.cn",
+    "p.qlogo.cn",
+    "q1.qlogo.cn",
+    "qq.ugcimg.cn",
+    "thirdqq.qlogo.cn",
+)
+_MEDIA_EXTENSIONS = {
+    "amr",
+    "ape",
+    "avi",
+    "bmp",
+    "flac",
+    "gif",
+    "jpeg",
+    "jpg",
+    "m4a",
+    "mkv",
+    "mov",
+    "mp3",
+    "mp4",
+    "ogg",
+    "png",
+    "silk",
+    "wav",
+    "webm",
+    "webp",
 }
 
 
@@ -37,9 +86,20 @@ def _parse_cq_params(params: str) -> dict[str, str]:
     return dict(pairs)
 
 
+def _cq_escape_param(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace(",", "&#44;")
+        .replace("[", "&#91;")
+        .replace("]", "&#93;")
+    )
+
+
+def _build_cq_segment(kind: str, params: dict[str, str]) -> str:
+    return f"[CQ:{kind}," + ",".join(f"{key}={_cq_escape_param(str(value))}" for key, value in params.items()) + "]"
+
+
 def _guess_ext(url: str, file_name: str | None, media_type: str) -> str:
-    # Prefer URL suffix because NapCat file names may be cache keys such as
-    # `abc.image`, while the URL usually carries the real downloadable format.
     url_suffix = Path(urlparse(url).path).suffix.lstrip(".").lower()
     if url_suffix:
         return url_suffix
@@ -49,8 +109,32 @@ def _guess_ext(url: str, file_name: str | None, media_type: str) -> str:
     if file_suffix:
         return file_suffix
 
-    defaults = {"image": "jpg", "voice": "silk", "video": "mp4"}
+    defaults = {"image": "jpg", "voice": "silk", "video": "mp4", "file": "bin", "json": "json"}
     return defaults[media_type]
+
+
+def _media_type_from_url(url: str, fallback: str = "file") -> str:
+    suffix = Path(urlparse(url).path).suffix.lstrip(".").lower()
+    if suffix in {"png", "jpg", "jpeg", "gif", "webp", "bmp"}:
+        return "image"
+    if suffix in {"mp3", "wav", "ogg", "silk", "amr", "m4a", "flac"}:
+        return "voice"
+    if suffix in {"mp4", "webm", "mov", "mkv", "avi"}:
+        return "video"
+    return fallback
+
+
+def _looks_like_media_url(url: str, key: str | None = None) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    lowered_key = (key or "").lower()
+    if lowered_key in _CARD_MEDIA_KEYS:
+        return True
+    if any(part in parsed.netloc.lower() for part in _KNOWN_MEDIA_HOST_PARTS):
+        return True
+    suffix = Path(parsed.path).suffix.lstrip(".").lower()
+    return suffix in _MEDIA_EXTENSIONS
 
 
 def parse_cq_media_segments(raw_message: str) -> list[CQMediaSegment]:
@@ -80,6 +164,139 @@ def parse_cq_media_segments(raw_message: str) -> list[CQMediaSegment]:
 
 class MediaService:
     @staticmethod
+    async def download_url_to_local_path(
+        db: AsyncSession,
+        url: str,
+        media_type: str = "file",
+        file_name: str | None = None,
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+    ) -> str | None:
+        from app.services.message_service import MessageService
+
+        media_max_bytes = max_bytes if max_bytes is not None else get_settings().media_max_bytes
+        owns_client = http_client is None
+        client = http_client or httpx.AsyncClient()
+        try:
+            try:
+                response = await client.get(url)
+            except (httpx.HTTPError, KeyError):
+                return None
+            if response.status_code >= 400:
+                return None
+            content_length = response.headers.get("content-length")
+            if content_length is not None and content_length.isdigit() and int(content_length) > media_max_bytes:
+                return None
+            if len(response.content) > media_max_bytes:
+                return None
+            return await MessageService.save_media_asset(
+                db,
+                file_content=response.content,
+                file_type=media_type,
+                ext=_guess_ext(url, file_name, media_type),
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+        finally:
+            if owns_client:
+                await client.aclose()
+
+    @staticmethod
+    async def _localize_json_value(
+        db: AsyncSession,
+        value: Any,
+        http_client: Any | None,
+        storage_root: str | Path | None,
+        public_prefix: str | None,
+        max_bytes: int | None,
+        key: str | None = None,
+    ) -> Any:
+        if isinstance(value, dict):
+            localized: dict[str, Any] = {}
+            for child_key, child_value in value.items():
+                localized[child_key] = await MediaService._localize_json_value(
+                    db,
+                    child_value,
+                    http_client,
+                    storage_root,
+                    public_prefix,
+                    max_bytes,
+                    str(child_key),
+                )
+            return localized
+        if isinstance(value, list):
+            return [
+                await MediaService._localize_json_value(
+                    db,
+                    item,
+                    http_client,
+                    storage_root,
+                    public_prefix,
+                    max_bytes,
+                    key,
+                )
+                for item in value
+            ]
+        if isinstance(value, str) and _looks_like_media_url(value, key):
+            local_path = await MediaService.download_url_to_local_path(
+                db,
+                value,
+                media_type=_media_type_from_url(value),
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+            )
+            return local_path or value
+        return value
+
+    @staticmethod
+    async def _localize_card_data(
+        db: AsyncSession,
+        data: str,
+        http_client: Any | None,
+        storage_root: str | Path | None,
+        public_prefix: str | None,
+        max_bytes: int | None,
+    ) -> str:
+        decoded = html.unescape(data)
+        try:
+            payload = json.loads(decoded)
+        except json.JSONDecodeError:
+            rebuilt = []
+            cursor = 0
+            for match in _URL_PATTERN.finditer(decoded):
+                rebuilt.append(decoded[cursor:match.start()])
+                url = match.group(0)
+                local_path = None
+                if _looks_like_media_url(url):
+                    local_path = await MediaService.download_url_to_local_path(
+                        db,
+                        url,
+                        media_type=_media_type_from_url(url),
+                        http_client=http_client,
+                        storage_root=storage_root,
+                        public_prefix=public_prefix,
+                        max_bytes=max_bytes,
+                    )
+                rebuilt.append(local_path or url)
+                cursor = match.end()
+            rebuilt.append(decoded[cursor:])
+            return "".join(rebuilt)
+
+        localized = await MediaService._localize_json_value(
+            db,
+            payload,
+            http_client,
+            storage_root,
+            public_prefix,
+            max_bytes,
+        )
+        return json.dumps(localized, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
     async def rewrite_cq_media_to_local_paths(
         db: AsyncSession,
         raw_message: str,
@@ -88,40 +305,152 @@ class MediaService:
         public_prefix: str | None = None,
         max_bytes: int | None = None,
     ) -> str:
-        from app.services.message_service import MessageService
-
-        segments = parse_cq_media_segments(raw_message)
-        if not segments:
-            return raw_message
-
-        media_max_bytes = max_bytes if max_bytes is not None else get_settings().media_max_bytes
-        owns_client = http_client is None
-        client = http_client or httpx.AsyncClient()
         rewritten = raw_message
-        try:
-            for segment in segments:
-                try:
-                    response = await client.get(segment.url)
-                except httpx.HTTPError:
-                    continue
-                if response.status_code >= 400:
-                    continue
-                content_length = response.headers.get("content-length")
-                if content_length is not None and content_length.isdigit() and int(content_length) > media_max_bytes:
-                    continue
-                if len(response.content) > media_max_bytes:
-                    continue
-                local_path = await MessageService.save_media_asset(
-                    db,
-                    file_content=response.content,
-                    file_type=segment.media_type,
-                    ext=segment.ext,
-                    storage_root=storage_root,
-                    public_prefix=public_prefix,
-                )
+
+        for segment in parse_cq_media_segments(raw_message):
+            local_path = await MediaService.download_url_to_local_path(
+                db,
+                segment.url,
+                media_type=segment.media_type,
+                file_name=f"asset.{segment.ext}",
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+            )
+            if local_path:
                 rewritten = rewritten.replace(segment.raw, f"\n{local_path}\n", 1)
-        finally:
-            if owns_client:
-                await client.aclose()
+
+        for match in list(_CQ_PATTERN.finditer(rewritten)):
+            cq_type = match.group("kind")
+            if cq_type not in {"json", "xml"}:
+                continue
+            params = _parse_cq_params(match.group("params"))
+            data = params.get("data")
+            if not data:
+                continue
+            params["data"] = await MediaService._localize_card_data(
+                db,
+                data,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+            )
+            rewritten = rewritten.replace(match.group(0), _build_cq_segment(cq_type, params), 1)
 
         return rewritten.strip()
+
+    @staticmethod
+    async def localize_onebot_content(
+        db: AsyncSession,
+        content: Any,
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+    ) -> Any:
+        if isinstance(content, str):
+            return await MediaService.rewrite_cq_media_to_local_paths(
+                db,
+                content,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+            )
+        if isinstance(content, list):
+            return [
+                await MediaService.localize_onebot_content(
+                    db,
+                    item,
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                )
+                for item in content
+            ]
+        if not isinstance(content, dict):
+            return content
+
+        segment = deepcopy(content)
+        segment_type = segment.get("type") or segment.get("kind")
+        data = segment.get("data") if isinstance(segment.get("data"), dict) else segment
+        if isinstance(data, dict):
+            if segment_type in {"image", "record", "video", "file"}:
+                url = data.get("url") or data.get("path")
+                if isinstance(url, str) and url.startswith(("http://", "https://")):
+                    media_type = {"record": "voice"}.get(str(segment_type), str(segment_type))
+                    local_path = await MediaService.download_url_to_local_path(
+                        db,
+                        url,
+                        media_type=media_type,
+                        file_name=data.get("file"),
+                        http_client=http_client,
+                        storage_root=storage_root,
+                        public_prefix=public_prefix,
+                        max_bytes=max_bytes,
+                    )
+                    if local_path:
+                        data["url"] = local_path
+            elif segment_type in {"json", "xml"} and isinstance(data.get("data"), str):
+                data["data"] = await MediaService._localize_card_data(
+                    db,
+                    data["data"],
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                )
+            else:
+                localized = await MediaService._localize_json_value(
+                    db,
+                    data,
+                    http_client,
+                    storage_root,
+                    public_prefix,
+                    max_bytes,
+                )
+                if segment.get("data") is data:
+                    segment["data"] = localized
+                else:
+                    segment = localized
+        return segment
+
+    @staticmethod
+    async def localize_onebot_payload(
+        db: AsyncSession,
+        payload: dict[str, Any],
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        localized = deepcopy(payload)
+        data = localized.get("data", localized)
+        messages = data.get("messages") if isinstance(data, dict) else None
+        if not isinstance(messages, list):
+            return localized
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("raw_message"), str):
+                item["raw_message"] = await MediaService.rewrite_cq_media_to_local_paths(
+                    db,
+                    item["raw_message"],
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                )
+            if "message" in item:
+                item["message"] = await MediaService.localize_onebot_content(
+                    db,
+                    item["message"],
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                )
+        return localized

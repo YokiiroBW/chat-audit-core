@@ -56,6 +56,7 @@ class MessageResponse(BaseModel):
     platform: str
     room_id: str
     message_type: str
+    external_message_id: str | None = None
     sender_id: str
     nickname: str | None = None
     raw_message: str

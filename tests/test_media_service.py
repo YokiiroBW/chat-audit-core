@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -20,16 +22,19 @@ def test_parse_cq_media_segments_extracts_supported_media():
         "before "
         "[CQ:image,file=abc.image,url=http://media.local/a.jpg] "
         "[CQ:record,file=voice.silk,url=http://media.local/v.silk] "
+        "[CQ:file,file=doc.pdf,url=http://media.local/doc.pdf] "
         "[CQ:at,qq=123]"
     )
 
     segments = parse_cq_media_segments(raw)
 
-    assert [segment.media_type for segment in segments] == ["image", "voice"]
+    assert [segment.media_type for segment in segments] == ["image", "voice", "file"]
     assert segments[0].url == "http://media.local/a.jpg"
     assert segments[0].ext == "jpg"
     assert segments[1].url == "http://media.local/v.silk"
     assert segments[1].ext == "silk"
+    assert segments[2].url == "http://media.local/doc.pdf"
+    assert segments[2].ext == "pdf"
 
 
 def test_parse_cq_media_segments_decodes_html_escaped_ntqq_url():
@@ -118,6 +123,60 @@ async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_pat
     assert rewritten == raw
     assert assets == []
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_rewrite_cq_json_card_downloads_preview_asset(db_session, tmp_path):
+    client = StubAsyncClient({"http://media.local/preview.jpg": b"preview bytes"})
+    card = {"meta": {"detail_1": {"title": "Card", "preview": "http://media.local/preview.jpg", "url": "https://example.com/page"}}}
+    raw = f"[CQ:json,data={json.dumps(card, ensure_ascii=False).replace(',', '&#44;')}]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    assert "http://media.local/preview.jpg" not in rewritten
+    assert "https://example.com/page" in rewritten
+    assert "/static/storage/" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_localize_onebot_forward_payload_downloads_nested_media(db_session, tmp_path):
+    client = StubAsyncClient(
+        {
+            "http://media.local/forward.jpg": b"forward image",
+            "http://media.local/forward.mp4": b"forward video",
+        }
+    )
+    payload = {
+        "status": "ok",
+        "data": {
+            "messages": [
+                {
+                    "raw_message": "[CQ:image,file=f.jpg,url=http://media.local/forward.jpg]",
+                    "message": [
+                        {"type": "video", "data": {"file": "v.mp4", "url": "http://media.local/forward.mp4"}},
+                    ],
+                }
+            ]
+        },
+    }
+
+    localized = await MediaService.localize_onebot_payload(
+        db_session,
+        payload,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    message = localized["data"]["messages"][0]
+    assert "http://media.local" not in message["raw_message"]
+    assert message["message"][0]["data"]["url"].startswith("/static/storage/")
 
 
 @pytest.mark.asyncio

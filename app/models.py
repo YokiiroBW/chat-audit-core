@@ -42,6 +42,7 @@ class Message(Base):
     platform = Column(String(20), nullable=False)
     room_id = Column(String(64), nullable=False)
     message_type = Column(String(20), nullable=False)
+    external_message_id = Column(String(64), nullable=True, index=True)
     sender_id = Column(String(64), nullable=False)
     nickname = Column(String(128), nullable=True)
     raw_message = Column(Text, nullable=False)

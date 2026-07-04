@@ -44,6 +44,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "imagePreviewModal" in html
     assert "openImagePreview" in html
     assert "media-image-button" in html
+    assert "plainMessagePreview" in html
+    assert "findReplyMessage" in html
+    assert "external_message_id" in html
+    assert "media-file" in html
     assert "账号设置" in html
     assert "adapterId" in html
     assert "saveAdapter" in html

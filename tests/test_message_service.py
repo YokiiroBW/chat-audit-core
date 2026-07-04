@@ -87,6 +87,7 @@ async def test_same_external_message_id_is_bound_once_across_robot_views(db_sess
 
     assert first_hash == second_robot_hash
     assert len(messages) == 1
+    assert messages[0].external_message_id == "onebot-message-1"
     assert {(item.robot_id, item.msg_hash) for item in robot_messages} == {
         ("robot-a", first_hash),
         ("robot-b", first_hash),

@@ -92,6 +92,7 @@ class MessageService:
                     platform=platform,
                     room_id=room_id,
                     message_type=msg_data["message_type"],
+                    external_message_id=str(msg_data["message_id"]) if msg_data.get("message_id") is not None else None,
                     sender_id=sender_id,
                     nickname=msg_data.get("nickname"),
                     raw_message=raw_message,

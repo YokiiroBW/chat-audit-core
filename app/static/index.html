@@ -258,11 +258,14 @@
     }
     .top-actions { display: flex; gap: 8px; align-items: center; }
     .chat-empty {
-      flex: 1;
+      flex: 0 0 auto;
       display: flex;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       color: var(--muted);
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
     }
     .chat-scroll {
       flex: 1;
@@ -319,6 +322,18 @@
     }
     .media-img { max-width: min(340px, 100%); border-radius: 6px; display: block; }
     .media-video { max-width: min(420px, 100%); border-radius: 6px; display: block; }
+    .media-file {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #e2e8f0;
+      color: #0f172a;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 700;
+    }
     .json-card {
       display: grid;
       grid-template-columns: 72px minmax(0, 1fr);
@@ -361,6 +376,17 @@
       padding: 6px 8px;
       font-size: 12px;
       line-height: 1.45;
+    }
+    .reply-card strong {
+      display: block;
+      color: #334155;
+      margin-bottom: 2px;
+    }
+    .reply-card .reply-preview {
+      color: #64748b;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .cq-chip {
       display: inline-flex;
@@ -717,6 +743,8 @@
     const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
+    const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
+    const fileName = (value) => text(value).split('/').pop() || 'media';
     const decodeHtmlEntities = (value) => {
       const textarea = document.createElement('textarea');
       textarea.innerHTML = value;
@@ -841,6 +869,25 @@
       });
     };
 
+    const plainMessagePreview = (value) => {
+      const raw = text(value)
+        .replace(/\[CQ:reply,[^\]]+\]/g, '')
+        .replace(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g, '@$1')
+        .replace(/\[CQ:image,[^\]]+\]/g, '[图片]')
+        .replace(/\[CQ:record,[^\]]+\]/g, '[语音]')
+        .replace(/\[CQ:video,[^\]]+\]/g, '[视频]')
+        .replace(/\[CQ:forward,[^\]]+\]/g, '[合并转发]')
+        .replace(/\[CQ:json,[^\]]+\]/g, '[卡片]')
+        .replace(/\/static\/storage\/[a-f0-9]{32}\.[a-z0-9]+/ig, '[媒体]');
+      const compact = raw.replace(/\s+/g, ' ').trim();
+      return compact || '[消息]';
+    };
+
+    const findReplyMessage = (replyId) => {
+      if (!replyId) return null;
+      return state.messageList.find((msg) => String(msg.external_message_id || '') === String(replyId)) || null;
+    };
+
     const renderSettings = () => {
       el('settingsPanel').classList.toggle('open', state.settingsMode);
       el('adapterId').disabled = Boolean(state.editingAdapterId);
@@ -937,12 +984,7 @@
         container.appendChild(audio);
         return;
       }
-      const link = document.createElement('a');
-      link.href = value;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
-      link.textContent = '打开媒体资产';
-      container.appendChild(link);
+      renderFileLink(container, value, fileName(value));
     };
 
     const parseCQParams = (paramsText) => {
@@ -1008,12 +1050,7 @@
         audio.controls = true;
         container.appendChild(audio);
       } else {
-        const link = document.createElement('a');
-        link.href = path;
-        link.target = '_blank';
-        link.rel = 'noreferrer';
-        link.textContent = '打开媒体资产';
-        container.appendChild(link);
+        renderFileLink(container, path, fileName(path));
       }
     };
 
@@ -1041,6 +1078,12 @@
         const params = parseCQParams(match[2]);
         if (kind === 'image' && params.url) {
           renderImageLink(wrapper, params.url, params.summary || params.file || '媒体图片');
+        } else if (kind === 'record' && (params.url || params.file)) {
+          renderLocalMediaAsset(wrapper, params.url || params.file);
+        } else if (kind === 'video' && (params.url || params.file)) {
+          renderLocalMediaAsset(wrapper, params.url || params.file);
+        } else if (kind === 'file' && (params.url || params.file)) {
+          renderFileLink(wrapper, params.url || params.file, params.name || params.file || '文件');
         } else if (kind === 'json' && params.data) {
           renderCQJsonCard(wrapper, params.data);
         } else if (kind === 'at') {
@@ -1078,6 +1121,17 @@
       container.appendChild(preview);
     };
 
+    const renderFileLink = (container, src, label) => {
+      const cleanSrc = decodeHtmlEntities(String(src || ''));
+      const link = document.createElement('a');
+      link.className = 'media-file';
+      link.href = cleanSrc;
+      link.target = isLocalPath(cleanSrc) ? '_self' : '_blank';
+      link.rel = 'noreferrer';
+      link.textContent = label || fileName(cleanSrc);
+      container.appendChild(link);
+    };
+
     const renderCQChip = (container, label) => {
       const chip = document.createElement('span');
       chip.className = 'cq-chip';
@@ -1088,7 +1142,16 @@
     const renderReplyCard = (container, params) => {
       const card = document.createElement('div');
       card.className = 'reply-card';
-      card.textContent = params.id ? `回复消息 #${params.id}` : '回复消息';
+      const title = document.createElement('strong');
+      title.textContent = params.id ? `回复 #${params.id}` : '回复消息';
+      card.appendChild(title);
+      const source = findReplyMessage(params.id);
+      const preview = document.createElement('div');
+      preview.className = 'reply-preview';
+      preview.textContent = source
+        ? `${source.nickname || source.sender_id}: ${plainMessagePreview(source.local_message || source.raw_message)}`
+        : '原消息暂未加载';
+      card.appendChild(preview);
       container.appendChild(card);
     };
 
@@ -1096,7 +1159,7 @@
       const card = document.createElement('div');
       card.className = 'forward-card';
       const action = button(`合并转发消息 ${params.id || ''}`, 'btn link', async () => {
-        await toggleForwardDetail(params.id, detail);
+        await toggleForwardDetail(params.id, detail, params.local);
       });
       const detail = document.createElement('div');
       detail.className = 'forward-detail';
@@ -1105,8 +1168,8 @@
       container.appendChild(card);
     };
 
-    const toggleForwardDetail = async (forwardId, detail) => {
-      if (!forwardId || !state.currentRobot) return;
+    const toggleForwardDetail = async (forwardId, detail, localPath = '') => {
+      if ((!forwardId && !localPath) || !state.currentRobot) return;
       if (detail.dataset.loaded === 'true') {
         detail.hidden = !detail.hidden;
         return;
@@ -1114,7 +1177,9 @@
       detail.hidden = false;
       detail.textContent = '正在加载合并消息...';
       try {
-        const payload = await apiGet(`/api/forward?robot_id=${encodeURIComponent(state.currentRobot.id)}&forward_id=${encodeURIComponent(forwardId)}`);
+        const payload = localPath
+          ? await apiGet(localPath)
+          : await apiGet(`/api/forward?robot_id=${encodeURIComponent(state.currentRobot.id)}&forward_id=${encodeURIComponent(forwardId)}`);
         renderForwardPayload(detail, payload);
         detail.dataset.loaded = 'true';
       } catch (error) {
@@ -1182,6 +1247,27 @@
           renderImageLink(container, src, data.summary || data.file || '媒体图片');
         } else {
           renderCQChip(container, '[图片]');
+        }
+      } else if (type === 'record') {
+        const src = data.url || data.path || data.file;
+        if (src) {
+          renderLocalMediaAsset(container, src);
+        } else {
+          renderCQChip(container, '[语音]');
+        }
+      } else if (type === 'video') {
+        const src = data.url || data.path || data.file;
+        if (src) {
+          renderLocalMediaAsset(container, src);
+        } else {
+          renderCQChip(container, '[视频]');
+        }
+      } else if (type === 'file') {
+        const src = data.url || data.path || data.file;
+        if (src) {
+          renderFileLink(container, src, data.name || data.file || '文件');
+        } else {
+          renderCQChip(container, '[文件]');
         }
       } else if (type === 'at') {
         renderCQChip(container, `@${data.qq || 'unknown'}`);

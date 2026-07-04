@@ -62,6 +62,7 @@ class BackupService:
             "platform": message.platform,
             "room_id": message.room_id,
             "message_type": message.message_type,
+            "external_message_id": message.external_message_id,
             "sender_id": message.sender_id,
             "nickname": message.nickname,
             "raw_message": message.raw_message,
@@ -439,7 +440,7 @@ class BackupService:
     def _message_matches_existing(existing: Message, item: dict[str, Any]) -> bool:
         return all(
             getattr(existing, key) == item.get(key)
-            for key in ("platform", "room_id", "message_type", "sender_id", "nickname", "raw_message", "local_message", "timestamp")
+            for key in ("platform", "room_id", "message_type", "external_message_id", "sender_id", "nickname", "raw_message", "local_message", "timestamp")
         )
 
     @staticmethod
@@ -549,6 +550,7 @@ class BackupService:
                         platform=item["platform"],
                         room_id=item["room_id"],
                         message_type=item["message_type"],
+                        external_message_id=item.get("external_message_id"),
                         sender_id=item["sender_id"],
                         nickname=item.get("nickname"),
                         raw_message=item["raw_message"],
@@ -560,6 +562,7 @@ class BackupService:
                 message.platform = item["platform"]
                 message.room_id = item["room_id"]
                 message.message_type = item["message_type"]
+                message.external_message_id = item.get("external_message_id")
                 message.sender_id = item["sender_id"]
                 message.nickname = item.get("nickname")
                 message.raw_message = item["raw_message"]
