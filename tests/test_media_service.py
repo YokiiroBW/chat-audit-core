@@ -78,6 +78,28 @@ async def test_rewrite_cq_media_downloads_assets_and_rewrites_local_paths(db_ses
 
 
 @pytest.mark.asyncio
+async def test_rewrite_cq_media_separates_adjacent_local_paths(db_session, tmp_path):
+    client = StubAsyncClient(
+        {
+            "http://media.local/a.jpg": b"first image",
+            "http://media.local/b.jpg": b"second image",
+        }
+    )
+    raw = "[CQ:image,file=a.jpg,url=http://media.local/a.jpg][CQ:image,file=b.jpg,url=http://media.local/b.jpg]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    assert rewritten.count("/static/storage/") == 2
+    assert "\n" in rewritten
+
+
+@pytest.mark.asyncio
 async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_path):
     client = StubAsyncClient({"http://media.local/large.jpg": b"too large"})
     raw = "[CQ:image,file=large.jpg,url=http://media.local/large.jpg]"

@@ -119,9 +119,9 @@ class MediaService:
                     storage_root=storage_root,
                     public_prefix=public_prefix,
                 )
-                rewritten = rewritten.replace(segment.raw, local_path, 1)
+                rewritten = rewritten.replace(segment.raw, f"\n{local_path}\n", 1)
         finally:
             if owns_client:
                 await client.aclose()
 
-        return rewritten
+        return rewritten.strip()

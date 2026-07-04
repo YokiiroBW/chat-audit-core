@@ -813,6 +813,7 @@
         renderCQJsonCard(container, cqJson.data);
         return;
       }
+      if (renderLocalMediaParts(container, value)) return;
       if (!isMedia(value)) {
         container.textContent = value;
         return;
@@ -864,6 +865,62 @@
         }
       });
       return params;
+    };
+
+    const renderLocalMediaParts = (container, value) => {
+      if (typeof value !== 'string' || !value.includes('/static/storage/')) return false;
+      const pattern = /\/static\/storage\/[a-f0-9]{32}\.[a-z0-9]+/ig;
+      let cursor = 0;
+      let matched = false;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'cq-parts';
+      let match = null;
+      while ((match = pattern.exec(value)) !== null) {
+        matched = true;
+        const before = value.slice(cursor, match.index);
+        if (before.trim()) {
+          const span = document.createElement('span');
+          span.className = 'cq-text';
+          span.textContent = before;
+          wrapper.appendChild(span);
+        }
+        renderLocalMediaAsset(wrapper, match[0]);
+        cursor = pattern.lastIndex;
+      }
+      const tail = value.slice(cursor);
+      if (tail.trim()) {
+        const span = document.createElement('span');
+        span.className = 'cq-text';
+        span.textContent = tail;
+        wrapper.appendChild(span);
+      }
+      if (!matched) return false;
+      container.appendChild(wrapper);
+      return true;
+    };
+
+    const renderLocalMediaAsset = (container, path) => {
+      if (isImg(path)) {
+        renderImageLink(container, path, '媒体图片');
+      } else if (isVideo(path)) {
+        const video = document.createElement('video');
+        video.className = 'media-video';
+        video.src = path;
+        video.controls = true;
+        container.appendChild(video);
+      } else if (isVoice(path)) {
+        const audio = document.createElement('audio');
+        audio.src = path;
+        audio.controls = true;
+        container.appendChild(audio);
+      } else {
+        const link = document.createElement('a');
+        link.href = path;
+        link.target = '_blank';
+        link.rel = 'noreferrer';
+        link.textContent = '打开媒体资产';
+        container.appendChild(link);
+      }
     };
 
     const renderCQParts = (container, value) => {
