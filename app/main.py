@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.api import router as api_router
 from app.config import Settings, get_settings
-from app.database import AsyncSessionLocal, create_all_tables, engine as default_engine, get_db_session
+from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
 from app.schemas import HealthResponse
 from app.services.backup_service import start_auto_backup_scheduler
 from app.ws import router as ws_router
@@ -48,6 +48,8 @@ def create_app(
         active_settings.storage_root.mkdir(parents=True, exist_ok=True)
         active_settings.backup_root.mkdir(parents=True, exist_ok=True)
         await create_all_tables(active_engine)
+        await ensure_schema_compatibility(active_engine)
+        await backfill_bot_profiles(active_sessionmaker)
         backup_task = start_auto_backup_scheduler(settings=active_settings, sessionmaker=active_sessionmaker)
         try:
             yield

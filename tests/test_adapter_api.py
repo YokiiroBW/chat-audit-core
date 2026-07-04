@@ -43,6 +43,7 @@ async def test_adapter_crud_api_creates_updates_and_deletes_adapter(db_session):
         "platform": "qq",
         "config_json": '{"reverse_ws":"/onebot/v11/ws"}',
         "status": "gray",
+        "current_robot_id": None,
     }
     assert list_after_create.status_code == 200
     assert list_after_create.json() == [create_response.json()]

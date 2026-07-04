@@ -13,12 +13,13 @@ class AdapterService:
         platform: str,
         config_json: str | None = None,
         status: str = "gray",
+        current_robot_id: str | None = None,
     ) -> Adapter:
         existing = await db.get(Adapter, adapter_id)
         if existing is not None:
             raise ValueError("adapter already exists")
 
-        adapter = Adapter(id=adapter_id, platform=platform, config_json=config_json, status=status)
+        adapter = Adapter(id=adapter_id, platform=platform, config_json=config_json, status=status, current_robot_id=current_robot_id)
         db.add(adapter)
         await db.commit()
         await db.refresh(adapter)
@@ -31,7 +32,9 @@ class AdapterService:
         platform: str | None = None,
         config_json: str | None = None,
         status: str | None = None,
+        current_robot_id: str | None = None,
         config_json_provided: bool = False,
+        current_robot_id_provided: bool = False,
     ) -> Adapter | None:
         adapter = await db.get(Adapter, adapter_id)
         if adapter is None:
@@ -43,6 +46,8 @@ class AdapterService:
             adapter.config_json = config_json
         if status is not None:
             adapter.status = status
+        if current_robot_id_provided:
+            adapter.current_robot_id = current_robot_id
         adapter.updated_at = utc_now()
         await db.commit()
         await db.refresh(adapter)

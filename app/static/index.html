@@ -483,6 +483,7 @@
   <script>
     const state = {
       accountList: [],
+      adapterList: [],
       currentRobot: null,
       roomList: [],
       currentRoom: null,
@@ -566,7 +567,7 @@
       state.accountList.forEach((acc) => {
         const node = document.createElement('button');
         node.className = `avatar-button${state.currentRobot && state.currentRobot.id === acc.id ? ' active' : ''}`;
-        node.title = `${acc.id} · ${acc.status}`;
+        node.title = `${acc.display_name || acc.id} · ${acc.platform} · ${acc.status}`;
         node.type = 'button';
         node.addEventListener('click', () => switchAccount(acc));
 
@@ -586,10 +587,11 @@
     const renderAdapters = () => {
       const container = el('adapterList');
       clearNode(container);
-      state.accountList.forEach((acc) => {
+      state.adapterList.forEach((acc) => {
         const row = document.createElement('div');
         row.className = 'adapter-item';
-        const edit = button(`${acc.id} · ${acc.platform} · ${acc.status}`, 'btn link truncate', () => editAdapter(acc));
+        const binding = acc.current_robot_id ? ` -> ${acc.current_robot_id}` : '';
+        const edit = button(`${acc.id}${binding} · ${acc.platform} · ${acc.status}`, 'btn link truncate', () => editAdapter(acc));
         const remove = button('删除', 'btn link danger', () => deleteAdapter(acc.id));
         row.append(edit, remove);
         container.appendChild(row);
@@ -673,7 +675,7 @@
 
     const renderChat = () => {
       el('roomTitle').textContent = state.currentRoom ? state.currentRoom.room_id : '请选择会话';
-      el('robotView').textContent = state.currentRobot ? ` 视角: ${state.currentRobot.id}` : '';
+      el('robotView').textContent = state.currentRobot ? ` 视角: ${state.currentRobot.display_name || state.currentRobot.id}` : '';
       el('refreshButton').disabled = !state.currentRoom;
       el('openExportButton').disabled = !state.currentRobot;
       el('chatEmpty').hidden = Boolean(state.currentRoom);
@@ -763,7 +765,9 @@
     };
 
     const loadAdapters = async () => {
-      state.accountList = await apiGet('/api/adapters');
+      const [bots, adapters] = await Promise.all([apiGet('/api/bots'), apiGet('/api/adapters')]);
+      state.accountList = bots;
+      state.adapterList = adapters;
       if (state.accountList.length > 0 && !state.currentRobot) {
         await switchAccount(state.accountList[0]);
       } else {
@@ -822,12 +826,6 @@
 
     const deleteAdapter = async (adapterId) => {
       await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
-      if (state.currentRobot && state.currentRobot.id === adapterId) {
-        state.currentRobot = null;
-        state.currentRoom = null;
-        state.messageList = [];
-        state.roomList = [];
-      }
       await loadAdapters();
     };
 

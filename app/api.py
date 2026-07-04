@@ -7,6 +7,7 @@ from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
     AdapterUpdateRequest,
+    BotProfileResponse,
     ImportResultResponse,
     ImportValidationResponse,
     MessageResponse,
@@ -51,6 +52,12 @@ async def list_adapters(db: AsyncSession = Depends(get_db_session)) -> list[Adap
     return [AdapterResponse.model_validate(adapter) for adapter in adapters]
 
 
+@router.get("/bots", response_model=list[BotProfileResponse])
+async def list_bots(db: AsyncSession = Depends(get_db_session)) -> list[BotProfileResponse]:
+    profiles = await QueryService.list_bot_profiles(db)
+    return [BotProfileResponse.model_validate(profile) for profile in profiles]
+
+
 @router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)
 async def create_adapter(
     payload: AdapterCreateRequest,
@@ -63,6 +70,7 @@ async def create_adapter(
             platform=payload.platform,
             config_json=payload.config_json,
             status=payload.status,
+            current_robot_id=payload.current_robot_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -81,7 +89,9 @@ async def update_adapter(
         platform=payload.platform,
         config_json=payload.config_json,
         status=payload.status,
+        current_robot_id=payload.current_robot_id,
         config_json_provided="config_json" in payload.model_fields_set,
+        current_robot_id_provided="current_robot_id" in payload.model_fields_set,
     )
     if adapter is None:
         raise HTTPException(status_code=404, detail="adapter not found")

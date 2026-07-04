@@ -1,13 +1,18 @@
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Adapter, Message, RobotMessage
+from app.models import Adapter, BotProfile, Message, RobotMessage
 
 
 class QueryService:
     @staticmethod
     async def list_adapters(db: AsyncSession) -> list[Adapter]:
         result = await db.execute(select(Adapter).order_by(Adapter.id.asc()))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_bot_profiles(db: AsyncSession) -> list[BotProfile]:
+        result = await db.execute(select(BotProfile).order_by(BotProfile.last_seen_at.desc(), BotProfile.id.asc()))
         return list(result.scalars().all())
 
     @staticmethod

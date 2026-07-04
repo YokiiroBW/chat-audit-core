@@ -15,7 +15,22 @@ class Adapter(Base):
     platform = Column(String(20), nullable=False)
     config_json = Column(Text, nullable=True)
     status = Column(String(20), default="gray", nullable=False)
+    current_robot_id = Column(String(64), nullable=True, index=True)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class BotProfile(Base):
+    """Discovered bot identity profile, independent from connection adapters."""
+
+    __tablename__ = "bot_profiles"
+
+    id = Column(String(64), primary_key=True)
+    platform = Column(String(20), nullable=False)
+    display_name = Column(String(128), nullable=True)
+    status = Column(String(20), default="gray", nullable=False)
+    source_adapter_id = Column(String(64), nullable=True, index=True)
+    first_seen_at = Column(DateTime, default=utc_now, nullable=False)
+    last_seen_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class Message(Base):

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -13,6 +15,7 @@ class AdapterResponse(BaseModel):
     platform: str
     config_json: str | None = None
     status: str
+    current_robot_id: str | None = None
 
 
 class AdapterCreateRequest(BaseModel):
@@ -20,12 +23,25 @@ class AdapterCreateRequest(BaseModel):
     platform: str = Field(min_length=1, max_length=20)
     config_json: str | None = None
     status: str = Field(default="gray", min_length=1, max_length=20)
+    current_robot_id: str | None = Field(default=None, max_length=64)
 
 
 class AdapterUpdateRequest(BaseModel):
     platform: str | None = Field(default=None, min_length=1, max_length=20)
     config_json: str | None = None
     status: str | None = Field(default=None, min_length=1, max_length=20)
+    current_robot_id: str | None = Field(default=None, max_length=64)
+
+
+class BotProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    platform: str
+    display_name: str | None = None
+    status: str
+    source_adapter_id: str | None = None
+    last_seen_at: datetime | None = None
 
 
 class RoomResponse(BaseModel):

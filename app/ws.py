@@ -3,13 +3,12 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.onebot11 import normalize_message_event
 from app.config import get_settings
 from app.database import get_db_session
-from app.models import Adapter
+from app.services.bot_profile_service import BotProfileService
 from app.services.message_service import MessageService
 
 router = APIRouter()
@@ -43,11 +42,6 @@ def _is_authorized(websocket: WebSocket, configured_token: str) -> bool:
     return query_token == configured_token or bearer_token == configured_token
 
 
-async def _is_registered_adapter(db: AsyncSession, robot_id: str) -> bool:
-    result = await db.execute(select(Adapter.id).where(Adapter.id == robot_id))
-    return result.scalar_one_or_none() is not None
-
-
 @router.websocket("/onebot/v11/ws")
 async def onebot11_reverse_ws(
     websocket: WebSocket,
@@ -60,14 +54,24 @@ async def onebot11_reverse_ws(
         return
 
     await websocket.accept()
+    adapter_id = websocket.query_params.get("adapter_id") or websocket.headers.get("x-adapter-id")
     try:
         while True:
             event = await websocket.receive_json()
             normalized = normalize_message_event(event)
             if normalized is None:
                 continue
-            if not await _is_registered_adapter(db, normalized.robot_id):
-                continue
+
+            display_name = None
+            if normalized.msg_data.get("sender_id") == normalized.robot_id:
+                display_name = normalized.msg_data.get("nickname")
+            await BotProfileService.upsert_bot_profile(
+                db,
+                robot_id=normalized.robot_id,
+                platform=normalized.platform,
+                display_name=display_name,
+                adapter_id=adapter_id,
+            )
 
             await MessageService.process_incoming_message(
                 db,

@@ -3,7 +3,7 @@ import pytest
 
 from app.database import get_db_session
 from app.main import app
-from app.models import Adapter
+from app.models import Adapter, BotProfile
 from app.services.message_service import MessageService
 
 
@@ -115,3 +115,29 @@ async def test_messages_api_uses_before_timestamp_cursor(db_session):
     assert response.status_code == 200
     payload = response.json()
     assert [item["raw_message"] for item in payload] == ["message 0", "message 1"]
+
+
+@pytest.mark.asyncio
+async def test_bots_api_lists_discovered_bot_profiles(db_session):
+    db_session.add_all(
+        [
+            BotProfile(id="bot-a", platform="qq", status="gray", display_name="Bot A"),
+            BotProfile(id="bot-b", platform="qq", status="green", source_adapter_id="adapter-a"),
+        ]
+    )
+    await db_session.commit()
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/bots")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {item["id"] for item in payload} == {"bot-a", "bot-b"}
+    assert next(item for item in payload if item["id"] == "bot-a")["display_name"] == "Bot A"

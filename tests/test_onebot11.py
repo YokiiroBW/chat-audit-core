@@ -4,7 +4,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
-from app.models import Adapter
+from app.models import Adapter, BotProfile
 from app.services.query_service import QueryService
 
 
@@ -255,10 +255,9 @@ async def test_onebot_websocket_does_not_send_ack_frames_to_napcat(db_session):
 
 
 @pytest.mark.asyncio
-async def test_onebot_websocket_ignores_unregistered_robot_id(db_session):
+async def test_onebot_websocket_auto_registers_unknown_robot_id(db_session):
     from app.ws import onebot11_reverse_ws
 
-    await register_adapter(db_session, "registered-bot")
     websocket = FakeOneBotWebSocket([
         {
             "post_type": "message",
@@ -266,7 +265,7 @@ async def test_onebot_websocket_ignores_unregistered_robot_id(db_session):
             "self_id": "unknown-bot",
             "group_id": 998877,
             "user_id": 445566,
-            "raw_message": "should not be stored",
+            "raw_message": "should be stored",
             "time": 1783000800,
             "sender": {"nickname": "Alice"},
         }
@@ -275,8 +274,45 @@ async def test_onebot_websocket_ignores_unregistered_robot_id(db_session):
     await onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token="")
 
     messages = await QueryService.list_messages(db_session, robot_id="unknown-bot", room_id="998877")
+    profile = await db_session.get(BotProfile, "unknown-bot")
     assert websocket.accepted is True
-    assert messages == []
+    assert profile is not None
+    assert profile.platform == "qq"
+    assert len(messages) == 1
+    assert messages[0].raw_message == "should be stored"
+
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_binds_adapter_to_discovered_bot_profile(db_session):
+    from app.ws import onebot11_reverse_ws
+
+    db_session.add(Adapter(id="adapter-a", platform="qq", status="gray"))
+    await db_session.commit()
+    websocket = FakeOneBotWebSocket(
+        [
+            {
+                "post_type": "message_sent",
+                "message_type": "group",
+                "self_id": "bot-two",
+                "group_id": 998877,
+                "user_id": "bot-two",
+                "raw_message": "adapter switched to bot two",
+                "time": 1783000900,
+                "sender": {"nickname": "Bot Two"},
+            }
+        ],
+        query_params={"adapter_id": "adapter-a"},
+    )
+
+    await onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token="")
+
+    adapter = await db_session.get(Adapter, "adapter-a")
+    profile = await db_session.get(BotProfile, "bot-two")
+    messages = await QueryService.list_messages(db_session, robot_id="bot-two", room_id="998877")
+    assert adapter.current_robot_id == "bot-two"
+    assert profile.display_name == "Bot Two"
+    assert profile.source_adapter_id == "adapter-a"
+    assert len(messages) == 1
 
 
 def test_onebot_websocket_rejects_missing_or_invalid_access_token_when_configured():
