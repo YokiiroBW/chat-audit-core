@@ -14,6 +14,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     html = response.text
     assert "社交资产多租户审计控制台" in html
     assert "AUDIT V4" in html
+    assert "unpkg.com" not in html
+    assert "cdn.tailwindcss.com" not in html
+    assert "ElementPlus" not in html
+    assert "Vue" not in html
     assert "/api/adapters" in html
     assert "/api/rooms" in html
     assert "/api/messages" in html
@@ -25,7 +29,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "before_timestamp" in html
     assert "static/storage" in html
     assert "账号设置" in html
-    assert "adapterForm" in html
+    assert "adapterId" in html
     assert "saveAdapter" in html
     assert "deleteAdapter" in html
     assert "POST" in html
@@ -35,8 +39,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "green/red/gray" in html
     assert "高级过滤导出" in html
     assert "openExportDialog" in html
-    assert "exportDialogVisible" in html
-    assert "exportForm" in html
+    assert "exportModal" in html
+    assert "exportRobotId" in html
     assert "downloadExportPackage" in html
     assert "/api/export" in html
     assert "robot_id" in html
@@ -46,7 +50,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "chat-audit-export" in html
     assert "导入 JSON" in html
     assert "openImportDialog" in html
-    assert "importDialogVisible" in html
+    assert "importModal" in html
     assert "importPackageText" in html
     assert "importValidationReport" in html
     assert "validateImportPackage" in html

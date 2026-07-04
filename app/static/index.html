@@ -4,540 +4,1033 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>社交资产多租户审计控制台</title>
-  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-  <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
-  <script src="https://unpkg.com/element-plus"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    ::-webkit-scrollbar { width: 4px; height: 4px; }
-    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-    [v-cloak] { display: none; }
+    :root {
+      color-scheme: light;
+      --bg: #f3f4f6;
+      --panel: #ffffff;
+      --line: #e5e7eb;
+      --muted: #64748b;
+      --text: #1f2937;
+      --ink: #0f172a;
+      --accent: #059669;
+      --accent-soft: #d1fae5;
+      --danger: #dc2626;
+      --warn: #d97706;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+    }
+    button, input, select, textarea { font: inherit; }
+    button {
+      cursor: pointer;
+      border: 0;
+      background: transparent;
+      color: inherit;
+    }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 9px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(5, 150, 105, .14);
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+    .app { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+    .rail {
+      width: 84px;
+      flex: 0 0 84px;
+      background: #0f172a;
+      color: #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      padding: 22px 10px;
+    }
+    .brand { font-weight: 800; font-size: 12px; letter-spacing: .08em; margin-bottom: 22px; }
+    .account-stack { display: flex; flex-direction: column; gap: 14px; align-items: center; width: 100%; }
+    .avatar-button {
+      position: relative;
+      width: 52px;
+      height: 52px;
+      border-radius: 999px;
+      padding: 2px;
+      opacity: .72;
+    }
+    .avatar-button.active { opacity: 1; outline: 2px solid #34d399; }
+    .avatar, .room-avatar {
+      width: 100%;
+      height: 100%;
+      background: #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 800;
+      user-select: none;
+    }
+    .avatar { border-radius: 999px; }
+    .room-avatar { border-radius: 10px; }
+    .status-dot {
+      position: absolute;
+      right: 1px;
+      bottom: 1px;
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      border: 2px solid #0f172a;
+      background: #94a3b8;
+    }
+    .status-green { background: #34d399; }
+    .status-red { background: #f87171; }
+    .status-gray { background: #94a3b8; }
+    .rail-footer {
+      width: 100%;
+      color: #94a3b8;
+      text-align: center;
+      font-size: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .rail-footer button:hover { color: #fff; }
+    .sidebar {
+      width: 390px;
+      flex: 0 0 390px;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .side-head, .settings, .search-box {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .side-head h1 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+    .hint { color: var(--muted); font-size: 12px; }
+    .search-row { display: flex; gap: 8px; margin-top: 12px; }
+    .search-row input { flex: 1; }
+    .rooms, .search-results, .adapter-list, .chat-scroll { overflow: auto; }
+    .rooms { flex: 1; }
+    .settings { display: none; background: #fff; }
+    .settings.open { display: block; }
+    .settings-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    .form-grid { display: grid; gap: 8px; }
+    .button-row { display: flex; gap: 8px; }
+    .btn {
+      min-height: 34px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 7px 12px;
+      white-space: nowrap;
+    }
+    .btn:hover { background: #f8fafc; }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn.primary:hover { background: #047857; }
+    .btn.link {
+      border: 0;
+      padding: 0;
+      min-height: auto;
+      color: var(--accent);
+      background: transparent;
+    }
+    .btn.danger { color: var(--danger); }
+    .adapter-list {
+      margin-top: 10px;
+      max-height: 180px;
+      display: grid;
+      gap: 6px;
+    }
+    .adapter-item, .room-item, .result-item {
+      width: 100%;
+      text-align: left;
+      border-top: 1px solid var(--line);
+      padding: 12px 16px;
+      background: #fff;
+    }
+    .adapter-item {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 8px;
+      font-size: 12px;
+    }
+    .room-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .room-item:hover, .result-item:hover { background: #f8fafc; }
+    .room-item.active { background: #f1f5f9; }
+    .room-thumb { width: 42px; height: 42px; flex: 0 0 42px; }
+    .truncate {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .room-meta, .result-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .empty, .loading {
+      color: var(--muted);
+      padding: 18px 16px;
+    }
+    .search-box { display: none; background: #f8fafc; max-height: 45%; overflow: hidden; }
+    .search-box.open { display: flex; flex-direction: column; }
+    .search-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .main {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #f8fafc;
+    }
+    .topbar {
+      height: 58px;
+      flex: 0 0 58px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 24px;
+    }
+    .top-actions { display: flex; gap: 8px; align-items: center; }
+    .chat-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+    }
+    .chat-scroll {
+      flex: 1;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .message {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      width: 100%;
+    }
+    .message.mine {
+      flex-direction: row-reverse;
+    }
+    .message-avatar { width: 40px; height: 40px; flex: 0 0 40px; }
+    .message-body {
+      max-width: 68%;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      min-width: 0;
+    }
+    .message.mine .message-body { align-items: flex-end; }
+    .message-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+    .bubble {
+      background: #fff;
+      border-radius: 8px;
+      border-top-left-radius: 2px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .08);
+      padding: 10px 12px;
+      line-height: 1.6;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    .message.mine .bubble {
+      background: var(--accent);
+      color: #fff;
+      border-top-left-radius: 8px;
+      border-top-right-radius: 2px;
+    }
+    .media-img { max-width: min(340px, 100%); border-radius: 6px; display: block; }
+    .media-video { max-width: min(420px, 100%); border-radius: 6px; display: block; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, .46);
+      padding: 24px;
+      z-index: 20;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: min(680px, 100%);
+      max-height: min(760px, 92vh);
+      background: #fff;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(15, 23, 42, .25);
+    }
+    .modal-header, .modal-footer {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .modal-footer {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+    .modal-body {
+      padding: 18px;
+      overflow: auto;
+      display: grid;
+      gap: 12px;
+    }
+    .report {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fafc;
+      padding: 12px;
+      font-size: 12px;
+      display: grid;
+      gap: 5px;
+    }
+    .ok { color: var(--accent); }
+    .bad { color: var(--danger); }
+    .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+    @media (max-width: 860px) {
+      .rail { width: 72px; flex-basis: 72px; }
+      .sidebar { width: 320px; flex-basis: 320px; }
+      .topbar { padding: 0 14px; }
+      .top-actions { gap: 6px; }
+      .btn { padding: 7px 9px; }
+      .message-body { max-width: 82%; }
+    }
   </style>
 </head>
-<body class="bg-slate-100 h-screen overflow-hidden">
-<div id="app" v-cloak class="flex h-full w-full text-slate-800">
-  <aside class="w-20 bg-slate-950 flex flex-col items-center py-6 justify-between border-r border-slate-800">
-    <div class="space-y-6 flex flex-col items-center w-full">
-      <div class="text-white font-bold text-xs mb-4 tracking-wide">AUDIT V4</div>
-      <button
-        v-for="acc in accountList"
-        :key="acc.id"
-        @click="switchAccount(acc)"
-        :title="`${acc.id} · ${acc.status}`"
-        :class="['relative p-1 rounded-full cursor-pointer transition', currentRobot && currentRobot.id === acc.id ? 'ring-2 ring-emerald-400' : 'opacity-70 hover:opacity-100']"
-      >
-        <img :src="avatarUrl(acc.id)" class="w-12 h-12 rounded-full bg-slate-800" />
-        <span :class="['absolute right-0 bottom-0 w-3 h-3 rounded-full border border-slate-950', statusDotClass(acc.status)]"></span>
-      </button>
-    </div>
-    <div class="text-slate-400 text-xs text-center px-2 space-y-2">
-      <button class="hover:text-white" @click="settingsMode = !settingsMode">账号设置</button>
-      <div>{{ accountList.length }} 账号</div>
-    </div>
-  </aside>
-
-  <section class="w-96 bg-white border-r border-slate-200 flex flex-col">
-    <div class="p-4 border-b border-slate-100 space-y-3">
-      <h1 class="font-semibold text-sm">多租户社交资产审计</h1>
-      <div class="text-[11px] text-slate-400">状态枚举：green/red/gray</div>
-      <el-input
-        v-model="searchQuery"
-        placeholder="全局搜索当前机器人视角消息..."
-        clearable
-        @keyup.enter="performSearch"
-        @clear="clearSearch"
-      >
-        <template #append>
-          <el-button @click="performSearch" :disabled="!currentRobot || !searchQuery.trim()">搜索</el-button>
-        </template>
-      </el-input>
-    </div>
-
-    <div v-if="settingsMode" class="border-b border-slate-100 bg-white p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <span class="text-sm font-semibold">账号设置</span>
-        <button class="text-xs text-emerald-600 hover:underline" @click="resetAdapterForm">新增账号</button>
-      </div>
-      <div class="space-y-2">
-        <input v-model="adapterForm.id" :disabled="editingAdapterId" placeholder="机器人账号 / self_id" class="w-full border rounded px-2 py-1 text-sm" />
-        <select v-model="adapterForm.platform" class="w-full border rounded px-2 py-1 text-sm">
-          <option value="qq">qq</option>
-          <option value="wechat">wechat</option>
-        </select>
-        <select v-model="adapterForm.status" class="w-full border rounded px-2 py-1 text-sm">
-          <option value="gray">gray</option>
-          <option value="green">green</option>
-          <option value="red">red</option>
-        </select>
-        <textarea v-model="adapterForm.config_json" placeholder='配置 JSON，例如 {"token":"..."}' class="w-full border rounded px-2 py-1 text-xs h-16"></textarea>
-        <div class="flex gap-2">
-          <button class="flex-1 bg-emerald-500 text-white rounded py-1 text-sm disabled:opacity-50" @click="saveAdapter" :disabled="savingAdapter || !adapterForm.id || !adapterForm.platform">{{ editingAdapterId ? '保存修改' : '添加账号' }}</button>
-          <button class="px-3 border rounded text-sm" @click="resetAdapterForm">清空</button>
-        </div>
-      </div>
-      <div class="space-y-1 max-h-40 overflow-y-auto">
-        <div v-for="acc in accountList" :key="acc.id" class="flex items-center justify-between text-xs border rounded px-2 py-1">
-          <button class="truncate text-left" @click="editAdapter(acc)">
-            <span :class="['inline-block w-2 h-2 rounded-full mr-1', statusDotClass(acc.status)]"></span>{{ acc.id }} · {{ acc.platform }} · {{ acc.status }}
-          </button>
-          <button class="text-red-500 hover:underline" @click="deleteAdapter(acc.id)">删除</button>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="searchMode" class="border-b border-slate-100 bg-slate-50 flex flex-col max-h-[45%]">
-      <div class="px-4 py-2 flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500">搜索结果 · {{ searchResults.length }}</span>
-        <button class="text-xs text-emerald-600 hover:underline" @click="clearSearch">返回会话</button>
-      </div>
-      <div class="overflow-y-auto">
-        <div v-if="searching" class="p-4 text-sm text-slate-400">正在搜索...</div>
-        <div v-else-if="searchResults.length === 0" class="p-4 text-sm text-slate-400">没有匹配消息</div>
-        <button
-          v-for="result in searchResults"
-          :key="result.msg_hash"
-          @click="selectSearchResult(result)"
-          class="w-full text-left px-4 py-3 hover:bg-white border-t border-slate-100"
-        >
-          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span>{{ result.room_id }} · {{ result.nickname || result.sender_id }}</span>
-            <span>{{ formatTs(result.timestamp) }}</span>
-          </div>
-          <p class="text-sm text-slate-700 line-clamp-2">{{ result.local_message }}</p>
-        </button>
-      </div>
-    </div>
-
-    <div class="flex-1 overflow-y-auto">
-      <div v-if="loadingRooms" class="p-4 text-sm text-slate-400">正在加载会话...</div>
-      <div v-else-if="filteredRooms.length === 0" class="p-4 text-sm text-slate-400">暂无可见会话</div>
-      <button
-        v-for="room in filteredRooms"
-        :key="room.room_id"
-        @click="selectRoom(room)"
-        :class="['w-full flex items-center px-4 py-3 text-left cursor-pointer hover:bg-slate-50 transition', currentRoom && currentRoom.room_id === room.room_id ? 'bg-slate-100' : '']"
-      >
-        <img :src="roomAvatarUrl(room.room_id)" class="w-10 h-10 rounded-lg mr-3 bg-slate-100" />
-        <div class="flex-1 min-w-0">
-          <p class="text-sm font-medium truncate">{{ room.room_id }}</p>
-          <p class="text-xs text-slate-400 truncate">最近存盘: {{ formatTs(room.last_timestamp) }}</p>
-        </div>
-      </button>
-    </div>
-  </section>
-
-  <main class="flex-1 bg-slate-50 flex flex-col h-full">
-    <header class="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
+<body>
+  <div class="app">
+    <aside class="rail">
       <div>
-        <span class="font-semibold">{{ currentRoom ? currentRoom.room_id : '请选择会话' }}</span>
-        <span v-if="currentRobot" class="ml-2 text-xs text-slate-400">视角: {{ currentRobot.id }}</span>
+        <div class="brand">AUDIT V4</div>
+        <div id="accountList" class="account-stack"></div>
       </div>
-      <div class="space-x-2">
-        <el-button size="small" @click="reloadCurrentRoom" :disabled="!currentRoom">刷新</el-button>
-        <el-button size="small" plain @click="openImportDialog">导入 JSON</el-button>
-        <el-button size="small" type="primary" plain @click="openExportDialog" :disabled="!currentRobot">高级过滤导出</el-button>
+      <div class="rail-footer">
+        <button id="settingsToggle">账号设置</button>
+        <div><span id="accountCount">0</span> 账号</div>
       </div>
-    </header>
+    </aside>
 
-    <div v-if="!currentRoom" class="flex-1 flex items-center justify-center text-slate-400">
-      从左侧选择一个机器人账号和会话，开始审计聊天资产。
-    </div>
+    <section class="sidebar">
+      <div class="side-head">
+        <h1>多租户社交资产审计</h1>
+        <div class="hint">状态枚举：green/red/gray</div>
+        <div class="search-row">
+          <input id="searchInput" placeholder="全局搜索当前机器人视角消息..." />
+          <button id="searchButton" class="btn primary">搜索</button>
+        </div>
+      </div>
 
-    <div v-else ref="chatWindow" class="flex-1 overflow-y-auto p-6 space-y-4" @scroll="handleWindowScroll">
-      <div v-if="loadingHistory" class="text-center text-xs text-slate-400 py-2">正在加载更早记录...</div>
-      <div v-if="messageList.length === 0" class="text-center text-sm text-slate-400 py-12">暂无消息</div>
-      <div v-for="msg in messageList" :key="msg.msg_hash" :class="['flex w-full items-start', currentRobot && msg.sender_id === currentRobot.id ? 'flex-row-reverse' : '']">
-        <img :src="avatarUrl(msg.sender_id)" class="w-10 h-10 rounded-full mx-2 bg-white" />
-        <div :class="['flex flex-col max-w-[65%]', currentRobot && msg.sender_id === currentRobot.id ? 'items-end' : 'items-start']">
-          <span class="text-xs text-slate-400 mb-1">{{ msg.nickname || msg.sender_id }} · {{ formatTs(msg.timestamp) }}</span>
-          <div :class="['p-3 rounded-xl text-sm shadow-sm leading-relaxed break-all', currentRobot && msg.sender_id === currentRobot.id ? 'bg-emerald-500 text-white rounded-tr-none' : 'bg-white text-slate-800 rounded-tl-none']">
-            <template v-if="isMedia(msg.local_message)">
-              <img v-if="isImg(msg.local_message)" :src="mediaUrl(msg.local_message)" class="max-w-xs rounded" />
-              <video v-else-if="isVideo(msg.local_message)" :src="mediaUrl(msg.local_message)" controls class="max-w-sm rounded"></video>
-              <audio v-else-if="isVoice(msg.local_message)" :src="mediaUrl(msg.local_message)" controls></audio>
-              <a v-else :href="mediaUrl(msg.local_message)" target="_blank" class="underline">打开媒体资产</a>
-            </template>
-            <template v-else>{{ msg.local_message }}</template>
+      <div id="settingsPanel" class="settings">
+        <div class="settings-title">
+          <span>账号设置</span>
+          <button id="newAdapterButton" class="btn link">新增账号</button>
+        </div>
+        <div class="form-grid">
+          <input id="adapterId" placeholder="机器人账号 / self_id" />
+          <select id="adapterPlatform">
+            <option value="qq">qq</option>
+            <option value="wechat">wechat</option>
+          </select>
+          <select id="adapterStatus">
+            <option value="gray">gray</option>
+            <option value="green">green</option>
+            <option value="red">red</option>
+          </select>
+          <textarea id="adapterConfig" placeholder='配置 JSON，例如 {"token":"..."}'></textarea>
+          <div class="button-row">
+            <button id="saveAdapterButton" class="btn primary">添加账号</button>
+            <button id="clearAdapterButton" class="btn">清空</button>
           </div>
         </div>
+        <div id="adapterList" class="adapter-list"></div>
       </div>
-    </div>
-  </main>
 
-  <el-dialog v-model="importDialogVisible" title="导入 JSON" width="620px">
-    <div class="space-y-3 text-sm">
-      <textarea v-model="importPackageText" class="w-full border rounded px-2 py-1 text-xs h-56" placeholder="粘贴 /api/export 导出的 JSON 包"></textarea>
-      <div v-if="importValidationReport" class="border rounded p-3 bg-slate-50 text-xs space-y-1">
-        <div>校验结果：<span :class="importValidationReport.valid ? 'text-emerald-600' : 'text-red-600'">{{ importValidationReport.valid ? '通过' : '失败' }}</span></div>
-        <div>schema：{{ importValidationReport.schema || '-' }}</div>
-        <div>checksum：{{ importValidationReport.checksum_valid === null ? '未提供' : (importValidationReport.checksum_valid ? '通过' : '失败') }}</div>
-        <div>counts：messages={{ importValidationReport.counts.messages }} / robot_messages={{ importValidationReport.counts.robot_messages }} / media_assets={{ importValidationReport.counts.media_assets }}</div>
-        <div v-if="importValidationReport.diff && importValidationReport.diff.messages">
-          diff.messages 新增/更新/不变：{{ importValidationReport.diff.messages.new }} / {{ importValidationReport.diff.messages.update }} / {{ importValidationReport.diff.messages.unchanged }}
+      <div id="searchPanel" class="search-box">
+        <div class="search-head">
+          <span>搜索结果 · <span id="searchResultCount">0</span></span>
+          <button id="clearSearchButton" class="btn link">返回会话</button>
         </div>
-        <div v-if="importValidationReport.diff && importValidationReport.diff.robot_messages">
-          diff.robot_messages 新增/已存在：{{ importValidationReport.diff.robot_messages.new }} / {{ importValidationReport.diff.robot_messages.existing }}
-        </div>
-        <div v-if="importValidationReport.diff && importValidationReport.diff.media_assets">
-          diff.media_assets 新增/更新/不变：{{ importValidationReport.diff.media_assets.new }} / {{ importValidationReport.diff.media_assets.update }} / {{ importValidationReport.diff.media_assets.unchanged }}
-        </div>
-        <div v-if="importValidationReport.media_files">
-          媒体文件 media_files checked/missing/mismatch：{{ importValidationReport.media_files.checked }} / {{ importValidationReport.media_files.missing }} / {{ importValidationReport.media_files.mismatch }}
-        </div>
-        <div v-if="importValidationReport.errors.length">errors：{{ importValidationReport.errors.join('; ') }}</div>
+        <div id="searchResults" class="search-results"></div>
       </div>
-    </div>
-    <template #footer>
-      <el-button @click="importDialogVisible = false">取消</el-button>
-      <el-button @click="validateImportPackage" :loading="importValidating" :disabled="!importPackageText.trim()">校验</el-button>
-      <el-button type="primary" @click="submitImportPackage" :loading="importing" :disabled="!importValidationReport || !importValidationReport.valid">确认导入</el-button>
-    </template>
-  </el-dialog>
 
-  <el-dialog v-model="exportDialogVisible" title="高级过滤导出" width="520px">
-    <div class="space-y-3 text-sm">
-      <div>
-        <label class="block text-xs text-slate-500 mb-1">机器人视角 robot_id</label>
-        <input v-model="exportForm.robot_id" class="w-full border rounded px-2 py-1" placeholder="robot_id" />
-      </div>
-      <div>
-        <label class="block text-xs text-slate-500 mb-1">会话 room_id（可留空导出当前机器人全部会话）</label>
-        <input v-model="exportForm.room_id" class="w-full border rounded px-2 py-1" placeholder="room_id" />
-      </div>
-      <div class="grid grid-cols-2 gap-3">
+      <div id="roomList" class="rooms"></div>
+    </section>
+
+    <main class="main">
+      <header class="topbar">
         <div>
-          <label class="block text-xs text-slate-500 mb-1">开始时间戳 start_timestamp</label>
-          <input v-model="exportForm.start_timestamp" type="number" class="w-full border rounded px-2 py-1" placeholder="可选" />
+          <strong id="roomTitle">请选择会话</strong>
+          <span id="robotView" class="hint"></span>
         </div>
-        <div>
-          <label class="block text-xs text-slate-500 mb-1">结束时间戳 end_timestamp</label>
-          <input v-model="exportForm.end_timestamp" type="number" class="w-full border rounded px-2 py-1" placeholder="可选" />
+        <div class="top-actions">
+          <button id="refreshButton" class="btn">刷新</button>
+          <button id="openImportButton" class="btn">导入 JSON</button>
+          <button id="openExportButton" class="btn primary">高级过滤导出</button>
         </div>
+      </header>
+      <div id="chatEmpty" class="chat-empty">从左侧选择一个机器人账号和会话，开始审计聊天资产。</div>
+      <div id="chatWindow" class="chat-scroll" hidden></div>
+    </main>
+  </div>
+
+  <div id="importModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <strong>导入 JSON</strong>
+        <button class="btn" data-close-modal="importModal">关闭</button>
       </div>
-      <p class="text-xs text-slate-400">导出包为 JSON，文件名以 chat-audit-export 开头。</p>
+      <div class="modal-body">
+        <textarea id="importPackageText" placeholder="粘贴 /api/export 导出的 JSON 包" style="min-height: 230px;"></textarea>
+        <div id="importValidationReport" class="report" hidden></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close-modal="importModal">取消</button>
+        <button id="validateImportButton" class="btn">校验</button>
+        <button id="submitImportButton" class="btn primary">确认导入</button>
+      </div>
     </div>
-    <template #footer>
-      <el-button @click="exportDialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="exporting" @click="downloadExportPackage" :disabled="!exportForm.robot_id">下载 JSON</el-button>
-    </template>
-  </el-dialog>
-</div>
+  </div>
 
-<script>
-const { createApp, ref, computed, onMounted, nextTick } = Vue;
+  <div id="exportModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <strong>高级过滤导出</strong>
+        <button class="btn" data-close-modal="exportModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <label class="label">机器人视角 robot_id<input id="exportRobotId" placeholder="robot_id" /></label>
+        <label class="label">会话 room_id（可留空导出当前机器人全部会话）<input id="exportRoomId" placeholder="room_id" /></label>
+        <div class="grid-two">
+          <label class="label">开始时间戳 start_timestamp<input id="exportStartTimestamp" type="number" placeholder="可选" /></label>
+          <label class="label">结束时间戳 end_timestamp<input id="exportEndTimestamp" type="number" placeholder="可选" /></label>
+        </div>
+        <div class="hint">导出包为 JSON，文件名以 chat-audit-export 开头。</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close-modal="exportModal">取消</button>
+        <button id="downloadExportButton" class="btn primary">下载 JSON</button>
+      </div>
+    </div>
+  </div>
 
-createApp({
-  setup() {
-    const accountList = ref([]);
-    const currentRobot = ref(null);
-    const roomList = ref([]);
-    const currentRoom = ref(null);
-    const messageList = ref([]);
-    const searchQuery = ref('');
-    const searchResults = ref([]);
-    const searchMode = ref(false);
-    const searching = ref(false);
-    const settingsMode = ref(false);
-    const savingAdapter = ref(false);
-    const editingAdapterId = ref(null);
-    const adapterForm = ref({ id: '', platform: 'qq', status: 'gray', config_json: '' });
-    const loadingRooms = ref(false);
-    const loadingHistory = ref(false);
-    const chatWindow = ref(null);
-    const exportDialogVisible = ref(false);
-    const exporting = ref(false);
-    const exportForm = ref({ robot_id: '', room_id: '', start_timestamp: '', end_timestamp: '' });
-    const importDialogVisible = ref(false);
-    const importPackageText = ref('');
-    const importValidationReport = ref(null);
-    const importValidating = ref(false);
-    const importing = ref(false);
-    const adminApiToken = ref(localStorage.getItem('chatAuditAdminApiToken') || '');
+  <script>
+    const state = {
+      accountList: [],
+      currentRobot: null,
+      roomList: [],
+      currentRoom: null,
+      messageList: [],
+      searchResults: [],
+      searchMode: false,
+      loadingRooms: false,
+      loadingHistory: false,
+      settingsMode: false,
+      editingAdapterId: null,
+      importValidationReport: null,
+      adminApiToken: localStorage.getItem('chatAuditAdminApiToken') || '',
+    };
 
-    const filteredRooms = computed(() => roomList.value);
+    const el = (id) => document.getElementById(id);
+    const text = (value) => value === null || value === undefined ? '' : String(value);
 
     const promptForAdminApiToken = () => {
       const token = window.prompt('请输入管理 API Token');
       if (token && token.trim()) {
-        adminApiToken.value = token.trim();
-        localStorage.setItem('chatAuditAdminApiToken', adminApiToken.value);
+        state.adminApiToken = token.trim();
+        localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
         return true;
       }
       return false;
     };
 
     const authHeaders = (headers = {}) => {
-      if (!adminApiToken.value) return headers;
-      return { ...headers, Authorization: `Bearer ${adminApiToken.value}` };
+      if (!state.adminApiToken) return headers;
+      return { ...headers, Authorization: `Bearer ${state.adminApiToken}` };
     };
 
-    const apiGet = async (url) => {
-      let response = await fetch(url, { headers: authHeaders() });
+    const requestJson = async (url, options = {}) => {
+      const withAuth = {
+        ...options,
+        headers: authHeaders(options.headers || {}),
+      };
+      let response = await fetch(url, withAuth);
       if (response.status === 401 && promptForAdminApiToken()) {
-        response = await fetch(url, { headers: authHeaders() });
+        response = await fetch(url, { ...options, headers: authHeaders(options.headers || {}) });
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-      return await response.json();
-    };
-
-    const apiSend = async (url, method, body = null) => {
-      let response = await fetch(url, {
-        method,
-        headers: authHeaders(body !== null ? { 'Content-Type': 'application/json' } : {}),
-        body: body !== null ? JSON.stringify(body) : null,
-      });
-      if (response.status === 401 && promptForAdminApiToken()) {
-        response = await fetch(url, {
-          method,
-          headers: authHeaders(body !== null ? { 'Content-Type': 'application/json' } : {}),
-          body: body !== null ? JSON.stringify(body) : null,
-        });
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${method} ${url}`);
       if (response.status === 204) return null;
       return await response.json();
     };
 
-    const loadAdapters = async () => {
-      accountList.value = await apiGet('/api/adapters');
-      if (accountList.value.length > 0 && !currentRobot.value) await switchAccount(accountList.value[0]);
-    };
+    const apiGet = (url) => requestJson(url);
+    const apiSend = (url, method, body = null) => requestJson(url, {
+      method,
+      headers: body !== null ? { 'Content-Type': 'application/json' } : {},
+      body: body !== null ? JSON.stringify(body) : null,
+    });
 
-    const switchAccount = async (acc) => {
-      currentRobot.value = acc;
-      currentRoom.value = null;
-      messageList.value = [];
-      clearSearch();
-      loadingRooms.value = true;
-      try {
-        roomList.value = await apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`);
-      } finally {
-        loadingRooms.value = false;
-      }
-    };
-
-    const resetAdapterForm = () => {
-      editingAdapterId.value = null;
-      adapterForm.value = { id: '', platform: 'qq', status: 'gray', config_json: '' };
-    };
-
-    const editAdapter = (adapter) => {
-      editingAdapterId.value = adapter.id;
-      adapterForm.value = {
-        id: adapter.id,
-        platform: adapter.platform,
-        status: adapter.status,
-        config_json: adapter.config_json || '',
-      };
-    };
-
-    const saveAdapter = async () => {
-      savingAdapter.value = true;
-      try {
-        const payload = {
-          platform: adapterForm.value.platform,
-          status: adapterForm.value.status,
-          config_json: adapterForm.value.config_json ? adapterForm.value.config_json : null,
-        };
-        if (editingAdapterId.value) {
-          await apiSend(`/api/adapters/${encodeURIComponent(editingAdapterId.value)}`, 'PATCH', payload);
-        } else {
-          await apiSend('/api/adapters', 'POST', { id: adapterForm.value.id, ...payload });
-        }
-        resetAdapterForm();
-        await loadAdapters();
-      } finally {
-        savingAdapter.value = false;
-      }
-    };
-
-    const deleteAdapter = async (adapterId) => {
-      await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
-      if (currentRobot.value && currentRobot.value.id === adapterId) {
-        currentRobot.value = null;
-        currentRoom.value = null;
-        messageList.value = [];
-        roomList.value = [];
-      }
-      await loadAdapters();
-    };
-
-    const selectRoom = async (room) => {
-      currentRoom.value = room;
-      messageList.value = [];
-      await reloadCurrentRoom();
-    };
-
-    const selectSearchResult = async (result) => {
-      let room = roomList.value.find(item => item.room_id === result.room_id);
-      if (!room) {
-        room = { room_id: result.room_id, last_timestamp: result.timestamp };
-        roomList.value = [room, ...roomList.value];
-      }
-      currentRoom.value = room;
-      messageList.value = [result];
-      await nextTick();
-      if (chatWindow.value) chatWindow.value.scrollTop = chatWindow.value.scrollHeight;
-    };
-
-    const performSearch = async () => {
-      if (!currentRobot.value || !searchQuery.value.trim()) return;
-      searchMode.value = true;
-      searching.value = true;
-      try {
-        const url = `/api/search?robot_id=${encodeURIComponent(currentRobot.value.id)}&keyword=${encodeURIComponent(searchQuery.value.trim())}&limit=50`;
-        searchResults.value = await apiGet(url);
-      } finally {
-        searching.value = false;
-      }
-    };
-
-    const clearSearch = () => {
-      searchMode.value = false;
-      searching.value = false;
-      searchResults.value = [];
-    };
-
-    const openExportDialog = () => {
-      exportForm.value = {
-        robot_id: currentRobot.value ? currentRobot.value.id : '',
-        room_id: currentRoom.value ? currentRoom.value.room_id : '',
-        start_timestamp: '',
-        end_timestamp: '',
-      };
-      exportDialogVisible.value = true;
-    };
-
-    const downloadExportPackage = async () => {
-      if (!exportForm.value.robot_id) return;
-      exporting.value = true;
-      try {
-        const params = new URLSearchParams();
-        ['robot_id', 'room_id', 'start_timestamp', 'end_timestamp'].forEach((key) => {
-          const value = exportForm.value[key];
-          if (value !== null && value !== undefined && String(value).trim() !== '') {
-            params.append(key, String(value).trim());
-          }
-        });
-        let response = await fetch(`/api/export?${params.toString()}`, { headers: authHeaders() });
-        if (response.status === 401 && promptForAdminApiToken()) {
-          response = await fetch(`/api/export?${params.toString()}`, { headers: authHeaders() });
-        }
-        if (!response.ok) throw new Error(`HTTP ${response.status}: /api/export`);
-        const packageJson = await response.json();
-        const blob = new Blob([JSON.stringify(packageJson, null, 2)], { type: 'application/json;charset=utf-8' });
-        const link = document.createElement('a');
-        const objectUrl = URL.createObjectURL(blob);
-        link.href = objectUrl;
-        link.download = `chat-audit-export-${Date.now()}.json`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(objectUrl);
-        exportDialogVisible.value = false;
-      } finally {
-        exporting.value = false;
-      }
-    };
-
-    const openImportDialog = () => {
-      importPackageText.value = '';
-      importValidationReport.value = null;
-      importDialogVisible.value = true;
-    };
-
-    const parseImportPackage = () => JSON.parse(importPackageText.value);
-
-    const validateImportPackage = async () => {
-      if (!importPackageText.value.trim()) return;
-      importValidating.value = true;
-      try {
-        let response = await fetch('/api/import/validate', {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify(parseImportPackage()),
-        });
-        if (response.status === 401 && promptForAdminApiToken()) {
-          response = await fetch('/api/import/validate', {
-            method: 'POST',
-            headers: authHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify(parseImportPackage()),
-          });
-        }
-        if (!response.ok) throw new Error(`HTTP ${response.status}: /api/import/validate`);
-        importValidationReport.value = await response.json();
-      } finally {
-        importValidating.value = false;
-      }
-    };
-
-    const submitImportPackage = async () => {
-      if (!importValidationReport.value || !importValidationReport.value.valid) return;
-      importing.value = true;
-      try {
-        await apiSend('/api/import', 'POST', parseImportPackage());
-        importDialogVisible.value = false;
-        if (currentRobot.value) await switchAccount(currentRobot.value);
-      } finally {
-        importing.value = false;
-      }
-    };
-
-    const loadMessages = async (beforeTimestamp = null) => {
-      if (!currentRobot.value || !currentRoom.value) return [];
-      let url = `/api/messages?robot_id=${encodeURIComponent(currentRobot.value.id)}&room_id=${encodeURIComponent(currentRoom.value.room_id)}&limit=50`;
-      if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
-      return await apiGet(url);
-    };
-
-    const reloadCurrentRoom = async () => {
-      if (!currentRoom.value) return;
-      messageList.value = await loadMessages();
-      await nextTick();
-      if (chatWindow.value) chatWindow.value.scrollTop = chatWindow.value.scrollHeight;
-    };
-
-    const handleWindowScroll = async () => {
-      if (!chatWindow.value || chatWindow.value.scrollTop !== 0 || loadingHistory.value || messageList.value.length === 0) return;
-      loadingHistory.value = true;
-      const oldScrollHeight = chatWindow.value.scrollHeight;
-      const cursorTimestamp = messageList.value[0].timestamp;
-      try {
-        const older = await loadMessages(cursorTimestamp);
-        if (older.length > 0) {
-          messageList.value = [...older, ...messageList.value];
-          await nextTick();
-          chatWindow.value.scrollTop = chatWindow.value.scrollHeight - oldScrollHeight;
-        }
-      } finally {
-        loadingHistory.value = false;
-      }
-    };
-
-    const statusDotClass = (status) => ({ green: 'bg-emerald-400', red: 'bg-red-400', gray: 'bg-slate-400' }[status] || 'bg-slate-400');
+    const statusDotClass = (status) => `status-dot status-${['green', 'red', 'gray'].includes(status) ? status : 'gray'}`;
     const formatTs = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '-';
-    const avatarUrl = (id) => `https://q.qlogo.cn/g?b=qq&nk=${encodeURIComponent(id)}&s=100`;
-    const roomAvatarUrl = (id) => `https://p.qlogo.cn/gh/${encodeURIComponent(id)}/${encodeURIComponent(id)}/100`;
-    const mediaUrl = (value) => value;
+    const avatarText = (id) => {
+      const value = text(id).trim();
+      return value ? value.slice(-2).toUpperCase() : '--';
+    };
     const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
     const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
 
-    onMounted(loadAdapters);
-
-    return {
-      accountList, currentRobot, roomList, currentRoom, messageList, searchQuery,
-      searchResults, searchMode, searching, settingsMode, adapterForm, savingAdapter, editingAdapterId,
-      loadingRooms, loadingHistory, chatWindow, filteredRooms, exportDialogVisible, exporting, exportForm,
-      importDialogVisible, importPackageText, importValidationReport, importValidating, importing,
-      switchAccount, selectRoom, selectSearchResult, performSearch, clearSearch, openExportDialog, downloadExportPackage,
-      openImportDialog, validateImportPackage, submitImportPackage, reloadCurrentRoom, handleWindowScroll,
-      resetAdapterForm, editAdapter, saveAdapter, deleteAdapter,
-      statusDotClass, formatTs, avatarUrl, roomAvatarUrl, mediaUrl, isMedia, isImg, isVideo, isVoice,
+    const clearNode = (node) => {
+      while (node.firstChild) node.removeChild(node.firstChild);
     };
-  }
-}).use(ElementPlus).mount('#app');
-</script>
+
+    const button = (label, className, onClick) => {
+      const node = document.createElement('button');
+      node.className = className;
+      node.type = 'button';
+      node.textContent = label;
+      node.addEventListener('click', onClick);
+      return node;
+    };
+
+    const renderAccounts = () => {
+      const container = el('accountList');
+      clearNode(container);
+      state.accountList.forEach((acc) => {
+        const node = document.createElement('button');
+        node.className = `avatar-button${state.currentRobot && state.currentRobot.id === acc.id ? ' active' : ''}`;
+        node.title = `${acc.id} · ${acc.status}`;
+        node.type = 'button';
+        node.addEventListener('click', () => switchAccount(acc));
+
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar';
+        avatar.textContent = avatarText(acc.id);
+        node.appendChild(avatar);
+
+        const dot = document.createElement('span');
+        dot.className = statusDotClass(acc.status);
+        node.appendChild(dot);
+        container.appendChild(node);
+      });
+      el('accountCount').textContent = state.accountList.length;
+    };
+
+    const renderAdapters = () => {
+      const container = el('adapterList');
+      clearNode(container);
+      state.accountList.forEach((acc) => {
+        const row = document.createElement('div');
+        row.className = 'adapter-item';
+        const edit = button(`${acc.id} · ${acc.platform} · ${acc.status}`, 'btn link truncate', () => editAdapter(acc));
+        const remove = button('删除', 'btn link danger', () => deleteAdapter(acc.id));
+        row.append(edit, remove);
+        container.appendChild(row);
+      });
+    };
+
+    const renderRooms = () => {
+      const container = el('roomList');
+      clearNode(container);
+      if (state.loadingRooms) {
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'loading', textContent: '正在加载会话...' }));
+        return;
+      }
+      if (state.roomList.length === 0) {
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '暂无可见会话' }));
+        return;
+      }
+      state.roomList.forEach((room) => {
+        const row = document.createElement('button');
+        row.className = `room-item${state.currentRoom && state.currentRoom.room_id === room.room_id ? ' active' : ''}`;
+        row.type = 'button';
+        row.addEventListener('click', () => selectRoom(room));
+
+        const thumb = document.createElement('div');
+        thumb.className = 'room-thumb';
+        const avatar = document.createElement('div');
+        avatar.className = 'room-avatar';
+        avatar.textContent = avatarText(room.room_id);
+        thumb.appendChild(avatar);
+
+        const body = document.createElement('div');
+        body.style.minWidth = '0';
+        body.style.flex = '1';
+        const name = document.createElement('div');
+        name.className = 'truncate';
+        name.textContent = room.room_id;
+        const meta = document.createElement('div');
+        meta.className = 'hint truncate';
+        meta.textContent = `最近存盘: ${formatTs(room.last_timestamp)}`;
+        body.append(name, meta);
+        row.append(thumb, body);
+        container.appendChild(row);
+      });
+    };
+
+    const renderSearchResults = () => {
+      const panel = el('searchPanel');
+      panel.classList.toggle('open', state.searchMode);
+      el('searchResultCount').textContent = state.searchResults.length;
+      const container = el('searchResults');
+      clearNode(container);
+      if (!state.searchMode) return;
+      if (state.searchResults.length === 0) {
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '没有匹配消息' }));
+        return;
+      }
+      state.searchResults.forEach((result) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'result-item';
+        item.addEventListener('click', () => selectSearchResult(result));
+        const meta = document.createElement('div');
+        meta.className = 'result-meta';
+        meta.innerHTML = `<span></span><span></span>`;
+        meta.children[0].textContent = `${result.room_id} · ${result.nickname || result.sender_id}`;
+        meta.children[1].textContent = formatTs(result.timestamp);
+        const body = document.createElement('div');
+        body.className = 'truncate';
+        body.textContent = result.local_message;
+        item.append(meta, body);
+        container.appendChild(item);
+      });
+    };
+
+    const renderSettings = () => {
+      el('settingsPanel').classList.toggle('open', state.settingsMode);
+      el('adapterId').disabled = Boolean(state.editingAdapterId);
+      el('saveAdapterButton').textContent = state.editingAdapterId ? '保存修改' : '添加账号';
+      renderAdapters();
+    };
+
+    const renderChat = () => {
+      el('roomTitle').textContent = state.currentRoom ? state.currentRoom.room_id : '请选择会话';
+      el('robotView').textContent = state.currentRobot ? ` 视角: ${state.currentRobot.id}` : '';
+      el('refreshButton').disabled = !state.currentRoom;
+      el('openExportButton').disabled = !state.currentRobot;
+      el('chatEmpty').hidden = Boolean(state.currentRoom);
+      el('chatWindow').hidden = !state.currentRoom;
+      const chat = el('chatWindow');
+      clearNode(chat);
+      if (!state.currentRoom) return;
+      if (state.loadingHistory) {
+        const loading = document.createElement('div');
+        loading.className = 'hint';
+        loading.style.textAlign = 'center';
+        loading.textContent = '正在加载更早记录...';
+        chat.appendChild(loading);
+      }
+      if (state.messageList.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.style.textAlign = 'center';
+        empty.textContent = '暂无消息';
+        chat.appendChild(empty);
+        return;
+      }
+      state.messageList.forEach((msg) => {
+        const mine = state.currentRobot && msg.sender_id === state.currentRobot.id;
+        const row = document.createElement('div');
+        row.className = `message${mine ? ' mine' : ''}`;
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar message-avatar';
+        avatar.textContent = avatarText(msg.sender_id);
+        const body = document.createElement('div');
+        body.className = 'message-body';
+        const meta = document.createElement('div');
+        meta.className = 'message-meta';
+        meta.textContent = `${msg.nickname || msg.sender_id} · ${formatTs(msg.timestamp)}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        renderMessageContent(bubble, msg.local_message);
+        body.append(meta, bubble);
+        row.append(avatar, body);
+        chat.appendChild(row);
+      });
+    };
+
+    const renderMessageContent = (container, value) => {
+      clearNode(container);
+      if (!isMedia(value)) {
+        container.textContent = value;
+        return;
+      }
+      if (isImg(value)) {
+        const img = document.createElement('img');
+        img.className = 'media-img';
+        img.src = value;
+        img.alt = '媒体图片';
+        container.appendChild(img);
+        return;
+      }
+      if (isVideo(value)) {
+        const video = document.createElement('video');
+        video.className = 'media-video';
+        video.src = value;
+        video.controls = true;
+        container.appendChild(video);
+        return;
+      }
+      if (isVoice(value)) {
+        const audio = document.createElement('audio');
+        audio.src = value;
+        audio.controls = true;
+        container.appendChild(audio);
+        return;
+      }
+      const link = document.createElement('a');
+      link.href = value;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      link.textContent = '打开媒体资产';
+      container.appendChild(link);
+    };
+
+    const renderAll = () => {
+      renderAccounts();
+      renderSettings();
+      renderSearchResults();
+      renderRooms();
+      renderChat();
+    };
+
+    const loadAdapters = async () => {
+      state.accountList = await apiGet('/api/adapters');
+      if (state.accountList.length > 0 && !state.currentRobot) {
+        await switchAccount(state.accountList[0]);
+      } else {
+        renderAll();
+      }
+    };
+
+    async function switchAccount(acc) {
+      state.currentRobot = acc;
+      state.currentRoom = null;
+      state.messageList = [];
+      clearSearch();
+      state.loadingRooms = true;
+      renderAll();
+      try {
+        state.roomList = await apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`);
+      } finally {
+        state.loadingRooms = false;
+        renderAll();
+      }
+    }
+
+    const resetAdapterForm = () => {
+      state.editingAdapterId = null;
+      el('adapterId').value = '';
+      el('adapterPlatform').value = 'qq';
+      el('adapterStatus').value = 'gray';
+      el('adapterConfig').value = '';
+      renderSettings();
+    };
+
+    const editAdapter = (adapter) => {
+      state.editingAdapterId = adapter.id;
+      el('adapterId').value = adapter.id;
+      el('adapterPlatform').value = adapter.platform;
+      el('adapterStatus').value = adapter.status;
+      el('adapterConfig').value = adapter.config_json || '';
+      renderSettings();
+    };
+
+    const saveAdapter = async () => {
+      const payload = {
+        platform: el('adapterPlatform').value,
+        status: el('adapterStatus').value,
+        config_json: el('adapterConfig').value ? el('adapterConfig').value : null,
+      };
+      if (!el('adapterId').value || !payload.platform) return;
+      if (state.editingAdapterId) {
+        await apiSend(`/api/adapters/${encodeURIComponent(state.editingAdapterId)}`, 'PATCH', payload);
+      } else {
+        await apiSend('/api/adapters', 'POST', { id: el('adapterId').value, ...payload });
+      }
+      resetAdapterForm();
+      await loadAdapters();
+    };
+
+    const deleteAdapter = async (adapterId) => {
+      await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
+      if (state.currentRobot && state.currentRobot.id === adapterId) {
+        state.currentRobot = null;
+        state.currentRoom = null;
+        state.messageList = [];
+        state.roomList = [];
+      }
+      await loadAdapters();
+    };
+
+    async function selectRoom(room) {
+      state.currentRoom = room;
+      state.messageList = [];
+      renderAll();
+      await reloadCurrentRoom();
+    }
+
+    async function selectSearchResult(result) {
+      let room = state.roomList.find((item) => item.room_id === result.room_id);
+      if (!room) {
+        room = { room_id: result.room_id, last_timestamp: result.timestamp };
+        state.roomList = [room, ...state.roomList];
+      }
+      state.currentRoom = room;
+      state.messageList = [result];
+      renderAll();
+      scrollChatToBottom();
+    }
+
+    async function performSearch() {
+      const keyword = el('searchInput').value.trim();
+      if (!state.currentRobot || !keyword) return;
+      state.searchMode = true;
+      state.searchResults = await apiGet(`/api/search?robot_id=${encodeURIComponent(state.currentRobot.id)}&keyword=${encodeURIComponent(keyword)}&limit=50`);
+      renderAll();
+    }
+
+    function clearSearch() {
+      state.searchMode = false;
+      state.searchResults = [];
+      renderAll();
+    }
+
+    const loadMessages = async (beforeTimestamp = null) => {
+      if (!state.currentRobot || !state.currentRoom) return [];
+      let url = `/api/messages?robot_id=${encodeURIComponent(state.currentRobot.id)}&room_id=${encodeURIComponent(state.currentRoom.room_id)}&limit=50`;
+      if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
+      return await apiGet(url);
+    };
+
+    async function reloadCurrentRoom() {
+      if (!state.currentRoom) return;
+      state.messageList = await loadMessages();
+      renderAll();
+      scrollChatToBottom();
+    }
+
+    const scrollChatToBottom = () => {
+      const chat = el('chatWindow');
+      chat.scrollTop = chat.scrollHeight;
+    };
+
+    async function handleWindowScroll() {
+      const chat = el('chatWindow');
+      if (!chat || chat.scrollTop !== 0 || state.loadingHistory || state.messageList.length === 0) return;
+      state.loadingHistory = true;
+      const oldScrollHeight = chat.scrollHeight;
+      const cursorTimestamp = state.messageList[0].timestamp;
+      renderChat();
+      try {
+        const older = await loadMessages(cursorTimestamp);
+        if (older.length > 0) {
+          state.messageList = [...older, ...state.messageList];
+          renderChat();
+          chat.scrollTop = chat.scrollHeight - oldScrollHeight;
+        }
+      } finally {
+        state.loadingHistory = false;
+        renderChat();
+      }
+    }
+
+    const openExportDialog = () => {
+      el('exportRobotId').value = state.currentRobot ? state.currentRobot.id : '';
+      el('exportRoomId').value = state.currentRoom ? state.currentRoom.room_id : '';
+      el('exportStartTimestamp').value = '';
+      el('exportEndTimestamp').value = '';
+      openModal('exportModal');
+    };
+
+    async function downloadExportPackage() {
+      if (!el('exportRobotId').value.trim()) return;
+      const params = new URLSearchParams();
+      [
+        ['robot_id', el('exportRobotId').value],
+        ['room_id', el('exportRoomId').value],
+        ['start_timestamp', el('exportStartTimestamp').value],
+        ['end_timestamp', el('exportEndTimestamp').value],
+      ].forEach(([key, value]) => {
+        if (text(value).trim()) params.append(key, text(value).trim());
+      });
+      const packageJson = await requestJson(`/api/export?${params.toString()}`);
+      const blob = new Blob([JSON.stringify(packageJson, null, 2)], { type: 'application/json;charset=utf-8' });
+      const link = document.createElement('a');
+      const objectUrl = URL.createObjectURL(blob);
+      link.href = objectUrl;
+      link.download = `chat-audit-export-${Date.now()}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      closeModal('exportModal');
+    }
+
+    const openImportDialog = () => {
+      el('importPackageText').value = '';
+      state.importValidationReport = null;
+      renderImportReport();
+      openModal('importModal');
+    };
+
+    const parseImportPackage = () => JSON.parse(el('importPackageText').value);
+
+    async function validateImportPackage() {
+      if (!el('importPackageText').value.trim()) return;
+      state.importValidationReport = await apiSend('/api/import/validate', 'POST', parseImportPackage());
+      renderImportReport();
+    }
+
+    async function submitImportPackage() {
+      if (!state.importValidationReport || !state.importValidationReport.valid) return;
+      await apiSend('/api/import', 'POST', parseImportPackage());
+      closeModal('importModal');
+      if (state.currentRobot) await switchAccount(state.currentRobot);
+    }
+
+    const renderImportReport = () => {
+      const box = el('importValidationReport');
+      clearNode(box);
+      const report = state.importValidationReport;
+      box.hidden = !report;
+      if (!report) return;
+      const rows = [
+        ['校验结果', report.valid ? '通过' : '失败', report.valid ? 'ok' : 'bad'],
+        ['schema', report.schema || '-'],
+        ['checksum', report.checksum_valid === null ? '未提供' : (report.checksum_valid ? '通过' : '失败')],
+        ['counts', `messages=${report.counts.messages} / robot_messages=${report.counts.robot_messages} / media_assets=${report.counts.media_assets} / media_files=${report.counts.media_files || 0}`],
+      ];
+      if (report.diff && report.diff.messages) {
+        rows.push(['diff.messages 新增/更新/不变', `${report.diff.messages.new} / ${report.diff.messages.update} / ${report.diff.messages.unchanged}`]);
+      }
+      if (report.diff && report.diff.robot_messages) {
+        rows.push(['diff.robot_messages 新增/已存在', `${report.diff.robot_messages.new} / ${report.diff.robot_messages.existing}`]);
+      }
+      if (report.diff && report.diff.media_assets) {
+        rows.push(['diff.media_assets 新增/更新/不变', `${report.diff.media_assets.new} / ${report.diff.media_assets.update} / ${report.diff.media_assets.unchanged}`]);
+      }
+      if (report.media_files) {
+        rows.push(['媒体文件 media_files checked/missing/mismatch', `${report.media_files.checked} / ${report.media_files.missing} / ${report.media_files.mismatch}`]);
+      }
+      if (report.errors && report.errors.length) rows.push(['errors', report.errors.join('; '), 'bad']);
+      rows.forEach(([name, value, className]) => {
+        const row = document.createElement('div');
+        const label = document.createElement('strong');
+        label.textContent = `${name}：`;
+        const valueNode = document.createElement('span');
+        if (className) valueNode.className = className;
+        valueNode.textContent = value;
+        row.append(label, valueNode);
+        box.appendChild(row);
+      });
+    };
+
+    const openModal = (id) => el(id).classList.add('open');
+    const closeModal = (id) => el(id).classList.remove('open');
+
+    const bindEvents = () => {
+      el('settingsToggle').addEventListener('click', () => { state.settingsMode = !state.settingsMode; renderSettings(); });
+      el('newAdapterButton').addEventListener('click', resetAdapterForm);
+      el('clearAdapterButton').addEventListener('click', resetAdapterForm);
+      el('saveAdapterButton').addEventListener('click', saveAdapter);
+      el('searchButton').addEventListener('click', performSearch);
+      el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
+      el('clearSearchButton').addEventListener('click', clearSearch);
+      el('refreshButton').addEventListener('click', reloadCurrentRoom);
+      el('chatWindow').addEventListener('scroll', handleWindowScroll);
+      el('openExportButton').addEventListener('click', openExportDialog);
+      el('downloadExportButton').addEventListener('click', downloadExportPackage);
+      el('openImportButton').addEventListener('click', openImportDialog);
+      el('validateImportButton').addEventListener('click', validateImportPackage);
+      el('submitImportButton').addEventListener('click', submitImportPackage);
+      document.querySelectorAll('[data-close-modal]').forEach((node) => {
+        node.addEventListener('click', () => closeModal(node.dataset.closeModal));
+      });
+    };
+
+    window.performSearch = performSearch;
+    window.selectSearchResult = selectSearchResult;
+    window.openExportDialog = openExportDialog;
+    window.downloadExportPackage = downloadExportPackage;
+    window.openImportDialog = openImportDialog;
+    window.validateImportPackage = validateImportPackage;
+    window.submitImportPackage = submitImportPackage;
+
+    bindEvents();
+    renderAll();
+    loadAdapters().catch((error) => {
+      console.error(error);
+      el('roomList').appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '控制台加载失败，请检查 API 或管理 Token。' }));
+    });
+  </script>
 </body>
 </html>
