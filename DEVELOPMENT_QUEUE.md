@@ -42,9 +42,9 @@ NAS 实测结果：
 - 继续保留回归测试，保证 `Dockerfile.ffmpeg` 不回退到 apt 构建。
 - 后续真实语音/视频样本接入时，补充端到端可播放验收。
 
-### 2. 微信 Hook 专用适配
+### 2. 微信 PC 托盘采集适配器
 
-状态：通用入口已完成，等待最终客户端。
+状态：通用入口已完成；下一阶段实现 Windows PC 静默托盘采集器，托盘软件内置集成 WeChatFerry。
 
 已完成：
 
@@ -59,13 +59,22 @@ NAS 实测结果：
 
 剩余：
 
-- 等最终选定微信 Hook 客户端后，追加客户端专属真实样本。
-- 根据真实客户端字段补充专属映射。
-- 更新部署说明。
+- NAS 后端增加外部消息接收兼容入口，例如 `POST /api/receive_external_msg`，并继续兼容 `POST /api/wechat/events`。
+- NAS 后端增加 Multipart 文件上传接口，供 PC 端上传图片、语音、视频和文件。
+- 新增 WeChatFerry 专属字段归一化层，覆盖 `wxid`、`roomid`、`sender`、`msg_id`、`type`、`content`、`thumb`、`extra` 和本地文件路径。
+- 新建 Windows PC 端 Python 托盘程序，默认无控制台、无主窗口，仅系统托盘图标。
+- 托盘程序直接依赖并调用 `wcferry`/WeChatFerry，不要求用户单独启动 WeChatFerry 服务。
+- 托盘程序支持 NAS 地址、Token、本机账号、开机自启、媒体自动下载和日志路径配置。
+- 托盘程序支持断线队列、自动重连、失败重试、上传状态和本地日志。
+- 托盘菜单提供连接状态、同步状态、打开 NAS 控制台、暂停/继续同步和退出。
+- 增加 WeChatFerry 真实样本回放、PC 端安装/打包说明和常见错误排查。
 
 验收：
 
-- 新客户端真实样本可入库并查询。
+- 托盘程序可通过 `pythonw.exe` 或 PyInstaller `--noconsole` 静默运行。
+- 官方 PC 微信收到的新消息可自动进入 NAS 并在 Web UI 查询。
+- 图片、语音、视频、文件可自动下载、上传、缓存并离线打开。
+- NAS 不可达时本地队列保留，恢复后自动补发，重复 `message_id` 不重复入库。
 - `platform=wechat` 不被 QQ 专属逻辑覆盖。
 - 全量测试通过。
 

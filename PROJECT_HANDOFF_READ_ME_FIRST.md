@@ -113,7 +113,7 @@ git push ssh://git@192.168.31.210:2222/YokiiroBW/chat-audit-core.git main
 
 仍需处理：
 
-- 微信 Hook 专用映射：当前已支持常见字段、数字类型和通用样本回放；后续应根据最终选定客户端追加专属真实样本和部署说明。
+- 微信 PC 托盘采集适配器：当前已支持通用微信 Hook 字段、数字类型和样本回放；下一阶段实现 Windows PC 静默托盘采集器，托盘软件内置集成 `wcferry`/WeChatFerry，不要求用户单独启动 WeChatFerry 服务。还需补 NAS 外部消息兼容入口、Multipart 文件上传、WeChatFerry 专属字段映射、断线队列、静默托盘 UI、真实样本和部署说明。
 - 持续更新交接文档：每次版本推进后更新最新提交、测试数量、NAS 状态和剩余队列。
 
 ## 继续推进规则
