@@ -17,7 +17,7 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`功能：增加数据库托管管理令牌`
+- 最新提交主题：`功能：增加管理令牌前端入口`
 - 本地全量测试：`118 passed`
 - NAS 部署：已部署最新版本
 - NAS 离线验收：`offline_ready=true`
@@ -25,7 +25,8 @@ read_this_first: true
 最近主线提交：
 
 ```text
-本文件所在提交 功能：增加数据库托管管理令牌
+本文件所在提交 功能：增加管理令牌前端入口
+e5a59d6 功能：增加数据库托管管理令牌
 6c79790 功能：增强微信映射和运行时状态
 4a94b61 功能：增加角色权限和迁移状态接口
 6214dfd 功能：增加操作审计和迁移记录
@@ -56,7 +57,7 @@ c035c19 功能：增加资产统计仪表盘
 - 微信 Hook 第二版入口：`POST /api/wechat/events`，支持常见嵌套字段、微信数字 `MsgType` 和群聊发送者前缀
 - 操作审计：`audit_logs` 与 `GET /api/audit/logs`
 - 高风险接口简单限流：`HIGH_RISK_RATE_LIMIT_PER_MINUTE`
-- 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`，支持 `viewer`、`operator`、`admin`
+- 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`，支持 `viewer`、`operator`、`admin`，Web 设置页可创建/列表/吊销托管 Token
 - 轻量迁移记录：`schema_migrations` 与 `GET /api/system/migrations`
 - 运行时状态：`GET /api/system/runtime`，可检查 FFmpeg 可用性和转码配置
 - 可选 FFmpeg 镜像：`Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`
@@ -116,7 +117,7 @@ git -c "http.extraHeader=Authorization: Basic $credential" push origin main
 
 - 容器内置 FFmpeg：已有可选 FFmpeg Dockerfile/compose 覆盖文件；NAS 默认仍走离线友好镜像，启用前需确认 apt 源或使用预构建镜像。
 - 微信 Hook 专用映射：当前已支持常见字段和数字类型；后续应根据最终选定客户端补真实样本回放测试和部署说明。
-- 多角色权限增强：当前已支持静态角色 Token 和数据库托管 Token；后续如需要，可继续做数据库用户、登录态和前端角色管理。
+- 多角色权限增强：当前已支持静态角色 Token、数据库托管 Token 和前端管理面板；后续如需要，可继续做数据库用户、登录态和更细粒度角色 UI。
 - 完整 Alembic：当前是可查询的轻量 `schema_migrations` 记录，复杂结构变更时建议迁入 Alembic。
 - Forgejo SSH：当前 SSH 检查失败，原因是本机缺少 `C:\Users\Administrator\.ssh\id_ed25519_forgejo`。HTTPS token 推送可用。
 

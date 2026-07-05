@@ -609,6 +609,20 @@
           <button id="runBackupButton" class="btn link">立即备份</button>
         </div>
         <div id="backupStatusReport" class="report"></div>
+        <div class="settings-title">
+          <span>管理令牌</span>
+          <button id="createAdminTokenButton" class="btn link">创建令牌</button>
+        </div>
+        <div class="form-grid">
+          <input id="adminTokenName" placeholder="令牌名称" />
+          <select id="adminTokenRole">
+            <option value="viewer">viewer</option>
+            <option value="operator">operator</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+        <div id="adminTokenCreateReport" class="report" hidden></div>
+        <div id="adminTokenList" class="adapter-list"></div>
         <div id="adapterList" class="adapter-list"></div>
       </div>
 
@@ -713,6 +727,9 @@
       dashboard: null,
       backupStatus: null,
       backupRunResult: null,
+      adminTokenList: [],
+      adminTokenCreateResult: null,
+      adminTokenError: '',
       currentRobot: null,
       roomList: [],
       currentRoom: null,
@@ -990,6 +1007,7 @@
       el('adapterId').disabled = Boolean(state.editingAdapterId);
       el('saveAdapterButton').textContent = state.editingAdapterId ? '保存修改' : '添加账号';
       renderBackupStatus();
+      renderAdminTokens();
       renderAdapters();
     };
 
@@ -1020,6 +1038,45 @@
         valueNode.textContent = value;
         row.append(label, valueNode);
         box.appendChild(row);
+      });
+    };
+
+    const renderAdminTokens = () => {
+      const report = el('adminTokenCreateReport');
+      clearNode(report);
+      report.hidden = !state.adminTokenCreateResult && !state.adminTokenError;
+      if (state.adminTokenCreateResult) {
+        const title = document.createElement('strong');
+        title.textContent = '新令牌：';
+        const token = document.createElement('span');
+        token.textContent = state.adminTokenCreateResult.token;
+        report.append(title, token);
+      } else if (state.adminTokenError) {
+        const error = document.createElement('span');
+        error.className = 'bad';
+        error.textContent = state.adminTokenError;
+        report.appendChild(error);
+      }
+
+      const container = el('adminTokenList');
+      clearNode(container);
+      if (!state.adminTokenList.length) {
+        const empty = document.createElement('div');
+        empty.className = 'hint';
+        empty.textContent = '暂无数据库托管令牌';
+        container.appendChild(empty);
+        return;
+      }
+      state.adminTokenList.forEach((token) => {
+        const row = document.createElement('div');
+        row.className = 'adapter-item';
+        const label = document.createElement('span');
+        label.className = 'truncate';
+        label.textContent = `${token.name} · ${token.role} · ${token.status} · ${token.token_prefix}`;
+        const revoke = button('吊销', 'btn link danger', () => revokeAdminToken(token.id));
+        revoke.disabled = token.status === 'revoked';
+        row.append(label, revoke);
+        container.appendChild(row);
       });
     };
 
@@ -1523,6 +1580,7 @@
       state.backupStatus = backupStatus;
       state.accountList = bots;
       state.adapterList = adapters;
+      await refreshAdminTokens();
       if (state.accountList.length > 0 && !state.currentRobot) {
         await switchAccount(state.accountList[0]);
       } else {
@@ -1589,6 +1647,33 @@
       state.backupStatus = await apiGet('/api/backup/status');
       state.dashboard = await apiGet('/api/dashboard');
       renderAll();
+    }
+
+    async function refreshAdminTokens() {
+      try {
+        state.adminTokenList = await apiGet('/api/admin/tokens');
+        state.adminTokenError = '';
+      } catch (error) {
+        state.adminTokenList = [];
+        state.adminTokenError = error.message || String(error);
+      }
+    }
+
+    async function createAdminToken() {
+      const name = el('adminTokenName').value.trim();
+      const role = el('adminTokenRole').value;
+      if (!name) return;
+      state.adminTokenCreateResult = await apiSend('/api/admin/tokens', 'POST', { name, role });
+      el('adminTokenName').value = '';
+      await refreshAdminTokens();
+      renderSettings();
+    }
+
+    async function revokeAdminToken(tokenId) {
+      await apiSend(`/api/admin/tokens/${encodeURIComponent(tokenId)}`, 'DELETE');
+      state.adminTokenCreateResult = null;
+      await refreshAdminTokens();
+      renderSettings();
     }
 
     async function selectRoom(room) {
@@ -1847,6 +1932,7 @@
       el('clearAdapterButton').addEventListener('click', resetAdapterForm);
       el('saveAdapterButton').addEventListener('click', saveAdapter);
       el('runBackupButton').addEventListener('click', runManualBackup);
+      el('createAdminTokenButton').addEventListener('click', createAdminToken);
       el('searchButton').addEventListener('click', performSearch);
       el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
       el('clearSearchButton').addEventListener('click', clearSearch);

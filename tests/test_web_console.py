@@ -68,6 +68,13 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "自动备份" in html
     assert "runManualBackup" in html
     assert "backupStatusReport" in html
+    assert "管理令牌" in html
+    assert "createAdminToken" in html
+    assert "revokeAdminToken" in html
+    assert "refreshAdminTokens" in html
+    assert "adminTokenCreateReport" in html
+    assert "adminTokenList" in html
+    assert "/api/admin/tokens" in html
     assert "adapterId" in html
     assert "saveAdapter" in html
     assert "deleteAdapter" in html

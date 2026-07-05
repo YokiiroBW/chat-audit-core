@@ -221,6 +221,7 @@ DELETE /api/admin/tokens/{id}  # 吊销
 ```
 
 生产环境建议仍保留一个静态 `ADMIN_API_TOKEN` 作为 bootstrap/应急入口，再用数据库托管 Token 分配日常只读或运维权限。
+Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建和吊销入口。
 
 ## 操作审计与限流
 
