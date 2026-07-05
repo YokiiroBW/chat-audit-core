@@ -38,15 +38,18 @@
 
 ### T7.2 启用完整 Alembic CLI
 
-状态：待处理
+状态：已完成
 
 目标：
 - 将 Alembic 加入依赖并提供 `alembic.ini`、`env.py` 和升级命令。
 - 本地与 NAS 均可执行版本化迁移。
 
-阻塞：
-- 需要确认 NAS Docker 构建阶段可从 PyPI 安装 `alembic`，或提供内网 wheel/预构建镜像。
-- 2026-07-05 复查：`requirements.txt` 仍未包含 `alembic`，当前保持不新增运行依赖。
+已完成：
+- `requirements.txt` 新增 `alembic==1.16.5`。
+- 新增 `alembic.ini` 与 `migrations/env.py`，读取当前 `DATABASE_URL` 执行迁移。
+- 现有 7 个版本脚本已改为可执行幂等迁移。
+- 新增 `tests/test_alembic_cli.py`，覆盖空库初始化和旧库兼容列补齐。
+- 本地 `python -m alembic upgrade head` 与 `python -m alembic current` 已通过。
 
 验收：
 - 本地 `alembic upgrade head` 可用。

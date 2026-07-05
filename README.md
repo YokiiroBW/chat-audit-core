@@ -284,8 +284,20 @@ HIGH_RISK_RATE_LIMIT_PER_MINUTE=10
 - `schema_migrations`
 - `admin_tokens`
 - `system_settings`
+- `admin_users`
+- `admin_sessions`
 
-这不是完整 Alembic 体系，但轻量迁移已经收拢为显式注册表：每条迁移都有版本、说明和执行函数，并覆盖新库初始化与旧库升级测试。`migrations/versions/` 已提供与轻量迁移注册表一一对应的 Alembic 风格版本脚本；后续确认运行依赖可安装后，可在此基础上接入 Alembic CLI。
+轻量启动迁移仍会在应用启动时做兼容兜底；同时已启用 Alembic CLI，`migrations/versions/` 与轻量迁移注册表一一对应，空库可初始化为当前 schema，旧库可补齐已知兼容列。
+
+本地或部署环境手动迁移：
+
+```powershell
+$env:DATABASE_URL='sqlite+aiosqlite:///./data/chat_audit.sqlite3'
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+容器内可使用同样的 `DATABASE_URL` 执行 `python -m alembic upgrade head`。
 
 迁移状态查询：
 

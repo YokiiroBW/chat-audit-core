@@ -16,7 +16,7 @@
 
 ### 1. FFmpeg 与媒体转码流水线
 
-状态：已完成第三版
+状态：已完成第四版
 
 目标：
 - Docker 运行时包含可用 FFmpeg。
@@ -159,9 +159,12 @@
 - 新增 `GET /api/system/migrations` 查询当前已知轻量迁移的应用状态。
 - 新增旧 SQLite schema 升级回归测试。
 - 新增 `migrations/versions/` Alembic 风格版本脚本骨架，并用测试校验与轻量迁移注册表一致。
+- 新增 `alembic.ini` 与 `migrations/env.py`，可通过 `DATABASE_URL` 执行 `python -m alembic upgrade head`。
+- 版本脚本已改为可执行幂等迁移，空库可初始化当前 schema，旧库可补齐已知兼容列。
+- 新增 Alembic CLI 回归测试，覆盖空库初始化和旧库升级。
 
 剩余：
-- 尚未启用完整 Alembic CLI；需要确认 NAS/PyPI 依赖安装路径后再加入运行依赖。
+- 暂无本项剩余开发；NAS 部署后需确认新依赖安装和容器内 Alembic 命令可用。
 
 验收：
 - 新库可初始化。

@@ -1,9 +1,19 @@
 # Migration Scripts
 
-This directory is Alembic-ready but does not require Alembic at runtime yet.
+This directory is the Alembic migration home.
 
-Current production startup still uses `app.database.LIGHTWEIGHT_MIGRATION_REGISTRY`.
-The files in `migrations/versions/` mirror that registry one-to-one so future
-Alembic adoption can move from the same ordered version chain instead of
-reconstructing history later.
+Production startup still runs `app.database.LIGHTWEIGHT_MIGRATION_REGISTRY` as
+a compatibility fallback, while Alembic provides an explicit CLI path for manual
+and deployment-time upgrades.
 
+The files in `migrations/versions/` mirror the lightweight registry one-to-one.
+They are intentionally idempotent: a fresh database is initialized to the
+current schema, and legacy databases can still receive the known compatibility
+columns.
+
+Typical usage:
+
+```bash
+DATABASE_URL=sqlite+aiosqlite:///./data/chat_audit.sqlite3 python -m alembic upgrade head
+python -m alembic current
+```
