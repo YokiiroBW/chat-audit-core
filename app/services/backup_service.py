@@ -110,7 +110,7 @@ class BackupService:
     @staticmethod
     def _extract_local_media_paths(local_message: str, public_storage_prefix: str = "/static/storage") -> set[str]:
         prefix = public_storage_prefix.rstrip("/") + "/"
-        pattern = re.compile(rf"{re.escape(prefix)}[^\s\"'<>),\]]+")
+        pattern = re.compile(rf"{re.escape(prefix)}[^\s\"'<>),\]]+?\.[a-z0-9]+", re.I)
         return set(pattern.findall(local_message))
 
     @staticmethod

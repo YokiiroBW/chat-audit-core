@@ -8,6 +8,15 @@ from app.services.backup_service import BackupService
 from app.services.message_service import MessageService
 
 
+def test_extract_local_media_paths_keeps_adjacent_paths_separate():
+    first = "/static/storage/0669c1a54674ebadf3f168c71ec9261e.jpg"
+    second = "/static/storage/f6ef740f428e5761be7d08d6265541ca.jpg"
+
+    paths = BackupService._extract_local_media_paths(first + second + "后续文字")
+
+    assert paths == {first, second}
+
+
 @pytest.mark.asyncio
 async def test_backup_service_exports_filtered_messages_and_manifest(db_session):
     await MessageService.process_incoming_message(
