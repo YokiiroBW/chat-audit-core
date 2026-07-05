@@ -90,6 +90,25 @@ data/backups  # 后续自动备份归档
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
+## 媒体转码
+
+默认情况下，系统会下载并缓存 QQ/NapCat 提供的原始媒体文件，保证原始记录可追溯。
+
+如需提高语音、视频在浏览器里的播放兼容性，可启用 FFmpeg 转码：
+
+```text
+MEDIA_TRANSCODE_ENABLED=true
+MEDIA_TRANSCODE_VOICE_EXT=mp3
+MEDIA_TRANSCODE_VIDEO_EXT=mp4
+FFMPEG_BIN=ffmpeg
+```
+
+说明：
+
+- 语音会尝试转为 MP3，视频会尝试转为 MP4。
+- 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
+- Docker 镜像已安装 FFmpeg；本地开发环境需要自行保证 `FFMPEG_BIN` 可执行。
+
 ## 自动备份
 
 应用启动时会根据 `AUTO_BACKUP_CRON` 启动自动备份任务，将导出包写入 `BACKUP_ROOT`。

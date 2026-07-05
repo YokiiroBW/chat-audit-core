@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from app.services.media_service import MediaService, parse_cq_media_segments
+from app.services.media_service import MediaService, TranscodedMedia, parse_cq_media_segments
 from app.services.message_service import MessageService
 
 
@@ -124,6 +124,65 @@ async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_pat
     assert rewritten == raw
     assert assets == []
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_download_url_to_local_path_transcodes_voice_when_enabled(db_session, tmp_path, monkeypatch):
+    client = StubAsyncClient({"http://media.local/v.silk": b"silk voice"})
+
+    async def fake_transcode(content, media_type, *, ffmpeg_bin, voice_ext="mp3", video_ext="mp4"):
+        assert content == b"silk voice"
+        assert media_type == "voice"
+        assert ffmpeg_bin == "fake-ffmpeg"
+        assert voice_ext == "mp3"
+        return TranscodedMedia(content=b"mp3 voice", ext="mp3")
+
+    monkeypatch.setattr(MediaService, "transcode_media_bytes", fake_transcode)
+
+    local_path = await MediaService.download_url_to_local_path(
+        db_session,
+        "http://media.local/v.silk",
+        media_type="voice",
+        file_name="v.silk",
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        transcode_enabled=True,
+        ffmpeg_bin="fake-ffmpeg",
+    )
+
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert local_path is not None
+    assert local_path.endswith(".mp3")
+    assert assets[0].file_type == "voice"
+    assert (tmp_path / local_path.rsplit("/", 1)[-1]).read_bytes() == b"mp3 voice"
+
+
+@pytest.mark.asyncio
+async def test_download_url_to_local_path_keeps_original_when_transcode_fails(db_session, tmp_path, monkeypatch):
+    client = StubAsyncClient({"http://media.local/v.silk": b"silk voice"})
+
+    async def fake_transcode(content, media_type, *, ffmpeg_bin, voice_ext="mp3", video_ext="mp4"):
+        return None
+
+    monkeypatch.setattr(MediaService, "transcode_media_bytes", fake_transcode)
+
+    local_path = await MediaService.download_url_to_local_path(
+        db_session,
+        "http://media.local/v.silk",
+        media_type="voice",
+        file_name="v.silk",
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        transcode_enabled=True,
+        ffmpeg_bin="missing-ffmpeg",
+    )
+
+    assert local_path is not None
+    assert local_path.endswith(".silk")
+    assert (tmp_path / local_path.rsplit("/", 1)[-1]).read_bytes() == b"silk voice"
 
 
 @pytest.mark.asyncio

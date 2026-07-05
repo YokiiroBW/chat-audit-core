@@ -9,7 +9,8 @@ def test_dockerfile_uses_offline_friendly_runtime_and_runs_uvicorn():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
-    assert "apt-get" not in dockerfile
+    assert "apt-get install -y --no-install-recommends ffmpeg" in dockerfile
+    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
     assert "curl" not in dockerfile
     assert "pip install" in dockerfile
     assert "requirements.txt" in dockerfile
@@ -32,6 +33,10 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert services["app"]["environment"]["APP_SECRET_KEY"] == "${APP_SECRET_KEY}"
     assert services["app"]["environment"]["ADMIN_API_TOKEN"] == "${ADMIN_API_TOKEN}"
     assert services["app"]["environment"]["ONEBOT_ACCESS_TOKEN"] == "${ONEBOT_ACCESS_TOKEN}"
+    assert services["app"]["environment"]["FFMPEG_BIN"] == "ffmpeg"
+    assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"
+    assert services["app"]["environment"]["MEDIA_TRANSCODE_VOICE_EXT"] == "mp3"
+    assert services["app"]["environment"]["MEDIA_TRANSCODE_VIDEO_EXT"] == "mp4"
     assert services["app"]["environment"]["AUTO_BACKUP_CRON"] == "0 3 * * *"
     assert services["app"]["environment"]["AUTO_BACKUP_KEEP_LATEST"] == 7
     assert "healthcheck" in services["postgres"]

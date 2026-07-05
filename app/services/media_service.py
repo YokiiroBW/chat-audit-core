@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import re
@@ -18,6 +19,12 @@ class CQMediaSegment:
     raw: str
     media_type: str
     url: str
+    ext: str
+
+
+@dataclass(frozen=True)
+class TranscodedMedia:
+    content: bytes
     ext: str
 
 
@@ -195,6 +202,101 @@ def parse_cq_media_segments(raw_message: str) -> list[CQMediaSegment]:
 
 class MediaService:
     @staticmethod
+    def _target_transcode_ext(media_type: str, voice_ext: str, video_ext: str) -> str | None:
+        if media_type == "voice":
+            return voice_ext.lstrip(".").lower() or "mp3"
+        if media_type == "video":
+            return video_ext.lstrip(".").lower() or "mp4"
+        return None
+
+    @staticmethod
+    def _ffmpeg_args_for(media_type: str, target_ext: str) -> list[str]:
+        if media_type == "voice":
+            if target_ext == "ogg":
+                return ["-vn", "-f", "ogg", "-codec:a", "libopus", "pipe:1"]
+            if target_ext == "wav":
+                return ["-vn", "-f", "wav", "pipe:1"]
+            return ["-vn", "-f", "mp3", "-codec:a", "libmp3lame", "pipe:1"]
+        if media_type == "video":
+            return [
+                "-f",
+                "mp4",
+                "-movflags",
+                "frag_keyframe+empty_moov",
+                "-codec:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-codec:a",
+                "aac",
+                "pipe:1",
+            ]
+        return []
+
+    @staticmethod
+    async def transcode_media_bytes(
+        content: bytes,
+        media_type: str,
+        *,
+        ffmpeg_bin: str,
+        voice_ext: str = "mp3",
+        video_ext: str = "mp4",
+    ) -> TranscodedMedia | None:
+        target_ext = MediaService._target_transcode_ext(media_type, voice_ext, video_ext)
+        if target_ext is None:
+            return None
+
+        command = [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            *MediaService._ffmpeg_args_for(media_type, target_ext),
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _stderr = await process.communicate(content)
+        except (FileNotFoundError, OSError):
+            return None
+
+        if process.returncode != 0 or not stdout:
+            return None
+        return TranscodedMedia(content=stdout, ext=target_ext)
+
+    @staticmethod
+    async def _maybe_transcode_media(
+        content: bytes,
+        media_type: str,
+        ext: str,
+        *,
+        enabled: bool,
+        ffmpeg_bin: str,
+        voice_ext: str,
+        video_ext: str,
+        max_bytes: int,
+    ) -> tuple[bytes, str]:
+        if not enabled:
+            return content, ext
+
+        transcoded = await MediaService.transcode_media_bytes(
+            content,
+            media_type,
+            ffmpeg_bin=ffmpeg_bin,
+            voice_ext=voice_ext,
+            video_ext=video_ext,
+        )
+        if transcoded is None or len(transcoded.content) > max_bytes:
+            return content, ext
+        return transcoded.content, transcoded.ext
+
+    @staticmethod
     async def save_unavailable_placeholder(
         db: AsyncSession,
         url: str,
@@ -263,10 +365,13 @@ class MediaService:
         storage_root: str | Path | None = None,
         public_prefix: str | None = None,
         max_bytes: int | None = None,
+        transcode_enabled: bool | None = None,
+        ffmpeg_bin: str | None = None,
     ) -> str | None:
         from app.services.message_service import MessageService
 
-        media_max_bytes = max_bytes if max_bytes is not None else get_settings().media_max_bytes
+        settings = get_settings()
+        media_max_bytes = max_bytes if max_bytes is not None else settings.media_max_bytes
         owns_client = http_client is None
         client = http_client or httpx.AsyncClient()
         try:
@@ -281,11 +386,22 @@ class MediaService:
                 return None
             if len(response.content) > media_max_bytes:
                 return None
+            ext = _guess_ext(url, file_name, media_type)
+            content, ext = await MediaService._maybe_transcode_media(
+                response.content,
+                media_type,
+                ext,
+                enabled=settings.media_transcode_enabled if transcode_enabled is None else transcode_enabled,
+                ffmpeg_bin=ffmpeg_bin or settings.ffmpeg_bin,
+                voice_ext=settings.media_transcode_voice_ext,
+                video_ext=settings.media_transcode_video_ext,
+                max_bytes=media_max_bytes,
+            )
             return await MessageService.save_media_asset(
                 db,
-                file_content=response.content,
+                file_content=content,
                 file_type=media_type,
-                ext=_guess_ext(url, file_name, media_type),
+                ext=ext,
                 storage_root=storage_root,
                 public_prefix=public_prefix,
             )
