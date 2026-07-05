@@ -107,8 +107,16 @@ FFMPEG_BIN=ffmpeg
 
 - 语音会尝试转为 MP3，视频会尝试转为 MP4。
 - 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
-- 默认 Docker 镜像保持离线友好，不在构建期联网安装 FFmpeg；需要转码时请使用已内置 FFmpeg 的自定义镜像，或在运行环境中提供可执行的 `FFMPEG_BIN`。
-- 如部署环境允许联网 apt 构建，可使用可选覆盖文件构建内置 FFmpeg 镜像：
+- 默认 Docker 镜像保持离线友好，不在构建期联网安装 FFmpeg；需要转码时可以选择挂载宿主机已有 FFmpeg，或自动构建内置 FFmpeg 镜像。
+
+宿主机/NAS 已经有 FFmpeg 时，可直接挂载可执行文件到容器：
+
+```powershell
+$env:FFMPEG_HOST_BIN='/usr/bin/ffmpeg'
+docker compose -f docker-compose.yml -f docker-compose.ffmpeg-host.yml up -d
+```
+
+宿主机没有 FFmpeg，且部署环境允许联网 apt 构建时，可自动构建内置 FFmpeg 镜像：
 
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build

@@ -29,10 +29,11 @@
 - FFmpeg 不可用时自动保存原始文件。
 - 默认 Docker 镜像继续保持离线友好，不依赖 apt 源。
 - 新增 `Dockerfile.ffmpeg` 与 `docker-compose.ffmpeg.yml`，用于允许联网构建时显式生成内置 FFmpeg 镜像。
+- 新增 `docker-compose.ffmpeg-host.yml`，用于宿主机/NAS 已有 FFmpeg 时直接挂载可执行文件。
 - 新增 `GET /api/system/runtime`，可查看 `ffmpeg_available`、`ffmpeg_version` 与转码配置。
 
 剩余：
-- NAS 默认部署仍使用离线友好镜像；如要在 NAS 上启用容器内置 FFmpeg，需要确认 NAS 构建环境可访问 apt 源，或提供内网预构建镜像。
+- NAS 默认部署仍使用离线友好镜像；如要启用 FFmpeg，可选择宿主机挂载路径，或在 NAS 构建环境可访问 apt 源时使用自动安装镜像。
 
 验收：
 - 单元测试覆盖转码成功、FFmpeg 不可用、转码失败回退。

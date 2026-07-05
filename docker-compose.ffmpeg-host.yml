@@ -1,0 +1,7 @@
+services:
+  app:
+    environment:
+      MEDIA_TRANSCODE_ENABLED: "true"
+      FFMPEG_BIN: /opt/host-bin/ffmpeg
+    volumes:
+      - ${FFMPEG_HOST_BIN:?Set FFMPEG_HOST_BIN to the host ffmpeg executable path}:/opt/host-bin/ffmpeg:ro

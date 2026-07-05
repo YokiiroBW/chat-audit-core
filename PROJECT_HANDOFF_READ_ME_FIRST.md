@@ -17,8 +17,8 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`文档：更新 Alembic CLI 验收状态`
-- 本地全量测试：`136 passed`
+- 最新提交主题：`部署：增加宿主机 FFmpeg 挂载选项`
+- 本地全量测试：`137 passed`
 - NAS 部署：已部署 `6d8604e 修复：缩短 Alembic 版本号兼容 PostgreSQL`
 - NAS 基础验收：健康检查 200，首页 200，管理鉴权 401/200 正常
 - NAS 用户/session 专项验收：密码重置、旧会话失效、新密码登录、强制下线均通过
@@ -66,7 +66,7 @@ c035c19 功能：增加资产统计仪表盘
 - 用户与会话管理增强：`POST /api/admin/users/{id}/password`、`GET /api/admin/sessions`、`DELETE /api/admin/sessions/{id}`，支持密码重置后吊销旧会话、会话列表、强制下线，Web 高风险控件按角色禁用
 - 数据库迁移体系：`LIGHTWEIGHT_MIGRATION_REGISTRY` 启动兼容兜底、`schema_migrations` 状态记录、`GET /api/system/migrations` 查询，以及可执行的 Alembic CLI（`alembic.ini`、`migrations/env.py`、`migrations/versions/`）
 - 运行时状态：`GET /api/system/runtime`，可检查 FFmpeg 可用性和转码配置
-- 可选 FFmpeg 镜像：`Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`
+- 可选 FFmpeg 转码：宿主机挂载覆盖 `docker-compose.ffmpeg-host.yml`，或自动安装覆盖 `Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`
 
 ## NAS 部署信息
 
@@ -121,7 +121,7 @@ git -c "http.extraHeader=Authorization: Basic $credential" push origin main
 
 仍需处理：
 
-- 容器内置 FFmpeg：已有可选 FFmpeg Dockerfile/compose 覆盖文件；NAS 默认仍走离线友好镜像，启用前需确认 apt 源或使用预构建镜像。
+- FFmpeg 转码启用：compose 已支持宿主机已有 FFmpeg 直接挂载；若宿主机没有 FFmpeg，可用自动安装覆盖镜像，但该路径仍依赖 apt 源可用。
 - 微信 Hook 专用映射：当前已支持常见字段、数字类型和通用样本回放；后续应根据最终选定客户端追加专属真实样本和部署说明。
 
 ## SSH 检查结果

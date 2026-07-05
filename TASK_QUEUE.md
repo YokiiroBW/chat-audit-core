@@ -30,20 +30,21 @@
 
 ## 需要外部条件
 
-### T4 NAS 启用容器内置 FFmpeg
+### T4 NAS 启用 FFmpeg 转码
 
-状态：待外部确认
+状态：compose 可选路径已完成，实际启用待确认
 
-阻塞：
-- 需要确认 NAS 构建环境可访问 apt 源，或提供内网预构建镜像。
-- 2026-07-05 复查：内置 FFmpeg 方案仍依赖 `Dockerfile.ffmpeg` 中的 `apt-get install ffmpeg`。
+待确认：
+- 若 NAS/宿主机已有 FFmpeg，设置 `FFMPEG_HOST_BIN` 并使用 `docker-compose.ffmpeg-host.yml` 挂载。
+- 若 NAS/宿主机没有 FFmpeg，使用 `docker-compose.ffmpeg.yml` 自动构建内置 FFmpeg 镜像，此路径仍依赖 apt 源可用。
 
 当前可用能力：
 - `Dockerfile.ffmpeg`
 - `docker-compose.ffmpeg.yml`
+- `docker-compose.ffmpeg-host.yml`
 - `/api/system/runtime`
 
 验收：
-- NAS 使用 FFmpeg 镜像启动。
+- NAS 使用宿主机挂载或内置 FFmpeg 镜像启动。
 - `/api/system/runtime` 返回 `ffmpeg_available=true`。
 - 语音/视频转码样本验收通过。

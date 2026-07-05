@@ -71,6 +71,15 @@ def test_optional_ffmpeg_compose_override_uses_ffmpeg_dockerfile():
     assert app["environment"]["FFMPEG_BIN"] == "ffmpeg"
 
 
+def test_host_ffmpeg_compose_override_mounts_existing_binary():
+    compose = yaml.safe_load((ROOT / "docker-compose.ffmpeg-host.yml").read_text(encoding="utf-8"))
+
+    app = compose["services"]["app"]
+    assert app["environment"]["MEDIA_TRANSCODE_ENABLED"] == "true"
+    assert app["environment"]["FFMPEG_BIN"] == "/opt/host-bin/ffmpeg"
+    assert "${FFMPEG_HOST_BIN:?Set FFMPEG_HOST_BIN to the host ffmpeg executable path}:/opt/host-bin/ffmpeg:ro" in app["volumes"]
+
+
 def test_dockerignore_excludes_runtime_and_secret_files():
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
