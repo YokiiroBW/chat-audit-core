@@ -334,6 +334,17 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .media-missing {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #fee2e2;
+      color: #991b1b;
+      font-size: 12px;
+      font-weight: 700;
+    }
     .json-card {
       display: grid;
       grid-template-columns: 72px minmax(0, 1fr);
@@ -766,10 +777,11 @@
       container.appendChild(img);
     };
     const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
-    const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
+    const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
     const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
+    const isRemoteUrl = (value) => /^https?:\/\//i.test(String(value || ''));
     const fileName = (value) => text(value).split('/').pop() || 'media';
     const decodeHtmlEntities = (value) => {
       const textarea = document.createElement('textarea');
@@ -1073,6 +1085,10 @@
     };
 
     const renderLocalMediaAsset = (container, path) => {
+      if (!isLocalPath(path)) {
+        renderMissingMediaChip(container, path);
+        return;
+      }
       if (isImg(path)) {
         renderImageLink(container, path, '媒体图片');
       } else if (isVideo(path)) {
@@ -1144,6 +1160,10 @@
 
     const renderImageLink = (container, src, alt) => {
       const cleanSrc = decodeHtmlEntities(String(src || ''));
+      if (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc)) {
+        renderMissingMediaChip(container, cleanSrc);
+        return;
+      }
       const preview = document.createElement('button');
       preview.className = 'media-image-button';
       preview.type = 'button';
@@ -1160,6 +1180,10 @@
 
     const renderFileLink = (container, src, label) => {
       const cleanSrc = decodeHtmlEntities(String(src || ''));
+      if (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc)) {
+        renderMissingMediaChip(container, cleanSrc);
+        return;
+      }
       const link = document.createElement('a');
       link.className = 'media-file';
       link.href = cleanSrc;
@@ -1167,6 +1191,14 @@
       link.rel = 'noreferrer';
       link.textContent = label || fileName(cleanSrc);
       container.appendChild(link);
+    };
+
+    const renderMissingMediaChip = (container, src) => {
+      const chip = document.createElement('span');
+      chip.className = 'media-missing';
+      chip.title = decodeHtmlEntities(String(src || ''));
+      chip.textContent = '媒体未缓存';
+      container.appendChild(chip);
     };
 
     const renderCQChip = (container, label) => {
@@ -1369,11 +1401,20 @@
         card.title = localPage && originalUrl ? `打开本地快照：${originalUrl}` : '打开卡片网页';
       }
       if (preview) {
-        const img = document.createElement('img');
-        img.className = 'json-card-img';
-        img.src = normalizeCardUrl(preview);
-        img.alt = title;
-        card.appendChild(img);
+        const previewSrc = normalizeCardUrl(preview);
+        if (isLocalPath(previewSrc) || !isRemoteUrl(previewSrc)) {
+          const img = document.createElement('img');
+          img.className = 'json-card-img';
+          img.src = previewSrc;
+          img.alt = title;
+          card.appendChild(img);
+        } else {
+          const missing = document.createElement('span');
+          missing.className = 'media-missing';
+          missing.textContent = '预览未缓存';
+          missing.title = previewSrc;
+          card.appendChild(missing);
+        }
       }
       const body = document.createElement('div');
       body.className = 'json-card-body';

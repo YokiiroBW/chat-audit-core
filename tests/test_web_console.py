@@ -49,6 +49,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "imagePreviewModal" in html
     assert "openImagePreview" in html
     assert "media-image-button" in html
+    assert "media-missing" in html
+    assert "renderMissingMediaChip" in html
     assert "plainMessagePreview" in html
     assert "findReplyMessage" in html
     assert "replyPreviewText" in html

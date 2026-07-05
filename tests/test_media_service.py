@@ -127,6 +127,30 @@ async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_rewrite_cq_media_can_finalize_failed_asset_with_local_placeholder(db_session, tmp_path):
+    client = StubAsyncClient({"http://media.local/large.jpg": b"too large"})
+    raw = "[CQ:image,file=large.jpg,url=http://media.local/large.jpg]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        max_bytes=4,
+        unavailable_placeholders=True,
+    )
+
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert rewritten.startswith("/static/storage/")
+    assert rewritten.endswith(".svg")
+    assert "http://media.local" not in rewritten
+    assert len(assets) == 1
+    assert assets[0].file_type == "image_missing"
+
+
+@pytest.mark.asyncio
 async def test_rewrite_cq_json_card_downloads_preview_asset(db_session, tmp_path):
     client = StubAsyncClient({"http://media.local/preview.jpg": b"preview bytes"})
     card = {"meta": {"detail_1": {"title": "Card", "preview": "http://media.local/preview.jpg", "url": "https://example.com/page"}}}

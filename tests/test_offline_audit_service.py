@@ -8,7 +8,9 @@ from app.database import get_db_session
 from app.main import app
 from app.models import MediaAsset
 from app.services.message_service import MessageService
+from app.services.media_backfill_service import MediaBackfillService
 from app.services.offline_audit_service import OfflineAuditService
+from tests.test_media_service import StubAsyncClient
 
 
 @pytest.mark.asyncio
@@ -126,6 +128,41 @@ async def test_offline_audit_reports_remote_and_missing_local_assets(db_session,
     assert report.missing_media_assets == 1
     assert report.missing_media_files == 1
     assert {issue.kind for issue in report.issues} == {"remote_media", "card_page", "forward", "media_asset", "media_file"}
+
+
+@pytest.mark.asyncio
+async def test_offline_audit_accepts_finalized_unavailable_media_placeholder(db_session, tmp_path):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-finalized",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "[CQ:image,file=expired.jpg,url=http://media.local/expired.jpg]",
+            "timestamp": 1783000000,
+        },
+    )
+    await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=StubAsyncClient({}),
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        finalize_unavailable=True,
+    )
+
+    report = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert report.offline_ready is True
+    assert report.remote_media_urls == 0
+    assert report.missing_media_assets == 0
+    assert report.missing_media_files == 0
 
 
 @pytest.mark.asyncio

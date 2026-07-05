@@ -82,6 +82,7 @@ _MEDIA_EXTENSIONS = {
     "wav",
     "webm",
     "webp",
+    "svg",
 }
 
 
@@ -194,6 +195,65 @@ def parse_cq_media_segments(raw_message: str) -> list[CQMediaSegment]:
 
 class MediaService:
     @staticmethod
+    async def save_unavailable_placeholder(
+        db: AsyncSession,
+        url: str,
+        media_type: str = "file",
+        reason: str = "unavailable",
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+    ) -> str:
+        from app.services.message_service import MessageService
+
+        escaped_url = html.escape(url, quote=True)
+        escaped_reason = html.escape(reason, quote=True)
+        if media_type == "image":
+            content = (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="120" viewBox="0 0 420 120">'
+                '<rect width="420" height="120" fill="#e2e8f0"/>'
+                '<text x="24" y="48" fill="#334155" font-size="18" font-family="Arial, sans-serif">media unavailable</text>'
+                f'<text x="24" y="78" fill="#64748b" font-size="12" font-family="Arial, sans-serif">{escaped_reason}</text>'
+                f"<desc>{escaped_url}</desc>"
+                "</svg>"
+            ).encode("utf-8")
+            return await MessageService.save_media_asset(
+                db,
+                file_content=content,
+                file_type="image_missing",
+                ext="svg",
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+        if media_type == "card_page":
+            content = (
+                "<!doctype html><meta charset=\"utf-8\"><title>卡片网页未缓存</title>"
+                "<body style=\"font-family:sans-serif;line-height:1.6;padding:24px\">"
+                "<h1>卡片网页未缓存</h1>"
+                f"<p>原因：{escaped_reason}</p>"
+                f"<p>原始地址：<code>{escaped_url}</code></p>"
+                "</body>"
+            ).encode("utf-8")
+            return await MessageService.save_media_asset(
+                db,
+                file_content=content,
+                file_type="card_missing",
+                ext="html",
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+
+        content = f"media unavailable\nreason: {reason}\nurl: {url}\n".encode("utf-8")
+        file_type = f"{media_type}_missing"[:20]
+        return await MessageService.save_media_asset(
+            db,
+            file_content=content,
+            file_type=file_type,
+            ext="txt",
+            storage_root=storage_root,
+            public_prefix=public_prefix,
+        )
+
+    @staticmethod
     async def download_url_to_local_path(
         db: AsyncSession,
         url: str,
@@ -241,6 +301,7 @@ class MediaService:
         storage_root: str | Path | None,
         public_prefix: str | None,
         max_bytes: int | None,
+        unavailable_placeholders: bool = False,
         key: str | None = None,
     ) -> Any:
         if isinstance(value, dict):
@@ -253,6 +314,7 @@ class MediaService:
                     storage_root,
                     public_prefix,
                     max_bytes,
+                    unavailable_placeholders,
                     str(child_key),
                 )
             return localized
@@ -265,20 +327,31 @@ class MediaService:
                     storage_root,
                     public_prefix,
                     max_bytes,
+                    unavailable_placeholders,
                     key,
                 )
                 for item in value
             ]
         if isinstance(value, str) and _looks_like_media_url(value, key):
+            media_type = _media_type_from_url(value)
             local_path = await MediaService.download_url_to_local_path(
                 db,
                 value,
-                media_type=_media_type_from_url(value),
+                media_type=media_type,
                 http_client=http_client,
                 storage_root=storage_root,
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
             )
+            if local_path is None and unavailable_placeholders:
+                local_path = await MediaService.save_unavailable_placeholder(
+                    db,
+                    value,
+                    media_type=media_type,
+                    reason="download_failed_or_expired",
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                )
             return local_path or value
         return value
 
@@ -290,11 +363,12 @@ class MediaService:
         storage_root: str | Path | None,
         public_prefix: str | None,
         max_bytes: int | None,
+        unavailable_placeholders: bool = False,
     ) -> str | None:
         normalized = _normalize_http_url(url)
         if normalized is None:
             return None
-        return await MediaService.download_url_to_local_path(
+        local_path = await MediaService.download_url_to_local_path(
             db,
             normalized,
             media_type="card_page",
@@ -304,6 +378,16 @@ class MediaService:
             public_prefix=public_prefix,
             max_bytes=max_bytes,
         )
+        if local_path is None and unavailable_placeholders:
+            local_path = await MediaService.save_unavailable_placeholder(
+                db,
+                normalized,
+                media_type="card_page",
+                reason="snapshot_failed_or_unavailable",
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+        return local_path
 
     @staticmethod
     async def _cache_card_page_snapshots(
@@ -313,6 +397,7 @@ class MediaService:
         storage_root: str | Path | None,
         public_prefix: str | None,
         max_bytes: int | None,
+        unavailable_placeholders: bool = False,
         key: str | None = None,
     ) -> Any:
         if isinstance(value, dict):
@@ -327,6 +412,7 @@ class MediaService:
                     storage_root,
                     public_prefix,
                     max_bytes,
+                    unavailable_placeholders,
                     str(child_key),
                 )
                 if isinstance(child_value, str) and _looks_like_card_page_url(child_value, str(child_key)):
@@ -340,6 +426,7 @@ class MediaService:
                         storage_root,
                         public_prefix,
                         max_bytes,
+                        unavailable_placeholders,
                     )
                     if local_page:
                         cached["local_page"] = local_page
@@ -354,6 +441,7 @@ class MediaService:
                     storage_root,
                     public_prefix,
                     max_bytes,
+                    unavailable_placeholders,
                     key,
                 )
                 for item in value
@@ -368,6 +456,7 @@ class MediaService:
         storage_root: str | Path | None,
         public_prefix: str | None,
         max_bytes: int | None,
+        unavailable_placeholders: bool = False,
     ) -> str:
         decoded = html.unescape(data)
         try:
@@ -380,15 +469,25 @@ class MediaService:
                 url = match.group(0)
                 local_path = None
                 if _looks_like_media_url(url):
+                    media_type = _media_type_from_url(url)
                     local_path = await MediaService.download_url_to_local_path(
                         db,
                         url,
-                        media_type=_media_type_from_url(url),
+                        media_type=media_type,
                         http_client=http_client,
                         storage_root=storage_root,
                         public_prefix=public_prefix,
                         max_bytes=max_bytes,
                     )
+                    if local_path is None and unavailable_placeholders:
+                        local_path = await MediaService.save_unavailable_placeholder(
+                            db,
+                            url,
+                            media_type=media_type,
+                            reason="download_failed_or_expired",
+                            storage_root=storage_root,
+                            public_prefix=public_prefix,
+                        )
                 rebuilt.append(local_path or url)
                 cursor = match.end()
             rebuilt.append(decoded[cursor:])
@@ -401,6 +500,7 @@ class MediaService:
             storage_root,
             public_prefix,
             max_bytes,
+            unavailable_placeholders,
         )
         localized = await MediaService._cache_card_page_snapshots(
             db,
@@ -409,6 +509,7 @@ class MediaService:
             storage_root,
             public_prefix,
             max_bytes,
+            unavailable_placeholders,
         )
         return json.dumps(localized, ensure_ascii=False, separators=(",", ":"))
 
@@ -420,6 +521,7 @@ class MediaService:
         storage_root: str | Path | None = None,
         public_prefix: str | None = None,
         max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
     ) -> str:
         rewritten = raw_message
 
@@ -434,6 +536,15 @@ class MediaService:
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
             )
+            if local_path is None and unavailable_placeholders:
+                local_path = await MediaService.save_unavailable_placeholder(
+                    db,
+                    segment.url,
+                    media_type=segment.media_type,
+                    reason="download_failed_or_expired",
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                )
             if local_path:
                 rewritten = rewritten.replace(segment.raw, f"\n{local_path}\n", 1)
 
@@ -452,6 +563,7 @@ class MediaService:
                 storage_root=storage_root,
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
+                unavailable_placeholders=unavailable_placeholders,
             )
             rewritten = rewritten.replace(match.group(0), _build_cq_segment(cq_type, params), 1)
 
@@ -466,6 +578,7 @@ class MediaService:
         storage_root: str | Path | None = None,
         public_prefix: str | None = None,
         max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
     ) -> str:
         from app.services.message_service import MessageService
 
@@ -490,6 +603,7 @@ class MediaService:
                 storage_root=storage_root,
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
+                unavailable_placeholders=unavailable_placeholders,
             )
             local_path = await MessageService.save_media_asset(
                 db,
@@ -511,6 +625,7 @@ class MediaService:
         storage_root: str | Path | None = None,
         public_prefix: str | None = None,
         max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
     ) -> Any:
         if isinstance(content, str):
             return await MediaService.rewrite_cq_media_to_local_paths(
@@ -520,6 +635,7 @@ class MediaService:
                 storage_root=storage_root,
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
+                unavailable_placeholders=unavailable_placeholders,
             )
         if isinstance(content, list):
             return [
@@ -530,6 +646,7 @@ class MediaService:
                     storage_root=storage_root,
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
                 )
                 for item in content
             ]
@@ -554,6 +671,15 @@ class MediaService:
                         public_prefix=public_prefix,
                         max_bytes=max_bytes,
                     )
+                    if local_path is None and unavailable_placeholders:
+                        local_path = await MediaService.save_unavailable_placeholder(
+                            db,
+                            url,
+                            media_type=media_type,
+                            reason="download_failed_or_expired",
+                            storage_root=storage_root,
+                            public_prefix=public_prefix,
+                        )
                     if local_path:
                         data["url"] = local_path
             elif segment_type in {"json", "xml"} and isinstance(data.get("data"), str):
@@ -564,6 +690,7 @@ class MediaService:
                     storage_root=storage_root,
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
                 )
             else:
                 localized = await MediaService._localize_json_value(
@@ -573,6 +700,7 @@ class MediaService:
                     storage_root,
                     public_prefix,
                     max_bytes,
+                    unavailable_placeholders,
                 )
                 if segment.get("data") is data:
                     segment["data"] = localized
@@ -588,6 +716,7 @@ class MediaService:
         storage_root: str | Path | None = None,
         public_prefix: str | None = None,
         max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
     ) -> dict[str, Any]:
         localized = deepcopy(payload)
         data = localized.get("data", localized)
@@ -605,6 +734,7 @@ class MediaService:
                     storage_root=storage_root,
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
                 )
             if "message" in item:
                 item["message"] = await MediaService.localize_onebot_content(
@@ -614,5 +744,6 @@ class MediaService:
                     storage_root=storage_root,
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
                 )
         return localized

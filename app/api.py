@@ -236,6 +236,7 @@ async def search_messages(
 async def backfill_media(
     limit: int = Query(default=100, ge=1, le=1000),
     dry_run: bool = Query(default=False),
+    finalize_unavailable: bool = Query(default=False),
     failure_limit: int = Query(default=20, ge=0, le=200),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
@@ -254,6 +255,7 @@ async def backfill_media(
             public_prefix=settings.public_storage_prefix,
             max_bytes=settings.media_max_bytes,
             forward_payload_loader=load_forward,
+            finalize_unavailable=finalize_unavailable,
         )
     return MediaBackfillResponse(
         scanned=report.scanned,

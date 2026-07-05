@@ -11,6 +11,7 @@ from app.services.media_service import (
     MediaService,
     _CQ_PATTERN,
     _URL_PATTERN,
+    _build_cq_segment,
     _looks_like_media_url,
     _looks_like_card_page_url,
     _parse_cq_params,
@@ -157,6 +158,7 @@ class MediaBackfillService:
         public_prefix: str | None = None,
         max_bytes: int | None = None,
         forward_payload_loader: ForwardPayloadLoader | None = None,
+        finalize_unavailable: bool = False,
     ) -> MediaBackfillReport:
         report = MediaBackfillReport()
         result = await db.execute(
@@ -188,6 +190,7 @@ class MediaBackfillService:
                 storage_root=storage_root,
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
+                unavailable_placeholders=finalize_unavailable,
             )
             if before_forward_ids and forward_payload_loader is not None:
                 robot_ids = await MediaBackfillService._robot_ids_for_message(db, message.msg_hash)
@@ -200,6 +203,14 @@ class MediaBackfillService:
                     storage_root=storage_root,
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
+                    unavailable_placeholders=finalize_unavailable,
+                )
+            if before_forward_ids and finalize_unavailable:
+                rewritten = await MediaBackfillService._finalize_unavailable_forwards(
+                    db,
+                    rewritten,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
                 )
 
             if rewritten != before:
@@ -253,3 +264,43 @@ class MediaBackfillService:
             raise LookupError("message has no robot view for forward payload lookup")
 
         return load_forward
+
+    @staticmethod
+    async def _finalize_unavailable_forwards(
+        db: AsyncSession,
+        local_message: str,
+        storage_root: str | None = None,
+        public_prefix: str | None = None,
+    ) -> str:
+        from app.services.message_service import MessageService
+
+        rewritten = local_message
+        for match in list(_CQ_PATTERN.finditer(local_message)):
+            if match.group("kind") != "forward":
+                continue
+            params = _parse_cq_params(match.group("params"))
+            forward_id = params.get("id")
+            if not forward_id or params.get("local"):
+                continue
+            payload = {
+                "status": "unavailable",
+                "data": {
+                    "messages": [
+                        {
+                            "sender": {"nickname": "本地缓存"},
+                            "raw_message": f"合并转发 {forward_id} 未缓存，且当前无法从 OneBot 重新获取。",
+                        }
+                    ]
+                },
+            }
+            local_path = await MessageService.save_media_asset(
+                db,
+                file_content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                file_type="forward_missing",
+                ext="json",
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+            params["local"] = local_path
+            rewritten = rewritten.replace(match.group(0), _build_cq_segment("forward", params), 1)
+        return rewritten

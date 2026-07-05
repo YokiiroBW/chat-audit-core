@@ -84,6 +84,42 @@ async def test_backfill_historical_media_reports_expired_url_without_overwriting
 
 
 @pytest.mark.asyncio
+async def test_backfill_historical_media_can_finalize_expired_url_with_placeholder(db_session, tmp_path):
+    client = StubAsyncClient({})
+    raw = "[CQ:image,file=expired.jpg,url=http://media.local/expired.jpg]"
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-old",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": raw,
+            "timestamp": 1783000000,
+        },
+    )
+
+    report = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        finalize_unavailable=True,
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert report.updated == 1
+    assert report.failed == 0
+    assert messages[0].local_message.startswith("/static/storage/")
+    assert messages[0].local_message.endswith(".svg")
+    assert assets[0].file_type == "image_missing"
+
+
+@pytest.mark.asyncio
 async def test_backfill_historical_media_caches_unclicked_forward_payload(db_session, tmp_path):
     client = StubAsyncClient({"http://media.local/in-forward.jpg": b"inside forward"})
     seen: list[tuple[str, str]] = []
@@ -131,6 +167,38 @@ async def test_backfill_historical_media_caches_unclicked_forward_payload(db_ses
     assert report.forward_failed == 0
     assert "local=/static/storage/" in messages[0].local_message
     assert {asset.file_type for asset in assets} == {"image", "forward"}
+
+
+@pytest.mark.asyncio
+async def test_backfill_historical_media_can_finalize_uncached_forward(db_session, tmp_path):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-forward",
+        "qq",
+        {
+            "room_id": "group-forward",
+            "message_type": "group",
+            "sender_id": "user-forward",
+            "nickname": "Forward User",
+            "raw_message": "[CQ:forward,id=forward-1]",
+            "timestamp": 1783000000,
+        },
+    )
+
+    report = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        finalize_unavailable=True,
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert report.updated == 1
+    assert report.failed == 0
+    assert "local=/static/storage/" in messages[0].local_message
+    assert assets[0].file_type == "forward_missing"
 
 
 @pytest.mark.asyncio
