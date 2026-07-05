@@ -88,6 +88,8 @@ python -m PyInstaller --noconsole --name chat-audit-wechat-tray wechat_tray_adap
 .\scripts\uninstall_wechat_tray_startup.ps1
 ```
 
+托盘菜单提供“配置”入口，会按需打开一个最小 Tkinter 配置窗口；默认启动仍然不显示主窗口。
+
 ## 仍需真实环境验收
 
 以下项目必须在你的 Windows 微信环境里完成：

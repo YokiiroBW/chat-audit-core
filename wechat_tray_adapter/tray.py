@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from wechat_tray_adapter.client import NasClient
 from wechat_tray_adapter.config import AdapterConfig
+from wechat_tray_adapter.config_wizard import run_config_wizard
 from wechat_tray_adapter.queue import PendingEventQueue
 from wechat_tray_adapter.worker import SyncWorker
 
@@ -114,12 +115,16 @@ def run_tray(config: AdapterConfig | None = None) -> None:
     def on_flush(_: Any) -> None:
         app.flush_pending_once()
 
+    def on_config(_: Any) -> None:
+        run_config_wizard()
+
     def on_quit(icon: Any) -> None:
         app.stop()
         icon.stop()
 
     menu = pystray.Menu(
         pystray.MenuItem("打开 NAS 控制台", on_open),
+        pystray.MenuItem("配置", on_config),
         pystray.MenuItem("立即补发队列", on_flush),
         pystray.MenuItem("退出", on_quit),
     )

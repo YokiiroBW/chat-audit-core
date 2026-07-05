@@ -2,6 +2,7 @@ import json
 
 from wechat_tray_adapter.client import NasClientError, encode_multipart_form
 from wechat_tray_adapter.config import AdapterConfig
+from wechat_tray_adapter.config_wizard import config_to_editable_dict, write_config
 from wechat_tray_adapter.mapper import build_nas_event, discover_media_path, media_upload_type
 from wechat_tray_adapter.queue import PendingEventQueue
 from wechat_tray_adapter.worker import SyncWorker
@@ -45,6 +46,19 @@ def test_adapter_config_loads_file_and_env_overrides(tmp_path):
     assert config.token == "env-token"
     assert config.account_id == "wxid_env"
     assert config.queue_db == tmp_path / "ChatAuditWechatTray" / "queue.sqlite3"
+
+
+def test_config_wizard_helpers_write_editable_config(tmp_path):
+    config = AdapterConfig(nas_url="http://nas.local:8000", token="secret", account_id="wxid_bot")
+    editable = config_to_editable_dict(config)
+    target = write_config(tmp_path / "config.json", editable)
+
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert saved["nas_url"] == "http://nas.local:8000"
+    assert saved["token"] == "secret"
+    assert saved["account_id"] == "wxid_bot"
+    assert "queue_db" not in saved
+    assert "log_dir" not in saved
 
 
 def test_encode_multipart_form_contains_file_and_fields():

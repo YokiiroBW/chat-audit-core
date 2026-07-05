@@ -16,6 +16,10 @@ def default_app_dir(env: Mapping[str, str] | None = None) -> Path:
     return Path(base) / APP_DIR_NAME
 
 
+def default_config_path(env: Mapping[str, str] | None = None) -> Path:
+    return default_app_dir(env) / "config.json"
+
+
 @dataclass(frozen=True)
 class AdapterConfig:
     nas_url: str = "http://127.0.0.1:8000"
@@ -38,7 +42,7 @@ class AdapterConfig:
     def load(cls, path: str | Path | None = None, env: Mapping[str, str] | None = None) -> "AdapterConfig":
         values = env or os.environ
         config = cls.default(values)
-        config_path = Path(path) if path is not None else default_app_dir(values) / "config.json"
+        config_path = Path(path) if path is not None else default_config_path(values)
         if config_path.exists():
             raw = json.loads(config_path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):

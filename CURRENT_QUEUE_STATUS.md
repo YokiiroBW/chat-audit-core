@@ -21,6 +21,7 @@
   - `scripts/uninstall_wechat_tray_startup.ps1`
   - `scripts/write_wechat_tray_config.ps1`
 - 打包产物版本号和发布包校验：`wechat_tray_adapter/version.py` 与构建 manifest/SHA256。
+- 托盘端最小配置编辑入口：托盘菜单“配置”按需打开 Tkinter 配置窗口。
 - 文档：`WECHAT_TRAY_ADAPTER.md` 与 README 入口。
 
 ## 继续推进队列
@@ -28,7 +29,7 @@
 1. 托盘端真实 `wcferry` 版本适配和消息读取 API 校准。
 2. Windows 桌面托盘 UI 实机验收：图标、菜单、退出、打开 NAS、立即补发。
 3. 真实微信端到端样本：私聊、群聊、图片、语音、视频、文件、动画表情、卡片。
-4. 托盘端配置编辑入口或最小配置向导。
+4. 真实环境确认后，按实际 `wcferry` API 调整读取循环和媒体下载细节。
 
 ## 需要用户介入
 
