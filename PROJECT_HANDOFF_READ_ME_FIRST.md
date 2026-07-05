@@ -17,10 +17,12 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`功能：增强用户会话管理`
+- 最新提交主题：`文档：更新用户会话管理验收状态`
 - 本地全量测试：`134 passed`
-- NAS 部署：待本轮提交后部署
-- NAS 离线验收：待本轮提交后复验
+- NAS 部署：已部署 `5270278 功能：增强用户会话管理`
+- NAS 基础验收：健康检查 200，首页 200，管理鉴权 401/200 正常
+- NAS 用户/session 专项验收：密码重置、旧会话失效、新密码登录、强制下线均通过
+- NAS 离线验收：`offline_ready=true`，`messages_scanned=7151`，`media_assets_checked=2834`，`missing_media_assets=0`，`missing_media_files=0`
 
 最近主线提交：
 
