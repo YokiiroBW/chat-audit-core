@@ -31,6 +31,7 @@ services:
       APP_PORT: 8000
       APP_SECRET_KEY: ${APP_SECRET_KEY}
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      ADMIN_API_TOKENS: ${ADMIN_API_TOKENS:-}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       STORAGE_ROOT: /app/data/storage
       BACKUP_ROOT: /app/data/backups

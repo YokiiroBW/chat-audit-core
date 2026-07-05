@@ -18,6 +18,16 @@ def test_dockerfile_uses_offline_friendly_runtime_and_runs_uvicorn():
     assert "urllib.request" in dockerfile
 
 
+def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
+    dockerfile = (ROOT / "Dockerfile.ffmpeg").read_text(encoding="utf-8")
+
+    assert "python:3.11-slim" in dockerfile
+    assert "apt-get update" in dockerfile
+    assert "ffmpeg" in dockerfile
+    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
+    assert "uvicorn" in dockerfile
+
+
 def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 
@@ -31,6 +41,7 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD}"
     assert services["app"]["environment"]["APP_SECRET_KEY"] == "${APP_SECRET_KEY}"
     assert services["app"]["environment"]["ADMIN_API_TOKEN"] == "${ADMIN_API_TOKEN}"
+    assert services["app"]["environment"]["ADMIN_API_TOKENS"] == "${ADMIN_API_TOKENS:-}"
     assert services["app"]["environment"]["ONEBOT_ACCESS_TOKEN"] == "${ONEBOT_ACCESS_TOKEN}"
     assert services["app"]["environment"]["FFMPEG_BIN"] == "ffmpeg"
     assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"
@@ -45,6 +56,15 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert "python" in app_healthcheck
     assert "urllib.request" in app_healthcheck
     assert "curl" not in app_healthcheck
+
+
+def test_optional_ffmpeg_compose_override_uses_ffmpeg_dockerfile():
+    compose = yaml.safe_load((ROOT / "docker-compose.ffmpeg.yml").read_text(encoding="utf-8"))
+
+    app = compose["services"]["app"]
+    assert app["build"]["dockerfile"] == "Dockerfile.ffmpeg"
+    assert app["environment"]["MEDIA_TRANSCODE_ENABLED"] == "true"
+    assert app["environment"]["FFMPEG_BIN"] == "ffmpeg"
 
 
 def test_dockerignore_excludes_runtime_and_secret_files():

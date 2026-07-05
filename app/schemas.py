@@ -89,6 +89,17 @@ class MigrationStatusResponse(BaseModel):
     applied_at: datetime | None = None
 
 
+class RuntimeStatusResponse(BaseModel):
+    media_transcode_enabled: bool
+    ffmpeg_bin: str
+    ffmpeg_available: bool
+    ffmpeg_path: str | None = None
+    ffmpeg_version: str | None = None
+    ffmpeg_error: str | None = None
+    voice_ext: str
+    video_ext: str
+
+
 class RoomResponse(BaseModel):
     room_id: str
     last_timestamp: int

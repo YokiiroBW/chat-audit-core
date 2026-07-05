@@ -108,6 +108,19 @@ FFMPEG_BIN=ffmpeg
 - 语音会尝试转为 MP3，视频会尝试转为 MP4。
 - 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
 - 默认 Docker 镜像保持离线友好，不在构建期联网安装 FFmpeg；需要转码时请使用已内置 FFmpeg 的自定义镜像，或在运行环境中提供可执行的 `FFMPEG_BIN`。
+- 如部署环境允许联网 apt 构建，可使用可选覆盖文件构建内置 FFmpeg 镜像：
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build
+```
+
+运行时状态查询：
+
+```text
+GET /api/system/runtime
+```
+
+该接口会返回 `media_transcode_enabled`、`ffmpeg_bin`、`ffmpeg_available`、`ffmpeg_version` 等字段，用于确认容器内 FFmpeg 是否可用。
 
 ## 微信 Hook 接入
 
@@ -119,13 +132,16 @@ POST /api/wechat/events
 
 该接口复用管理 API 鉴权，支持常见 Hook 字段名，例如：
 
-- 机器人账号：`robot_id`、`self_id`、`wxid`、`account_id`
-- 会话：`room_id`、`talker`、`conversation_id`、`from_wxid`
-- 发送者：`sender_id`、`sender_wxid`、`from_user`
-- 内容：`raw_message`、`content`、`message`、`text`
-- 媒体：`msg_type=image/voice/video/file` 搭配 `media_url`、`file_url`、`url`
+- 机器人账号：`robot_id`、`self_id`、`wxid`、`account_id`、`CurrentWxid`
+- 会话：`room_id`、`talker`、`conversation_id`、`from_wxid`、`FromUserName`、`ToUserName`
+- 发送者：`sender_id`、`sender_wxid`、`from_user`、`SenderWxid`
+- 内容：`raw_message`、`content`、`Content`、`text`
+- 媒体：`msg_type=image/voice/video/file` 搭配 `media_url`、`file_url`、`url`、`FileUrl`
+- 常见嵌套：字段可以位于顶层，也可以位于 `data`、`payload`、`msg`、`message` 对象内。
+- 常见数字类型：`MsgType=1` 文本、`3` 图片、`34` 语音、`43` 视频、`47` 表情、`49` 卡片/分享。
 
 微信事件会被规范化为内部消息模型并以 `platform=wechat` 入库；图片、语音、视频和文件会转成现有 CQ 片段，继续复用本地媒体缓存、导出导入和离线验收链路。
+群聊文本如果带有 `sender_wxid:\n内容` 前缀，会自动拆出真实发送者并去掉前缀后入库。
 
 ## 自动备份
 

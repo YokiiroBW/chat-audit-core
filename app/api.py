@@ -32,6 +32,7 @@ from app.schemas import (
     OfflineAuditResponse,
     OfflineRepairResponse,
     RoomResponse,
+    RuntimeStatusResponse,
 )
 from app.services.adapter_service import AdapterService
 from app.services.audit_log_service import AuditLogService
@@ -47,6 +48,7 @@ from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.profile_placeholder_service import ProfilePlaceholderService
 from app.services.query_service import QueryService
 from app.services.room_profile_service import RoomProfileService
+from app.services.runtime_service import RuntimeService
 from app.services.user_profile_service import UserProfileService
 
 
@@ -301,6 +303,11 @@ async def list_migration_status(db: AsyncSession = Depends(get_db_session)) -> l
         )
         for version, description in LIGHTWEIGHT_MIGRATIONS.items()
     ]
+
+
+@router.get("/system/runtime", response_model=RuntimeStatusResponse)
+async def get_runtime_status(settings: Settings = Depends(get_settings)) -> RuntimeStatusResponse:
+    return RuntimeStatusResponse(**RuntimeService.ffmpeg_status(settings))
 
 
 @router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)

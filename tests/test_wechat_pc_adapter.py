@@ -73,6 +73,48 @@ def test_normalize_wechat_image_event_builds_cq_media_segment():
     assert normalized.msg_data["raw_message"] == "[CQ:image,file=wechat.jpg,url=http://media.local/wechat.jpg]"
 
 
+def test_normalize_wechat_nested_numeric_image_event():
+    event = {
+        "type_name": "recv_msg",
+        "data": {
+            "CurrentWxid": "wxid_bot",
+            "FromUserName": "12345@chatroom",
+            "SenderWxid": "wxid_sender",
+            "MsgType": 3,
+            "FileName": "nested-image.dat",
+            "FileUrl": "http://media.local/nested.jpg",
+            "CreateTime": 1783100100,
+            "MsgId": "wx-nested-image",
+        },
+    }
+
+    normalized = normalize_wechat_event(event)
+
+    assert normalized is not None
+    assert normalized.robot_id == "wxid_bot"
+    assert normalized.msg_data["room_id"] == "12345@chatroom"
+    assert normalized.msg_data["message_type"] == "group"
+    assert normalized.msg_data["sender_id"] == "wxid_sender"
+    assert normalized.msg_data["raw_message"] == "[CQ:image,file=nested-image.dat,url=http://media.local/nested.jpg]"
+    assert normalized.msg_data["message_id"] == "wx-nested-image"
+
+
+def test_normalize_wechat_group_text_strips_sender_prefix():
+    event = {
+        "event": "message",
+        "current_wxid": "wxid_bot",
+        "talker": "12345@chatroom",
+        "Content": "wxid_real_sender:\n群文本",
+        "CreateTime": 1783100101,
+    }
+
+    normalized = normalize_wechat_event(event)
+
+    assert normalized is not None
+    assert normalized.msg_data["sender_id"] == "wxid_real_sender"
+    assert normalized.msg_data["raw_message"] == "群文本"
+
+
 @pytest.mark.asyncio
 async def test_wechat_event_api_ingests_text_message(db_session, tmp_path):
     async def override_db_session():
