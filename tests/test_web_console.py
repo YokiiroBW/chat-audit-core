@@ -140,6 +140,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-targets" in html
     assert "/capture-policies/" in html
     assert "capture_file" in html
+    assert "文件包/文档" in html
     assert "adminUserList" in html
     assert "adminSessionList" in html
     assert "/api/import/validate" in html

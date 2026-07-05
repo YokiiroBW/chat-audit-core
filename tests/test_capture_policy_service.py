@@ -131,6 +131,55 @@ async def test_explicit_target_policy_can_disable_images(db_session):
 
 
 @pytest.mark.asyncio
+async def test_file_capture_flag_does_not_disable_images_stickers_or_voice(db_session, tmp_path):
+    client = StubHttpClient()
+    await CapturePolicyService.upsert_policy(
+        db_session,
+        robot_id="robot-a",
+        target_type="group",
+        target_id="955973452",
+        list_mode="none",
+        capture_text=True,
+        capture_image=True,
+        capture_voice=True,
+        capture_video=True,
+        capture_file=False,
+    )
+
+    sticker_hash = await MessageService.process_incoming_message(
+        db_session,
+        robot_id="robot-a",
+        platform="qq",
+        msg_data=_payload(
+            message_id="sticker-1",
+            raw_message="[CQ:image,summary=&#91;动画表情&#93;,file=sticker.jpg,sub_type=1,url=http://media.local/sticker.jpg]",
+        ),
+        media_http_client=client,
+        media_storage_root=tmp_path,
+        media_public_prefix="/static/storage",
+    )
+    voice_hash = await MessageService.process_incoming_message(
+        db_session,
+        robot_id="robot-a",
+        platform="qq",
+        msg_data=_payload(
+            message_id="voice-1",
+            raw_message="[CQ:record,file=voice.silk,url=http://media.local/voice.silk]",
+        ),
+        media_http_client=client,
+        media_storage_root=tmp_path,
+        media_public_prefix="/static/storage",
+    )
+
+    messages = await MessageService.list_messages(db_session)
+
+    assert sticker_hash is not None
+    assert voice_hash is not None
+    assert len(messages) == 2
+    assert client.urls == ["http://media.local/sticker.jpg", "http://media.local/voice.silk"]
+
+
+@pytest.mark.asyncio
 async def test_capture_targets_include_discovered_rooms_and_policy(db_session):
     await MessageService.process_incoming_message(
         db_session,
