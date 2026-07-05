@@ -100,6 +100,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "Authorization" in html
     assert "/api/import/validate" in html
     assert "/api/import" in html
+    assert "signature" in html
+    assert "report.source" in html
     assert "diff.messages" in html
     assert "media_files" in html
     assert "新增/更新/不变" in html

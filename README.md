@@ -150,6 +150,7 @@ data/backups/auto-backup-20260703T030000Z.json
 - 导出包会尽量携带本地媒体文件内容，单个媒体文件超过 `MEDIA_MAX_BYTES` 时只导出索引与校验信息，不嵌入文件内容。
 - manifest 会标记 `backup_type=auto` 与 `created_by=auto_backup_scheduler`。
 - manifest 会写入 `checksum.algorithm=sha256` 与 `checksum.value`；导入时如校验值不匹配会拒绝导入，避免篡改包被静默回录。
+- manifest 会写入 `source.system`、`source.instance_id` 与 `signature`；签名使用 `APP_SECRET_KEY` 做 HMAC-SHA256。旧版无签名包仍可导入，但校验报告会显示 signature 未提供。
 - `/api/import/validate` 可在真正写库前返回 schema、checksum、counts、数据库差异预览、媒体文件校验结果与错误列表。
 - Web 控制台支持“导入 JSON”：先校验导出包，通过后再确认导入；校验报告会展示新增/更新/不变统计与媒体文件 checked/missing/mismatch。
 - 导入失败与自动备份失败会写入 `BACKUP_ROOT/failures.log`，每行一条 JSON 失败记录。

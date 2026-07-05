@@ -509,6 +509,8 @@ async def export_data(
         storage_root=settings.storage_root,
         public_storage_prefix=settings.public_storage_prefix,
         max_media_bytes=settings.media_max_bytes,
+        system_id=settings.system_instance_id,
+        signing_key=settings.app_secret_key,
     )
 
 
@@ -523,6 +525,7 @@ async def validate_import_data(
         package,
         storage_root=settings.storage_root,
         public_storage_prefix=settings.public_storage_prefix,
+        signing_key=settings.app_secret_key,
     )
     return ImportValidationResponse(**report)
 
@@ -539,6 +542,7 @@ async def import_data(
             package,
             storage_root=settings.storage_root,
             public_storage_prefix=settings.public_storage_prefix,
+            signing_key=settings.app_secret_key,
         )
     except ValueError as exc:
         BackupService.write_failure_log(settings.backup_root, event="import", error=str(exc), context={"schema": (package.get("manifest") or {}).get("schema")})

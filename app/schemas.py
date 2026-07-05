@@ -157,6 +157,8 @@ class ImportValidationResponse(BaseModel):
     valid: bool
     schema_: str | None = Field(default=None, alias="schema")
     checksum_valid: bool | None = None
+    signature_valid: bool | None = None
+    source: dict | None = None
     errors: list[str]
     counts: dict[str, int]
     media_files: dict[str, int] = Field(default_factory=dict)

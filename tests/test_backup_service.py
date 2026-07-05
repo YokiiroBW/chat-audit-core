@@ -215,6 +215,8 @@ async def test_export_import_api_roundtrip(db_session):
 
     assert export_response.status_code == 200
     assert export_response.json()["messages"][0]["raw_message"] == "api export"
+    assert export_response.json()["manifest"]["source"]["system"] == "chat-audit-core"
+    assert export_response.json()["manifest"]["signature"]["algorithm"] == "hmac-sha256"
     assert import_response.status_code == 200
     assert import_response.json() == {"messages": 1, "robot_messages": 1, "media_assets": 0}
 
@@ -294,6 +296,91 @@ async def test_backup_service_export_includes_package_checksum(db_session):
     assert checksum["algorithm"] == "sha256"
     assert len(checksum["value"]) == 64
     assert checksum["value"] == BackupService.calculate_package_checksum(package)
+
+
+@pytest.mark.asyncio
+async def test_backup_service_export_can_attach_system_signature(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-signature",
+        "qq",
+        {
+            "room_id": "room-signature",
+            "message_type": "group",
+            "sender_id": "user-signature",
+            "nickname": "Signature User",
+            "raw_message": "signature payload",
+            "timestamp": 790,
+        },
+    )
+
+    package = await BackupService.export_package(
+        db_session,
+        robot_id="robot-signature",
+        system_id="instance-a",
+        signing_key="secret-a",
+    )
+
+    assert package["manifest"]["source"] == {"system": "chat-audit-core", "instance_id": "instance-a"}
+    signature = package["manifest"]["signature"]
+    assert signature["algorithm"] == "hmac-sha256"
+    assert signature["key_id"] == "instance-a"
+    assert len(signature["value"]) == 64
+    BackupService.validate_package_checksum(package)
+    BackupService.validate_package_signature(package, "secret-a")
+
+
+@pytest.mark.asyncio
+async def test_backup_service_validate_allows_unsigned_legacy_package(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-legacy",
+        "qq",
+        {
+            "room_id": "room-legacy",
+            "message_type": "group",
+            "sender_id": "user-legacy",
+            "nickname": "Legacy User",
+            "raw_message": "legacy payload",
+            "timestamp": 791,
+        },
+    )
+    package = await BackupService.export_package(db_session, robot_id="robot-legacy")
+
+    report = BackupService.validate_import_package(package, signing_key="secret-a")
+
+    assert report["valid"] is True
+    assert report["signature_valid"] is None
+    assert report["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_backup_service_validate_rejects_signature_mismatch(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-bad-signature",
+        "qq",
+        {
+            "room_id": "room-bad-signature",
+            "message_type": "group",
+            "sender_id": "user-bad-signature",
+            "nickname": "Bad Signature User",
+            "raw_message": "bad signature payload",
+            "timestamp": 792,
+        },
+    )
+    package = await BackupService.export_package(
+        db_session,
+        robot_id="robot-bad-signature",
+        system_id="instance-a",
+        signing_key="secret-a",
+    )
+
+    report = BackupService.validate_import_package(package, signing_key="wrong-secret")
+
+    assert report["valid"] is False
+    assert report["signature_valid"] is False
+    assert any("signature mismatch" in error for error in report["errors"])
 
 
 @pytest.mark.asyncio

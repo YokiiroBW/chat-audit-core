@@ -3,6 +3,7 @@ import base64
 import contextlib
 import datetime as dt
 import hashlib
+import hmac
 import json
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.models import MediaAsset, Message, RobotMessage, RoomProfile, UserProfi
 from app.time_utils import utc_now
 
 BACKUP_SCHEMA = "chat-audit-core.backup.v1"
+BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
 
 
 class BackupService:
@@ -32,8 +34,18 @@ class BackupService:
         canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
         manifest = canonical_package.setdefault("manifest", {})
         manifest.pop("checksum", None)
+        manifest.pop("signature", None)
         payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def calculate_package_signature(package: dict[str, Any], signing_key: str) -> str:
+        canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
+        manifest = canonical_package.setdefault("manifest", {})
+        manifest.pop("checksum", None)
+        manifest.pop("signature", None)
+        payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hmac.new(signing_key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
     @staticmethod
     def attach_package_checksum(package: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +54,21 @@ class BackupService:
         manifest["checksum"] = {
             "algorithm": "sha256",
             "value": BackupService.calculate_package_checksum(package),
+        }
+        return package
+
+    @staticmethod
+    def attach_package_signature(package: dict[str, Any], *, system_id: str, signing_key: str) -> dict[str, Any]:
+        manifest = package.setdefault("manifest", {})
+        manifest["source"] = {
+            "system": "chat-audit-core",
+            "instance_id": system_id,
+        }
+        manifest.pop("signature", None)
+        manifest["signature"] = {
+            "algorithm": BACKUP_SIGNATURE_ALGORITHM,
+            "key_id": system_id,
+            "value": BackupService.calculate_package_signature(package, signing_key),
         }
         return package
 
@@ -56,6 +83,18 @@ class BackupService:
         actual = BackupService.calculate_package_checksum(package)
         if expected != actual:
             raise ValueError("backup package checksum mismatch")
+
+    @staticmethod
+    def validate_package_signature(package: dict[str, Any], signing_key: str) -> None:
+        signature = (package.get("manifest") or {}).get("signature")
+        if signature is None:
+            raise ValueError("backup package signature missing")
+        if signature.get("algorithm") != BACKUP_SIGNATURE_ALGORITHM:
+            raise ValueError(f"unsupported signature algorithm: {signature.get('algorithm')!r}")
+        expected = signature.get("value")
+        actual = BackupService.calculate_package_signature(package, signing_key)
+        if not hmac.compare_digest(str(expected or ""), actual):
+            raise ValueError("backup package signature mismatch")
 
     @staticmethod
     def _message_to_dict(message: Message) -> dict[str, Any]:
@@ -147,6 +186,8 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         max_media_bytes: int | None = None,
+        system_id: str | None = None,
+        signing_key: str | None = None,
     ) -> dict[str, Any]:
         stmt = select(Message)
         if robot_id is not None:
@@ -244,7 +285,11 @@ class BackupService:
             "room_profiles": room_profiles,
             "user_profiles": user_profiles,
         }
-        return BackupService.attach_package_checksum(package)
+        BackupService.attach_package_checksum(package)
+        if system_id and signing_key:
+            BackupService.attach_package_signature(package, system_id=system_id, signing_key=signing_key)
+            BackupService.attach_package_checksum(package)
+        return package
 
 
     @staticmethod
@@ -255,6 +300,8 @@ class BackupService:
         public_storage_prefix: str = "/static/storage",
         max_media_bytes: int | None = None,
         keep_latest: int = 7,
+        system_id: str | None = None,
+        signing_key: str | None = None,
     ) -> Path:
         backup_root.mkdir(parents=True, exist_ok=True)
         package = await BackupService.export_package(
@@ -262,10 +309,15 @@ class BackupService:
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
             max_media_bytes=max_media_bytes,
+            system_id=system_id,
+            signing_key=signing_key,
         )
         package["manifest"]["backup_type"] = "auto"
         package["manifest"]["created_by"] = "auto_backup_scheduler"
         BackupService.attach_package_checksum(package)
+        if system_id and signing_key:
+            BackupService.attach_package_signature(package, system_id=system_id, signing_key=signing_key)
+            BackupService.attach_package_checksum(package)
 
         timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
         backup_path = backup_root / f"auto-backup-{timestamp}.json"
@@ -443,11 +495,13 @@ class BackupService:
         package: dict[str, Any],
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
+        signing_key: str | None = None,
     ) -> dict[str, Any]:
         manifest = package.get("manifest") or {}
         schema = manifest.get("schema")
         errors: list[str] = []
         checksum_valid: bool | None = None
+        signature_valid: bool | None = None
 
         if schema != BACKUP_SCHEMA:
             errors.append(f"unsupported backup schema: {schema!r}")
@@ -463,6 +517,20 @@ class BackupService:
                 checksum_valid = False
                 errors.append(str(exc))
 
+        signature = manifest.get("signature")
+        if signature is not None:
+            if signing_key:
+                try:
+                    BackupService.validate_package_signature(package, signing_key)
+                    signature_valid = True
+                except ValueError as exc:
+                    signature_valid = False
+                    errors.append(str(exc))
+            else:
+                signature_valid = None
+        elif signing_key:
+            signature_valid = None
+
         counts = {
             "messages": len(package.get("messages", []) or []),
             "robot_messages": len(package.get("robot_messages", []) or []),
@@ -477,6 +545,8 @@ class BackupService:
             "valid": not errors,
             "schema": schema,
             "checksum_valid": checksum_valid,
+            "signature_valid": signature_valid,
+            "source": manifest.get("source"),
             "errors": errors,
             "counts": counts,
             "media_files": media_files,
@@ -502,11 +572,13 @@ class BackupService:
         package: dict[str, Any],
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
+        signing_key: str | None = None,
     ) -> dict[str, Any]:
         report = BackupService.validate_import_package(
             package,
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
+            signing_key=signing_key,
         )
         message_diff = {"new": 0, "update": 0, "unchanged": 0}
         robot_message_diff = {"new": 0, "existing": 0}
@@ -571,6 +643,7 @@ class BackupService:
         package: dict[str, Any],
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
+        signing_key: str | None = None,
     ) -> dict[str, int]:
         manifest = package.get("manifest") or {}
         schema = manifest.get("schema")
@@ -580,6 +653,7 @@ class BackupService:
             package,
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
+            signing_key=signing_key,
         )
         if not report["valid"]:
             raise ValueError("; ".join(report["errors"]))
@@ -701,6 +775,8 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
                     public_storage_prefix=settings.public_storage_prefix,
                     max_media_bytes=getattr(settings, "media_max_bytes", None),
                     keep_latest=getattr(settings, "auto_backup_keep_latest", 7),
+                    system_id=getattr(settings, "system_instance_id", None),
+                    signing_key=getattr(settings, "app_secret_key", None),
                 )
         except Exception as exc:
             BackupService.write_failure_log(

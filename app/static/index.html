@@ -1681,6 +1681,8 @@
         ['校验结果', report.valid ? '通过' : '失败', report.valid ? 'ok' : 'bad'],
         ['schema', report.schema || '-'],
         ['checksum', report.checksum_valid === null ? '未提供' : (report.checksum_valid ? '通过' : '失败')],
+        ['signature', report.signature_valid === null ? '未提供' : (report.signature_valid ? '通过' : '失败'), report.signature_valid === false ? 'bad' : undefined],
+        ['source', report.source ? `${report.source.system || '-'} / ${report.source.instance_id || '-'}` : '-'],
         ['counts', `messages=${report.counts.messages} / robot_messages=${report.counts.robot_messages} / media_assets=${report.counts.media_assets} / media_files=${report.counts.media_files || 0}`],
       ];
       if (report.diff && report.diff.messages) {
