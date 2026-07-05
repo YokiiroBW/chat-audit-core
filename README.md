@@ -143,6 +143,14 @@ POST /api/wechat/events
 微信事件会被规范化为内部消息模型并以 `platform=wechat` 入库；图片、语音、视频和文件会转成现有 CQ 片段，继续复用本地媒体缓存、导出导入和离线验收链路。
 群聊文本如果带有 `sender_wxid:\n内容` 前缀，会自动拆出真实发送者并去掉前缀后入库。
 
+微信 Hook 样本回放：
+
+```text
+tests/fixtures/wechat_hook_samples.json
+```
+
+新增真实客户端样本时，优先追加到该文件并运行 `tests/test_wechat_pc_adapter.py`。
+
 ## 自动备份
 
 应用启动时会根据 `AUTO_BACKUP_CRON` 启动自动备份任务，将导出包写入 `BACKUP_ROOT`。

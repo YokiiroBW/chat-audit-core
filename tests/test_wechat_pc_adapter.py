@@ -1,4 +1,7 @@
 from httpx import ASGITransport, AsyncClient
+import json
+from pathlib import Path
+
 import pytest
 
 from app.adapters.wechat_pc import normalize_wechat_event
@@ -6,6 +9,9 @@ from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
 from app.services.message_service import MessageService
+
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 class StubAsyncClient:
@@ -113,6 +119,25 @@ def test_normalize_wechat_group_text_strips_sender_prefix():
     assert normalized is not None
     assert normalized.msg_data["sender_id"] == "wxid_real_sender"
     assert normalized.msg_data["raw_message"] == "群文本"
+
+
+@pytest.mark.parametrize("sample", json.loads((FIXTURES_DIR / "wechat_hook_samples.json").read_text(encoding="utf-8")))
+def test_normalize_wechat_fixture_samples(sample):
+    normalized = normalize_wechat_event(sample["event"])
+
+    assert normalized is not None, sample["name"]
+    expected = sample["expected"]
+    assert normalized.robot_id == expected["robot_id"]
+    assert normalized.platform == "wechat"
+    assert normalized.msg_data["room_id"] == expected["room_id"]
+    assert normalized.msg_data["message_type"] == expected["message_type"]
+    assert normalized.msg_data["sender_id"] == expected["sender_id"]
+    if "raw_message_prefix" in expected:
+        assert normalized.msg_data["raw_message"].startswith(expected["raw_message_prefix"])
+    else:
+        assert normalized.msg_data["raw_message"] == expected["raw_message"]
+    assert normalized.msg_data["local_message"] == normalized.msg_data["raw_message"]
+    assert normalized.msg_data["message_id"] == expected["message_id"]
 
 
 @pytest.mark.asyncio
