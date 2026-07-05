@@ -17,12 +17,15 @@ from app.schemas import (
     ImportResultResponse,
     ImportValidationResponse,
     MediaBackfillResponse,
+    MessageIngestRequest,
+    MessageIngestResponse,
     MessageResponse,
     OfflineAuditResponse,
     OfflineRepairResponse,
     RoomResponse,
 )
 from app.services.adapter_service import AdapterService
+from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
@@ -208,6 +211,36 @@ async def list_messages(
         limit=limit,
     )
     return [MessageResponse.model_validate(message) for message in messages]
+
+
+@router.post("/messages", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+async def ingest_message(
+    payload: MessageIngestRequest,
+    db: AsyncSession = Depends(get_db_session),
+) -> MessageIngestResponse:
+    msg_hash = await MessageService.process_incoming_message(
+        db,
+        robot_id=payload.robot_id,
+        platform=payload.platform,
+        msg_data={
+            "message_id": payload.message_id,
+            "room_id": payload.room_id,
+            "message_type": payload.message_type,
+            "sender_id": payload.sender_id,
+            "nickname": payload.nickname,
+            "raw_message": payload.raw_message,
+            "local_message": payload.local_message or payload.raw_message,
+            "timestamp": payload.timestamp,
+        },
+    )
+    display_name = payload.nickname if payload.sender_id == payload.robot_id else None
+    await BotProfileService.upsert_bot_profile(
+        db,
+        robot_id=payload.robot_id,
+        platform=payload.platform,
+        display_name=display_name,
+    )
+    return MessageIngestResponse(msg_hash=msg_hash)
 
 
 @router.get("/search", response_model=list[MessageResponse])

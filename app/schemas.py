@@ -71,6 +71,23 @@ class MessageResponse(BaseModel):
     reply_preview_text: str | None = None
 
 
+class MessageIngestRequest(BaseModel):
+    robot_id: str = Field(min_length=1, max_length=64)
+    platform: str = Field(min_length=1, max_length=20)
+    room_id: str = Field(min_length=1, max_length=64)
+    message_type: str = Field(min_length=1, max_length=20)
+    sender_id: str = Field(min_length=1, max_length=64)
+    nickname: str | None = Field(default=None, max_length=128)
+    raw_message: str = Field(min_length=1)
+    local_message: str | None = None
+    timestamp: int
+    message_id: str | None = Field(default=None, max_length=64)
+
+
+class MessageIngestResponse(BaseModel):
+    msg_hash: str
+
+
 class MediaBackfillFailureResponse(BaseModel):
     msg_hash: str
     kind: str
