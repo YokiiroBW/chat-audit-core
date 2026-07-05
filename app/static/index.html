@@ -1186,7 +1186,9 @@
         const label = document.createElement('span');
         label.className = 'truncate';
         label.textContent = `${user.username} · ${user.role} · ${user.status}`;
-        row.appendChild(label);
+        const revoke = button('禁用', 'btn link danger', () => revokeAdminUser(user.id));
+        revoke.disabled = user.status === 'revoked';
+        row.append(label, revoke);
         container.appendChild(row);
       });
     };
@@ -1895,6 +1897,13 @@
       renderSettings();
     }
 
+    async function revokeAdminUser(userId) {
+      await apiSend(`/api/admin/users/${encodeURIComponent(userId)}`, 'DELETE');
+      state.adminUserCreateResult = null;
+      await refreshAdminUsers();
+      renderSettings();
+    }
+
     async function revokeAdminToken(tokenId) {
       await apiSend(`/api/admin/tokens/${encodeURIComponent(tokenId)}`, 'DELETE');
       state.adminTokenCreateResult = null;
@@ -2210,6 +2219,7 @@
     window.logoutAuth = logoutAuth;
     window.refreshAuthIdentity = refreshAuthIdentity;
     window.createAdminUser = createAdminUser;
+    window.revokeAdminUser = revokeAdminUser;
 
     bindEvents();
     renderAll();

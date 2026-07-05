@@ -155,3 +155,19 @@ class AdminUserService:
         await db.commit()
         await db.refresh(session)
         return session
+
+    @staticmethod
+    async def revoke_user(db: AsyncSession, user_id: int) -> AdminUser | None:
+        user = await db.get(AdminUser, user_id)
+        if user is None:
+            return None
+        if user.status != "revoked":
+            user.status = "revoked"
+            user.revoked_at = utc_now()
+            result = await db.execute(select(AdminSession).where(AdminSession.user_id == user_id, AdminSession.status == "active"))
+            for session in result.scalars().all():
+                session.status = "revoked"
+                session.revoked_at = utc_now()
+            await db.commit()
+            await db.refresh(user)
+        return user

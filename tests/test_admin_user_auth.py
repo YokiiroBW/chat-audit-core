@@ -29,6 +29,8 @@ async def test_database_user_login_logout_and_role_authorization(db_session, tmp
             delete = await client.delete("/api/adapters/not-allowed", headers={"Authorization": f"Bearer {session_token}"})
             logout = await client.post("/api/auth/logout", headers={"Authorization": f"Bearer {session_token}"})
             after_logout = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {session_token}"})
+            revoked = await client.delete(f"/api/admin/users/{created.json()['id']}", headers={"Authorization": "Bearer bootstrap-admin"})
+            after_revoke_login = await client.post("/api/auth/login", json={"username": "opsuser", "password": "strong-password-1"})
             logs = await client.get("/api/audit/logs", headers={"Authorization": "Bearer bootstrap-admin"}, params={"action": "auth.login"})
     finally:
         app.dependency_overrides.clear()
@@ -45,8 +47,11 @@ async def test_database_user_login_logout_and_role_authorization(db_session, tmp
     assert delete.status_code == 403
     assert logout.status_code == 204
     assert after_logout.status_code == 401
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+    assert after_revoke_login.status_code == 401
     assert logs.status_code == 200
-    assert logs.json()[0]["status"] == "success"
+    assert {record["status"] for record in logs.json()} >= {"success", "failed"}
 
 
 @pytest.mark.asyncio

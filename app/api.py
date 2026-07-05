@@ -515,6 +515,24 @@ async def create_admin_user(
     return AdminUserResponse.model_validate(user)
 
 
+@router.delete("/admin/users/{user_id}", response_model=AdminUserResponse)
+async def revoke_admin_user(
+    user_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminUserResponse:
+    action = "admin_user.revoke"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    user = await AdminUserService.revoke_user(db, user_id)
+    if user is None:
+        await _audit(db, request, action=action, status_="failed", target=str(user_id), detail={"reason": "not_found"})
+        raise HTTPException(status_code=404, detail="admin user not found")
+    await _audit(db, request, action=action, status_="success", target=str(user.id), detail={"username": user.username, "role": user.role})
+    return AdminUserResponse.model_validate(user)
+
+
 @router.get("/system/migrations", response_model=list[MigrationStatusResponse])
 async def list_migration_status(db: AsyncSession = Depends(get_db_session)) -> list[MigrationStatusResponse]:
     result = await db.execute(select(SchemaMigration))

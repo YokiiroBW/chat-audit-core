@@ -110,8 +110,9 @@
 - 新增 `admin_users`、`admin_sessions` 与轻量迁移记录。
 - 新增 `/api/auth/login`、`/api/auth/me`、`/api/auth/logout`。
 - 新增 `/api/admin/users` 创建/列表入口。
+- 新增 `/api/admin/users/{id}` 禁用入口，并会吊销该用户活动会话。
 - 新增 `/api/admin/tokens/{id}/rotate`，旧 token 失效，新 token 可用。
-- Web 设置页支持登录/退出、当前角色显示和数据库用户创建/列表。
+- Web 设置页支持登录/退出、当前角色显示和数据库用户创建/列表/禁用。
 
 ### T7 完整 Alembic 迁移体系
 

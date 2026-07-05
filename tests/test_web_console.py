@@ -123,6 +123,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "logoutAuth" in html
     assert "refreshAuthIdentity" in html
     assert "createAdminUser" in html
+    assert "revokeAdminUser" in html
     assert "authStatusReport" in html
     assert "adminUserList" in html
     assert "/api/import/validate" in html
