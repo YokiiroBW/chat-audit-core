@@ -166,6 +166,18 @@ tests/fixtures/wechat_hook_samples.json
 
 新增真实客户端样本时，优先追加到该文件并运行 `tests/test_wechat_pc_adapter.py`。
 
+## 微信 PC 托盘采集器
+
+Windows PC 端采集器骨架位于 `wechat_tray_adapter/`，说明见 `WECHAT_TRAY_ADAPTER.md`。目标是通过 `pythonw.exe` 或 PyInstaller `--noconsole` 静默启动，仅显示系统托盘图标，并在程序内部集成 `wcferry` / WeChatFerry 同步官方 PC 微信消息到 NAS。
+
+当前 NAS 端已支持：
+
+- `POST /api/receive_external_msg` 外部消息兼容入口
+- `POST /api/external/media` 与 `POST /api/wechat/media` multipart 媒体上传入口
+- WeChatFerry 常见字段和已上传本地媒体路径归一化
+
+真实 PC 微信与 WeChatFerry 兼容性、托盘图标行为、端到端样本采集仍需在 Windows 桌面环境验收。
+
 ## 自动备份
 
 应用启动时会根据 `AUTO_BACKUP_CRON` 启动自动备份任务，将导出包写入 `BACKUP_ROOT`。

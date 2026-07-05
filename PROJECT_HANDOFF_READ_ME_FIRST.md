@@ -8,6 +8,16 @@ updated_at: "2026-07-05"
 read_this_first: true
 ---
 
+## 2026-07-06 最新状态
+
+- 最新已推送提交：`2811b3b 后端：补齐微信外部接入与媒体上传接口`。
+- 本地全量测试：`154 passed`。
+- NAS 验收：部署后 `/health` 200、首页 200、管理 API 未鉴权 401 / 鉴权 200 正常。
+- 新增后端入口：`POST /api/receive_external_msg`、`POST /api/external/media`、`POST /api/wechat/media`。
+- 新增 PC 微信托盘采集器核心骨架：`wechat_tray_adapter/`。
+- 当前队列入口：`CURRENT_QUEUE_STATUS.md`。
+- 当前外部阻塞：真实 Windows 微信 + WeChatFerry 环境验收，需要用户准备已登录官方 PC 微信和兼容 `wcferry`。
+
 # READ ME FIRST：chat-audit-core 项目续作交接说明
 
 本文用于后续对话快速接手，不需要翻完整聊天记录。不要在本文档里写入 token、密码、私钥或 NAS 敏感凭据。
