@@ -325,7 +325,7 @@ async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], s
         for profile in profiles
         if getattr(profile, "platform", "") == "qq"
         and str(getattr(profile, "id", "")).isdigit()
-        and not getattr(profile, "avatar_path", None)
+        and _needs_qq_avatar_refresh(getattr(profile, "avatar_path", None))
     ]
     if not missing_qq_avatars:
         return False
@@ -343,6 +343,12 @@ async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], s
                 max_bytes=settings.media_max_bytes,
             )
     return True
+
+
+def _needs_qq_avatar_refresh(avatar_path: str | None) -> bool:
+    if not avatar_path:
+        return True
+    return avatar_path.lower().endswith(".svg")
 
 
 @router.get("/bots/{robot_id}/capture-targets", response_model=list[CaptureTargetSettingResponse])
@@ -811,14 +817,14 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
         for room in rooms
         if room.get("message_type") == "group"
         and str(room.get("room_id") or "").isdigit()
-        and (not room.get("display_name") or not room.get("avatar_path"))
+        and (not room.get("display_name") or _needs_qq_avatar_refresh(room.get("avatar_path")))
     ]
     missing_private_rooms = [
         room
         for room in rooms
         if room.get("message_type") == "private"
         and str(room.get("room_id") or "").isdigit()
-        and (not room.get("display_name") or not room.get("avatar_path"))
+        and (not room.get("display_name") or _needs_qq_avatar_refresh(room.get("avatar_path")))
     ]
     if not missing_group_rooms and not missing_private_rooms:
         return False
@@ -898,7 +904,7 @@ async def _hydrate_missing_message_sender_profiles(db: AsyncSession, messages: l
         if (
             message.platform == "qq"
             and sender_id.isdigit()
-            and not getattr(message, "sender_avatar_path", None)
+            and _needs_qq_avatar_refresh(getattr(message, "sender_avatar_path", None))
             and sender_id not in missing_senders
         ):
             missing_senders[sender_id] = getattr(message, "sender_display_name", None) or message.nickname

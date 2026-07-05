@@ -275,6 +275,62 @@ async def test_private_room_api_hydrates_friend_avatar_and_preserves_name(db_ses
 
 
 @pytest.mark.asyncio
+async def test_private_room_api_refreshes_placeholder_svg_avatar(db_session, monkeypatch):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "123456789",
+            "message_type": "private",
+            "sender_id": "123456789",
+            "nickname": "Private Friend",
+            "raw_message": "hello private",
+            "timestamp": 1783000000,
+        },
+    )
+    db_session.add(
+        UserProfile(
+            user_id="123456789",
+            platform="qq",
+            display_name="Private Friend",
+            avatar_path="/static/storage/private-placeholder.svg",
+        )
+    )
+    await db_session.commit()
+
+    async def fake_cache_qq_user_profile(
+        db,
+        *,
+        user_id,
+        platform,
+        display_name,
+        http_client,
+        storage_root,
+        public_prefix,
+        max_bytes,
+    ):
+        profile = await db.get(UserProfile, user_id)
+        profile.avatar_path = "/static/storage/private-real.jpg"
+        await db.commit()
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", fake_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/rooms", params={"robot_id": "robot-a"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["avatar_path"] == "/static/storage/private-real.jpg"
+
+
+@pytest.mark.asyncio
 async def test_messages_api_hydrates_missing_numeric_qq_sender_avatar(db_session, monkeypatch):
     await MessageService.process_incoming_message(
         db_session,
@@ -402,3 +458,47 @@ async def test_bots_api_hydrates_missing_numeric_qq_bot_avatar(db_session, monke
     payload = response.json()
     assert payload[0]["id"] == "1449801200"
     assert payload[0]["avatar_path"] == "/static/storage/bot-avatar.jpg"
+
+
+@pytest.mark.asyncio
+async def test_bots_api_refreshes_placeholder_svg_avatar(db_session, monkeypatch):
+    db_session.add(BotProfile(id="1449801200", platform="qq", status="green", display_name="NapCat2"))
+    db_session.add(
+        UserProfile(
+            user_id="1449801200",
+            platform="qq",
+            display_name="NapCat2",
+            avatar_path="/static/storage/bot-placeholder.svg",
+        )
+    )
+    await db_session.commit()
+
+    async def fake_cache_qq_user_profile(
+        db,
+        *,
+        user_id,
+        platform,
+        display_name,
+        http_client,
+        storage_root,
+        public_prefix,
+        max_bytes,
+    ):
+        profile = await db.get(UserProfile, user_id)
+        profile.avatar_path = "/static/storage/bot-real.jpg"
+        await db.commit()
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", fake_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/bots")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["avatar_path"] == "/static/storage/bot-real.jpg"
