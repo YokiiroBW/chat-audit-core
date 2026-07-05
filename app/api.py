@@ -16,11 +16,13 @@ from app.schemas import (
     BotProfileResponse,
     ImportResultResponse,
     ImportValidationResponse,
+    MediaBackfillResponse,
     MessageResponse,
     RoomResponse,
 )
 from app.services.adapter_service import AdapterService
 from app.services.backup_service import BackupService
+from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
 from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
@@ -226,6 +228,41 @@ async def search_messages(
         limit=limit,
     )
     return [MessageResponse.model_validate(message) for message in messages]
+
+
+@router.post("/media/backfill", response_model=MediaBackfillResponse)
+async def backfill_media(
+    limit: int = Query(default=100, ge=1, le=1000),
+    dry_run: bool = Query(default=False),
+    failure_limit: int = Query(default=20, ge=0, le=200),
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> MediaBackfillResponse:
+    async def load_forward(robot_id: str, forward_id: str) -> dict:
+        return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
+
+    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        report = await MediaBackfillService.backfill_historical_media(
+            db,
+            limit=limit,
+            dry_run=dry_run,
+            failure_limit=failure_limit,
+            http_client=client,
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+            max_bytes=settings.media_max_bytes,
+            forward_payload_loader=load_forward,
+        )
+    return MediaBackfillResponse(
+        scanned=report.scanned,
+        candidates=report.candidates,
+        updated=report.updated,
+        unchanged=report.unchanged,
+        failed=report.failed,
+        media_failed=report.media_failed,
+        forward_failed=report.forward_failed,
+        failures=[failure.__dict__ for failure in report.failures],
+    )
 
 
 @router.get("/forward")

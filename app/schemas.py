@@ -71,6 +71,24 @@ class MessageResponse(BaseModel):
     reply_preview_text: str | None = None
 
 
+class MediaBackfillFailureResponse(BaseModel):
+    msg_hash: str
+    kind: str
+    target: str
+    reason: str
+
+
+class MediaBackfillResponse(BaseModel):
+    scanned: int
+    candidates: int
+    updated: int
+    unchanged: int
+    failed: int
+    media_failed: int
+    forward_failed: int
+    failures: list[MediaBackfillFailureResponse]
+
+
 class ImportResultResponse(BaseModel):
     messages: int
     robot_messages: int
