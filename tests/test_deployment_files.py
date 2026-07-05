@@ -9,8 +9,7 @@ def test_dockerfile_uses_offline_friendly_runtime_and_runs_uvicorn():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
-    assert "apt-get install -y --no-install-recommends ffmpeg" in dockerfile
-    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
+    assert "apt-get" not in dockerfile
     assert "curl" not in dockerfile
     assert "pip install" in dockerfile
     assert "requirements.txt" in dockerfile

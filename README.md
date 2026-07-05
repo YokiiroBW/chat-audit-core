@@ -107,7 +107,7 @@ FFMPEG_BIN=ffmpeg
 
 - 语音会尝试转为 MP3，视频会尝试转为 MP4。
 - 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
-- Docker 镜像已安装 FFmpeg；本地开发环境需要自行保证 `FFMPEG_BIN` 可执行。
+- 默认 Docker 镜像保持离线友好，不在构建期联网安装 FFmpeg；需要转码时请使用已内置 FFmpeg 的自定义镜像，或在运行环境中提供可执行的 `FFMPEG_BIN`。
 
 ## 自动备份
 
