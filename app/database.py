@@ -13,6 +13,7 @@ LIGHTWEIGHT_MIGRATIONS = {
     "20260705_003_audit_logs": "Create audit_logs table",
     "20260705_004_schema_migrations": "Create schema_migrations table",
     "20260705_005_admin_tokens": "Create admin_tokens table",
+    "20260705_006_system_settings": "Create system_settings table",
 }
 
 
@@ -48,6 +49,7 @@ async def ensure_schema_compatibility(target_engine: AsyncEngine | None = None) 
         await _record_migration(conn, "20260705_003_audit_logs")
         await _record_migration(conn, "20260705_004_schema_migrations")
         await _record_migration(conn, "20260705_005_admin_tokens")
+        await _record_migration(conn, "20260705_006_system_settings")
 
 
 async def _record_migration(conn, version: str) -> None:

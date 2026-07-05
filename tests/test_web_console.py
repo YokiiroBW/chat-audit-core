@@ -23,6 +23,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/dashboard" in html
     assert "/api/backup/status" in html
     assert "/api/backup/run" in html
+    assert "/api/backup/settings" in html
     assert "dashboardSummary" in html
     assert "renderDashboard" in html
     assert "/api/rooms" in html
@@ -68,6 +69,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "自动备份" in html
     assert "runManualBackup" in html
     assert "backupStatusReport" in html
+    assert "backupCronInput" in html
+    assert "backupKeepLatestInput" in html
+    assert "saveBackupSettings" in html
+    assert "resetBackupSettings" in html
     assert "管理令牌" in html
     assert "createAdminToken" in html
     assert "revokeAdminToken" in html

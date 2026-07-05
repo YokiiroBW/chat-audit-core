@@ -17,7 +17,7 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`测试：固化微信 Hook 样本回放`
+- 最新提交主题：`功能：持久化自动备份配置`
 - 本地全量测试：`123 passed`
 - NAS 部署：已部署最新版本
 - NAS 离线验收：`offline_ready=true`
@@ -53,7 +53,7 @@ c035c19 功能：增加资产统计仪表盘
 - 全离线验收：`GET /api/offline/audit`
 - 离线修复：`POST /api/offline/repair`
 - 导出/导入 JSON，带媒体文件嵌入、checksum、系统签名
-- 自动备份定时任务与手动触发：`/api/backup/status`、`/api/backup/run`
+- 自动备份定时任务、数据库配置覆盖与手动触发：`/api/backup/status`、`/api/backup/settings`、`/api/backup/run`
 - 仪表盘统计：`/api/dashboard`
 - 微信 Hook 第三版入口：`POST /api/wechat/events`，支持常见嵌套字段、微信数字 `MsgType` 和群聊发送者前缀，并有 `tests/fixtures/wechat_hook_samples.json` 样本回放
 - 操作审计：`audit_logs` 与 `GET /api/audit/logs`

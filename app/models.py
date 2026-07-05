@@ -132,6 +132,16 @@ class AdminToken(Base):
     revoked_at = Column(DateTime, nullable=True)
 
 
+class SystemSetting(Base):
+    """Database-managed runtime setting override."""
+
+    __tablename__ = "system_settings"
+
+    key = Column(String(128), primary_key=True)
+    value_json = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
 class SchemaMigration(Base):
     """Applied lightweight schema migration marker."""
 

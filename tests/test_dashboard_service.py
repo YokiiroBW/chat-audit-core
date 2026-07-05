@@ -4,7 +4,8 @@ import pytest
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
-from app.models import BotProfile, MediaAsset
+from app.models import AuditLog, BotProfile, MediaAsset, SystemSetting
+from app.services.backup_config_service import BackupConfigService
 from app.services.backup_service import BackupService
 from app.services.dashboard_service import DashboardService
 from app.services.message_service import MessageService
@@ -105,7 +106,82 @@ async def test_backup_status_api_returns_scheduler_settings(db_session, tmp_path
         "backup_root": str(tmp_path),
         "backups": 1,
         "latest_backup": "auto-backup-20260705T030000Z.json",
+        "config_source": "env",
+        "cron_source": "env",
+        "keep_latest_source": "env",
     }
+
+
+@pytest.mark.asyncio
+async def test_backup_status_api_prefers_database_settings(db_session, tmp_path):
+    settings = Settings(backup_root=tmp_path, auto_backup_cron="15 3 * * *", auto_backup_keep_latest=3)
+    await BackupConfigService.update_config(db_session, settings, cron="45 4 * * *", keep_latest=11)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/backup/status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["cron"] == "45 4 * * *"
+    assert response.json()["keep_latest"] == 11
+    assert response.json()["config_source"] == "database"
+    assert response.json()["cron_source"] == "database"
+    assert response.json()["keep_latest_source"] == "database"
+
+
+@pytest.mark.asyncio
+async def test_backup_settings_api_persists_overrides_and_audits(db_session, tmp_path):
+    settings = Settings(backup_root=tmp_path, auto_backup_cron="15 3 * * *", auto_backup_keep_latest=3)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.patch("/api/backup/settings", json={"cron": "30 5 * * *", "keep_latest": 9})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["cron"] == "30 5 * * *"
+    assert response.json()["keep_latest"] == 9
+    assert response.json()["config_source"] == "database"
+    assert await db_session.get(SystemSetting, "backup.auto_backup_cron") is not None
+    result = await db_session.execute(AuditLog.__table__.select().where(AuditLog.action == "backup.settings.update"))
+    audit_log = result.first()
+    assert audit_log is not None
+
+
+@pytest.mark.asyncio
+async def test_backup_settings_api_can_reset_to_env(db_session, tmp_path):
+    settings = Settings(backup_root=tmp_path, auto_backup_cron="15 3 * * *", auto_backup_keep_latest=3)
+    await BackupConfigService.update_config(db_session, settings, cron="30 5 * * *", keep_latest=9)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.patch("/api/backup/settings", json={"reset_to_env": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["cron"] == "15 3 * * *"
+    assert response.json()["keep_latest"] == 3
+    assert response.json()["config_source"] == "env"
+    assert await db_session.get(SystemSetting, "backup.auto_backup_cron") is None
 
 
 @pytest.mark.asyncio

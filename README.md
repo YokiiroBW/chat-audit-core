@@ -180,15 +180,17 @@ data/backups/auto-backup-20260703T030000Z.json
 - 导入失败与自动备份失败会写入 `BACKUP_ROOT/failures.log`，每行一条 JSON 失败记录。
 - `AUTO_BACKUP_KEEP_LATEST` 控制保留最近多少个 `auto-backup-*.json` 文件。
 - 如需禁用自动备份，可将 `AUTO_BACKUP_CRON` 设置为 `off`、`disabled`、`none`、`false` 或 `0`。
+- `.env` 仍作为默认配置；通过 Web 控制台或 `PATCH /api/backup/settings` 保存的数据库覆盖项优先生效，不会回写 `.env`。
 
 管理接口：
 
 ```text
-GET  /api/backup/status  # 查看自动备份开关、cron、保留数量和最新备份
-POST /api/backup/run     # 立即执行一次签名自动备份
+GET   /api/backup/status    # 查看自动备份开关、cron、保留数量、配置来源和最新备份
+PATCH /api/backup/settings  # 更新 cron/保留数量，或 {"reset_to_env": true} 恢复 .env 默认值
+POST  /api/backup/run       # 立即执行一次签名自动备份
 ```
 
-Web 控制台的账号设置面板也提供自动备份状态与“立即备份”按钮。cron 和保留数量仍由环境变量控制。
+Web 控制台的账号设置面板提供自动备份状态、cron/保留数量编辑、恢复 `.env` 默认值与“立即备份”按钮。配置变更会写入 `audit_logs`。
 
 ## 管理 API 鉴权
 

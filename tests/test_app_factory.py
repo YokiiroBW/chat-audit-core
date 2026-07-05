@@ -58,6 +58,12 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "applied": True,
             "applied_at": migrations_response.json()[4]["applied_at"],
         },
+        {
+            "version": "20260705_006_system_settings",
+            "description": "Create system_settings table",
+            "applied": True,
+            "applied_at": migrations_response.json()[5]["applied_at"],
+        },
     ]
     assert storage_root.exists()
     assert backup_root.exists()
@@ -65,13 +71,13 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
     async def inspect_tables():
         async with engine.connect() as conn:
             result = await conn.execute(
-                text("select name from sqlite_master where type='table' and name in ('messages', 'robot_messages', 'media_assets', 'adapters', 'bot_profiles', 'room_profiles', 'user_profiles', 'audit_logs', 'schema_migrations', 'admin_tokens')")
+                text("select name from sqlite_master where type='table' and name in ('messages', 'robot_messages', 'media_assets', 'adapters', 'bot_profiles', 'room_profiles', 'user_profiles', 'audit_logs', 'schema_migrations', 'admin_tokens', 'system_settings')")
             )
             return {row[0] for row in result.fetchall()}
 
     import anyio
 
-    assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters", "bot_profiles", "room_profiles", "user_profiles", "audit_logs", "schema_migrations", "admin_tokens"}
+    assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters", "bot_profiles", "room_profiles", "user_profiles", "audit_logs", "schema_migrations", "admin_tokens", "system_settings"}
 
     async def inspect_migrations():
         async with engine.connect() as conn:
@@ -84,6 +90,7 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
         "20260705_003_audit_logs",
         "20260705_004_schema_migrations",
         "20260705_005_admin_tokens",
+        "20260705_006_system_settings",
     ]
 
 

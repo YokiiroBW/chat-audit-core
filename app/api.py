@@ -21,6 +21,7 @@ from app.schemas import (
     AdminTokenResponse,
     AuditLogResponse,
     BackupRunResponse,
+    BackupSettingsUpdateRequest,
     BackupStatusResponse,
     BotProfileResponse,
     DashboardResponse,
@@ -41,6 +42,7 @@ from app.services.admin_token_service import AdminTokenService, VALID_ADMIN_ROLE
 from app.services.audit_log_service import AuditLogService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
+from app.services.backup_config_service import BackupConfigService, EffectiveBackupConfig
 from app.services.dashboard_service import DashboardService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
@@ -244,24 +246,66 @@ async def get_dashboard_summary(
     return DashboardResponse(**await DashboardService.get_summary(db, backup_root=settings.backup_root))
 
 
-def _auto_backup_enabled(cron_expr: str) -> bool:
-    value = (cron_expr or "").strip().lower()
-    return bool(value and value not in {"off", "disabled", "none", "false", "0"})
-
-
-@router.get("/backup/status", response_model=BackupStatusResponse)
-async def get_backup_status(settings: Settings = Depends(get_settings)) -> BackupStatusResponse:
+def _backup_status_response(settings: Settings, backup_config: EffectiveBackupConfig) -> BackupStatusResponse:
     backup_root = settings.backup_root
     backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name)) if backup_root.exists() else []
     latest = backups[-1].name if backups else None
     return BackupStatusResponse(
-        enabled=_auto_backup_enabled(settings.auto_backup_cron),
-        cron=settings.auto_backup_cron,
-        keep_latest=settings.auto_backup_keep_latest,
+        enabled=backup_config.enabled,
+        cron=backup_config.cron,
+        keep_latest=backup_config.keep_latest,
         backup_root=str(backup_root),
         backups=len(backups),
         latest_backup=latest,
+        config_source=backup_config.config_source,
+        cron_source=backup_config.cron_source,
+        keep_latest_source=backup_config.keep_latest_source,
     )
+
+
+@router.get("/backup/status", response_model=BackupStatusResponse)
+async def get_backup_status(
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> BackupStatusResponse:
+    backup_config = await BackupConfigService.get_effective_config(db, settings)
+    return _backup_status_response(settings, backup_config)
+
+
+@router.patch("/backup/settings", response_model=BackupStatusResponse)
+async def update_backup_settings(
+    payload: BackupSettingsUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> BackupStatusResponse:
+    action = "backup.settings.update"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    before = await BackupConfigService.get_effective_config(db, settings)
+    try:
+        backup_config = await BackupConfigService.update_config(
+            db,
+            settings,
+            cron=payload.cron,
+            keep_latest=payload.keep_latest,
+            reset_to_env=payload.reset_to_env,
+        )
+    except ValueError as exc:
+        await _audit(db, request, action=action, status_="failed", detail={"error": str(exc)})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        action=action,
+        status_="success",
+        detail={
+            "before": {"cron": before.cron, "keep_latest": before.keep_latest, "source": before.config_source},
+            "after": {"cron": backup_config.cron, "keep_latest": backup_config.keep_latest, "source": backup_config.config_source},
+            "reset_to_env": payload.reset_to_env,
+        },
+    )
+    return _backup_status_response(settings, backup_config)
 
 
 @router.post("/backup/run", response_model=BackupRunResponse)
@@ -273,6 +317,7 @@ async def run_backup_now(
 ) -> BackupRunResponse:
     action = "backup.run"
     _enforce_high_risk_rate_limit(request, action, settings)
+    backup_config = await BackupConfigService.get_effective_config(db, settings)
     try:
         path = await BackupService.write_auto_backup_file(
             db,
@@ -280,7 +325,7 @@ async def run_backup_now(
             storage_root=settings.storage_root,
             public_storage_prefix=settings.public_storage_prefix,
             max_media_bytes=settings.media_max_bytes,
-            keep_latest=settings.auto_backup_keep_latest,
+            keep_latest=backup_config.keep_latest,
             system_id=settings.system_instance_id,
             signing_key=settings.app_secret_key,
         )

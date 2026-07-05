@@ -62,6 +62,15 @@ class BackupStatusResponse(BaseModel):
     backup_root: str
     backups: int
     latest_backup: str | None = None
+    config_source: str = "env"
+    cron_source: str = "env"
+    keep_latest_source: str = "env"
+
+
+class BackupSettingsUpdateRequest(BaseModel):
+    cron: str | None = Field(default=None, max_length=64)
+    keep_latest: int | None = Field(default=None, ge=0, le=365)
+    reset_to_env: bool = False
 
 
 class BackupRunResponse(BaseModel):

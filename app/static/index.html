@@ -608,6 +608,18 @@
           <span>自动备份</span>
           <button id="runBackupButton" class="btn link">立即备份</button>
         </div>
+        <div class="form-grid">
+          <label class="label">cron
+            <input id="backupCronInput" placeholder="0 3 * * * / off" />
+          </label>
+          <label class="label">keep_latest
+            <input id="backupKeepLatestInput" type="number" min="0" max="365" step="1" />
+          </label>
+          <div class="button-row">
+            <button id="saveBackupSettingsButton" class="btn primary">保存备份配置</button>
+            <button id="resetBackupSettingsButton" class="btn">恢复 .env</button>
+          </div>
+        </div>
         <div id="backupStatusReport" class="report"></div>
         <div class="settings-title">
           <span>管理令牌</span>
@@ -727,6 +739,7 @@
       dashboard: null,
       backupStatus: null,
       backupRunResult: null,
+      backupSettingsSaving: false,
       adminTokenList: [],
       adminTokenCreateResult: null,
       adminTokenError: '',
@@ -1019,10 +1032,17 @@
         box.textContent = '备份状态未加载';
         return;
       }
+      el('backupCronInput').value = status.cron || '';
+      el('backupKeepLatestInput').value = status.keep_latest === null || status.keep_latest === undefined ? '' : status.keep_latest;
+      el('saveBackupSettingsButton').disabled = state.backupSettingsSaving;
+      el('resetBackupSettingsButton').disabled = state.backupSettingsSaving;
       const rows = [
         ['enabled', status.enabled ? '开启' : '关闭', status.enabled ? 'ok' : undefined],
         ['cron', status.cron || '-'],
         ['keep_latest', status.keep_latest],
+        ['source', status.config_source || '-'],
+        ['cron_source', status.cron_source || '-'],
+        ['keep_latest_source', status.keep_latest_source || '-'],
         ['backups', status.backups],
         ['latest', status.latest_backup || '-'],
       ];
@@ -1649,6 +1669,32 @@
       renderAll();
     }
 
+    async function saveBackupSettings() {
+      state.backupSettingsSaving = true;
+      renderSettings();
+      try {
+        const payload = {
+          cron: el('backupCronInput').value.trim(),
+          keep_latest: Number(el('backupKeepLatestInput').value),
+        };
+        state.backupStatus = await apiSend('/api/backup/settings', 'PATCH', payload);
+      } finally {
+        state.backupSettingsSaving = false;
+        renderSettings();
+      }
+    }
+
+    async function resetBackupSettings() {
+      state.backupSettingsSaving = true;
+      renderSettings();
+      try {
+        state.backupStatus = await apiSend('/api/backup/settings', 'PATCH', { reset_to_env: true });
+      } finally {
+        state.backupSettingsSaving = false;
+        renderSettings();
+      }
+    }
+
     async function refreshAdminTokens() {
       try {
         state.adminTokenList = await apiGet('/api/admin/tokens');
@@ -1932,6 +1978,8 @@
       el('clearAdapterButton').addEventListener('click', resetAdapterForm);
       el('saveAdapterButton').addEventListener('click', saveAdapter);
       el('runBackupButton').addEventListener('click', runManualBackup);
+      el('saveBackupSettingsButton').addEventListener('click', saveBackupSettings);
+      el('resetBackupSettingsButton').addEventListener('click', resetBackupSettings);
       el('createAdminTokenButton').addEventListener('click', createAdminToken);
       el('searchButton').addEventListener('click', performSearch);
       el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
@@ -1972,6 +2020,8 @@
     window.validateImportPackage = validateImportPackage;
     window.submitImportPackage = submitImportPackage;
     window.runManualBackup = runManualBackup;
+    window.saveBackupSettings = saveBackupSettings;
+    window.resetBackupSettings = resetBackupSettings;
 
     bindEvents();
     renderAll();

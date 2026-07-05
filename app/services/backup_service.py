@@ -762,19 +762,33 @@ class BackupService:
         }
 
 async def _auto_backup_loop(settings, sessionmaker) -> None:
+    from app.services.backup_config_service import BackupConfigService
+
     while True:
-        now = utc_now().replace(microsecond=0)
-        next_run = BackupService.next_run_from_cron(settings.auto_backup_cron, now)
-        await asyncio.sleep(max(0, (next_run - now).total_seconds()))
         try:
             async with sessionmaker() as session:
+                backup_config = await BackupConfigService.get_effective_config(session, settings)
+            if not backup_config.enabled:
+                await asyncio.sleep(60)
+                continue
+            now = utc_now().replace(microsecond=0)
+            next_run = BackupService.next_run_from_cron(backup_config.cron, now)
+            seconds_until_run = max(0, (next_run - now).total_seconds())
+            if seconds_until_run > 60:
+                await asyncio.sleep(60)
+                continue
+            await asyncio.sleep(seconds_until_run)
+            async with sessionmaker() as session:
+                backup_config = await BackupConfigService.get_effective_config(session, settings)
+                if not backup_config.enabled:
+                    continue
                 await BackupService.write_auto_backup_file(
                     session,
                     backup_root=settings.backup_root,
                     storage_root=settings.storage_root,
                     public_storage_prefix=settings.public_storage_prefix,
                     max_media_bytes=getattr(settings, "media_max_bytes", None),
-                    keep_latest=getattr(settings, "auto_backup_keep_latest", 7),
+                    keep_latest=backup_config.keep_latest,
                     system_id=getattr(settings, "system_instance_id", None),
                     signing_key=getattr(settings, "app_secret_key", None),
                 )
@@ -783,12 +797,10 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
                 settings.backup_root,
                 event="auto_backup",
                 error=str(exc),
-                context={"cron": settings.auto_backup_cron},
+                context={"cron": getattr(settings, "auto_backup_cron", None)},
             )
+            await asyncio.sleep(60)
 
 
 def start_auto_backup_scheduler(*, settings, sessionmaker) -> asyncio.Task | None:
-    cron_expr = (settings.auto_backup_cron or "").strip()
-    if not cron_expr or cron_expr.lower() in {"off", "disabled", "none", "false", "0"}:
-        return None
     return asyncio.create_task(_auto_backup_loop(settings, sessionmaker))
