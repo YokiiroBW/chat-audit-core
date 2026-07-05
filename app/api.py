@@ -309,9 +309,40 @@ async def list_adapters(db: AsyncSession = Depends(get_db_session)) -> list[Adap
 
 
 @router.get("/bots", response_model=list[BotProfileResponse])
-async def list_bots(db: AsyncSession = Depends(get_db_session)) -> list[BotProfileResponse]:
+async def list_bots(
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> list[BotProfileResponse]:
     profiles = await QueryService.list_bot_profiles(db)
+    if await _hydrate_missing_bot_profiles(db, profiles=profiles, settings=settings):
+        profiles = await QueryService.list_bot_profiles(db)
     return [BotProfileResponse.model_validate(profile) for profile in profiles]
+
+
+async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], settings: Settings) -> bool:
+    missing_qq_avatars = [
+        profile
+        for profile in profiles
+        if getattr(profile, "platform", "") == "qq"
+        and str(getattr(profile, "id", "")).isdigit()
+        and not getattr(profile, "avatar_path", None)
+    ]
+    if not missing_qq_avatars:
+        return False
+
+    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        for profile in missing_qq_avatars[:20]:
+            await UserProfileService.cache_qq_user_profile(
+                db,
+                user_id=str(profile.id),
+                platform="qq",
+                display_name=profile.display_name,
+                http_client=client,
+                storage_root=settings.storage_root,
+                public_prefix=settings.public_storage_prefix,
+                max_bytes=settings.media_max_bytes,
+            )
+    return True
 
 
 @router.get("/bots/{robot_id}/capture-targets", response_model=list[CaptureTargetSettingResponse])
@@ -835,6 +866,7 @@ async def list_messages(
     robot_id: str = Query(..., min_length=1),
     room_id: str = Query(..., min_length=1),
     before_timestamp: int | None = Query(default=None),
+    around_message_id: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[MessageResponse]:
@@ -843,6 +875,7 @@ async def list_messages(
         robot_id=robot_id,
         room_id=room_id,
         before_timestamp=before_timestamp,
+        around_message_id=around_message_id,
         limit=limit,
     )
     return [MessageResponse.model_validate(message) for message in messages]

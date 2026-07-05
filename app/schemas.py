@@ -39,6 +39,7 @@ class BotProfileResponse(BaseModel):
     id: str
     platform: str
     display_name: str | None = None
+    avatar_path: str | None = None
     status: str
     source_adapter_id: str | None = None
     last_seen_at: datetime | None = None

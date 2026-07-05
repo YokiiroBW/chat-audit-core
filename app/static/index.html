@@ -345,6 +345,10 @@
     .message.mine {
       flex-direction: row-reverse;
     }
+    .message.reply-jump-highlight .bubble {
+      outline: 2px solid #f59e0b;
+      box-shadow: 0 0 0 4px rgba(245, 158, 11, .18), 0 1px 2px rgba(15, 23, 42, .08);
+    }
     .message-avatar { width: 40px; height: 40px; flex: 0 0 40px; }
     .message-body {
       max-width: 68%;
@@ -451,13 +455,19 @@
     .reply-card {
       width: 100%;
       border-left: 3px solid #94a3b8;
+      border-top: 0;
+      border-right: 0;
+      border-bottom: 0;
       background: #f1f5f9;
       color: #475569;
       border-radius: 6px;
       padding: 6px 8px;
       font-size: 12px;
       line-height: 1.45;
+      text-align: left;
+      cursor: pointer;
     }
+    .reply-card:hover { background: #e2e8f0; }
     .reply-card strong {
       display: block;
       color: #334155;
@@ -832,6 +842,7 @@
       searchMode: false,
       loadingRooms: false,
       loadingHistory: false,
+      highlightedMessageId: '',
       settingsMode: false,
       editingAdapterId: null,
       importValidationReport: null,
@@ -955,7 +966,7 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'avatar';
-        renderAvatar(avatar, acc.id);
+        renderAvatar(avatar, acc.id, 'bot', acc.avatar_path);
         node.appendChild(avatar);
 
         const dot = document.createElement('span');
@@ -1417,6 +1428,11 @@
         const mine = state.currentRobot && msg.sender_id === state.currentRobot.id;
         const row = document.createElement('div');
         row.className = `message${mine ? ' mine' : ''}`;
+        if (msg.external_message_id) row.dataset.externalMessageId = String(msg.external_message_id);
+        row.dataset.msgHash = msg.msg_hash || '';
+        if (state.highlightedMessageId && String(msg.external_message_id || '') === String(state.highlightedMessageId)) {
+          row.className += ' reply-jump-highlight';
+        }
         const avatar = document.createElement('div');
         avatar.className = 'avatar message-avatar';
         renderAvatar(avatar, msg.sender_id, 'user', msg.sender_avatar_path);
@@ -1653,8 +1669,13 @@
     };
 
     const renderReplyCard = (container, params) => {
-      const card = document.createElement('div');
+      const card = document.createElement('button');
       card.className = 'reply-card';
+      card.type = 'button';
+      if (params.id) {
+        card.title = '跳转到被回复的消息';
+        card.addEventListener('click', () => jumpToReplyMessage(params.id));
+      }
       const title = document.createElement('strong');
       title.textContent = params.id ? `回复 #${params.id}` : '回复消息';
       card.appendChild(title);
@@ -2221,12 +2242,55 @@
       renderAll();
     }
 
-    const loadMessages = async (beforeTimestamp = null) => {
+    const loadMessages = async (beforeTimestamp = null, aroundMessageId = '') => {
       if (!state.currentRobot || !state.currentRoom) return [];
       let url = `/api/messages?robot_id=${encodeURIComponent(state.currentRobot.id)}&room_id=${encodeURIComponent(state.currentRoom.room_id)}&limit=50`;
       if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
+      if (aroundMessageId) url += `&around_message_id=${encodeURIComponent(aroundMessageId)}`;
       return await apiGet(url);
     };
+
+    const mergeMessages = (messages) => {
+      const byKey = new Map();
+      messages.forEach((msg) => {
+        const key = msg.msg_hash || msg.external_message_id || `${msg.timestamp}:${msg.sender_id}:${msg.raw_message}`;
+        byKey.set(key, msg);
+      });
+      return Array.from(byKey.values()).sort((a, b) => (a.timestamp - b.timestamp) || String(a.msg_hash || '').localeCompare(String(b.msg_hash || '')));
+    };
+
+    const scrollToExternalMessage = (externalMessageId) => {
+      const chat = el('chatWindow');
+      const row = Array.from(chat.querySelectorAll('.message')).find((item) => String(item.dataset.externalMessageId || '') === String(externalMessageId));
+      if (!row) return false;
+      state.highlightedMessageId = String(externalMessageId);
+      renderChat();
+      requestAnimationFrame(() => {
+        const highlighted = Array.from(chat.querySelectorAll('.message')).find((item) => String(item.dataset.externalMessageId || '') === String(externalMessageId));
+        if (highlighted) highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        window.setTimeout(() => {
+          if (state.highlightedMessageId === String(externalMessageId)) {
+            state.highlightedMessageId = '';
+            renderChat();
+          }
+        }, 1600);
+      });
+      return true;
+    };
+
+    async function jumpToReplyMessage(replyId) {
+      if (!replyId || !state.currentRobot || !state.currentRoom) return;
+      if (findReplyMessage(replyId)) {
+        scrollToExternalMessage(replyId);
+        return;
+      }
+      const around = await loadMessages(null, replyId);
+      if (around.length > 0) {
+        state.messageList = mergeMessages([...state.messageList, ...around]);
+        renderChat();
+        scrollToExternalMessage(replyId);
+      }
+    }
 
     async function reloadCurrentRoom() {
       if (!state.currentRoom) return;

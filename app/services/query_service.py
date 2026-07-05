@@ -43,8 +43,16 @@ class QueryService:
 
     @staticmethod
     async def list_bot_profiles(db: AsyncSession) -> list[BotProfile]:
-        result = await db.execute(select(BotProfile).order_by(BotProfile.last_seen_at.desc(), BotProfile.id.asc()))
-        return list(result.scalars().all())
+        result = await db.execute(
+            select(BotProfile, UserProfile.avatar_path.label("avatar_path"))
+            .outerjoin(UserProfile, UserProfile.user_id == BotProfile.id)
+            .order_by(BotProfile.last_seen_at.desc(), BotProfile.id.asc())
+        )
+        profiles = []
+        for profile, avatar_path in result.all():
+            profile.avatar_path = avatar_path
+            profiles.append(profile)
+        return profiles
 
     @staticmethod
     async def list_rooms(db: AsyncSession, robot_id: str) -> list[dict]:
@@ -80,8 +88,25 @@ class QueryService:
         robot_id: str,
         room_id: str,
         before_timestamp: int | None = None,
+        around_message_id: str | None = None,
         limit: int = 50,
     ) -> list[Message]:
+        if around_message_id:
+            target_result = await db.execute(
+                select(Message)
+                .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                .where(
+                    RobotMessage.robot_id == robot_id,
+                    Message.room_id == room_id,
+                    Message.external_message_id == around_message_id,
+                )
+                .limit(1)
+            )
+            target = target_result.scalars().first()
+            if target is None:
+                return []
+            before_timestamp = target.timestamp + 1
+
         stmt = (
             select(
                 Message,
