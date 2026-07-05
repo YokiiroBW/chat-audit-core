@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
-from app.models import MediaAsset
+from app.models import MediaAsset, UserProfile
 from app.services.message_service import MessageService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.offline_audit_service import OfflineAuditService
@@ -340,6 +340,37 @@ async def test_offline_audit_and_repair_cover_profile_avatars(db_session, tmp_pa
     assert after.missing_profile_avatars == 0
     assert after.missing_media_assets == 0
     assert after.missing_media_files == 0
+
+
+@pytest.mark.asyncio
+async def test_offline_repair_keeps_wechat_profile_platform(db_session, tmp_path):
+    await MessageService.process_incoming_message(
+        db_session,
+        "wxid_123",
+        "wechat",
+        {
+            "room_id": "wx_room",
+            "message_type": "private",
+            "sender_id": "wx_friend",
+            "nickname": "WeChat Friend",
+            "raw_message": "wechat profile",
+            "timestamp": 1783000000,
+        },
+    )
+
+    repair = await OfflineRepairService.repair_local_media_integrity(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+    room_profile = await db_session.get(UserProfile, "wx_room")
+    sender_profile = await db_session.get(UserProfile, "wx_friend")
+
+    assert repair.repaired_profile_avatars == 2
+    assert room_profile is not None
+    assert room_profile.platform == "wechat"
+    assert sender_profile is not None
+    assert sender_profile.platform == "wechat"
 
 
 @pytest.mark.asyncio

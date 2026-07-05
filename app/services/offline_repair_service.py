@@ -44,20 +44,20 @@ class OfflineRepairService:
         report.scanned_messages = len(messages)
 
         local_paths: set[str] = set()
-        group_room_ids: set[str] = set()
-        user_names: dict[str, str | None] = {}
+        group_platforms: dict[str, str] = {}
+        user_profiles: dict[str, tuple[str, str | None]] = {}
         for message in messages:
             local_paths.update(BackupService._extract_local_media_paths(message.local_message, public_storage_prefix))
             if message.message_type == "group":
-                group_room_ids.add(message.room_id)
+                group_platforms.setdefault(message.room_id, message.platform)
             elif message.message_type == "private":
-                user_names.setdefault(message.room_id, None)
-            user_names.setdefault(message.sender_id, message.nickname)
+                user_profiles.setdefault(message.room_id, (message.platform, None))
+            user_profiles.setdefault(message.sender_id, (message.platform, message.nickname))
 
         profile_paths = await OfflineRepairService._repair_profile_avatars(
             db,
-            group_room_ids=group_room_ids,
-            user_names=user_names,
+            group_platforms=group_platforms,
+            user_profiles=user_profiles,
             storage_root=root,
             public_storage_prefix=public_storage_prefix,
         )
@@ -126,23 +126,23 @@ class OfflineRepairService:
     async def _repair_profile_avatars(
         db: AsyncSession,
         *,
-        group_room_ids: set[str],
-        user_names: dict[str, str | None],
+        group_platforms: dict[str, str],
+        user_profiles: dict[str, tuple[str, str | None]],
         storage_root: Path,
         public_storage_prefix: str,
     ) -> list[str]:
         repaired_paths: list[str] = []
         room_profiles: dict[str, RoomProfile] = {}
-        user_profiles: dict[str, UserProfile] = {}
+        existing_user_profiles: dict[str, UserProfile] = {}
 
-        if group_room_ids:
-            room_result = await db.execute(select(RoomProfile).where(RoomProfile.room_id.in_(group_room_ids)))
+        if group_platforms:
+            room_result = await db.execute(select(RoomProfile).where(RoomProfile.room_id.in_(group_platforms)))
             room_profiles = {profile.room_id: profile for profile in room_result.scalars().all()}
-        if user_names:
-            user_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_names)))
-            user_profiles = {profile.user_id: profile for profile in user_result.scalars().all()}
+        if user_profiles:
+            user_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_profiles)))
+            existing_user_profiles = {profile.user_id: profile for profile in user_result.scalars().all()}
 
-        for room_id in sorted(group_room_ids):
+        for room_id, platform in sorted(group_platforms.items()):
             profile = room_profiles.get(room_id)
             if profile is not None and OfflineRepairService._is_local_profile_avatar(profile.avatar_path, public_storage_prefix):
                 continue
@@ -154,14 +154,14 @@ class OfflineRepairService:
                 public_storage_prefix=public_storage_prefix,
             )
             if profile is None:
-                profile = RoomProfile(room_id=room_id, platform="qq")
+                profile = RoomProfile(room_id=room_id, platform=platform)
                 db.add(profile)
-            profile.platform = "qq"
+            profile.platform = platform
             profile.avatar_path = local_path
             repaired_paths.append(local_path)
 
-        for user_id, display_name in sorted(user_names.items()):
-            profile = user_profiles.get(user_id)
+        for user_id, (platform, display_name) in sorted(user_profiles.items()):
+            profile = existing_user_profiles.get(user_id)
             if profile is not None and OfflineRepairService._is_local_profile_avatar(profile.avatar_path, public_storage_prefix):
                 continue
             local_path = await OfflineRepairService._save_profile_placeholder(
@@ -172,9 +172,9 @@ class OfflineRepairService:
                 public_storage_prefix=public_storage_prefix,
             )
             if profile is None:
-                profile = UserProfile(user_id=user_id, platform="qq")
+                profile = UserProfile(user_id=user_id, platform=platform)
                 db.add(profile)
-            profile.platform = "qq"
+            profile.platform = platform
             if display_name and not profile.display_name:
                 profile.display_name = display_name
             profile.avatar_path = local_path
