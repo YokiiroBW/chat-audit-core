@@ -896,6 +896,12 @@
       return state.messageList.find((msg) => String(msg.external_message_id || '') === String(replyId)) || null;
     };
 
+    const replyPreviewText = (replyId) => {
+      if (!replyId) return '';
+      const owner = state.messageList.find((msg) => String(msg.reply_to_message_id || '') === String(replyId) && msg.reply_preview_text);
+      return owner ? owner.reply_preview_text : '';
+    };
+
     const roomDisplayName = (room) => {
       if (!room) return '请选择会话';
       return room.display_name ? `${room.display_name}（${room.room_id}）` : room.room_id;
@@ -1161,9 +1167,10 @@
       const source = findReplyMessage(params.id);
       const preview = document.createElement('div');
       preview.className = 'reply-preview';
-      preview.textContent = source
+      const backendPreview = replyPreviewText(params.id);
+      preview.textContent = backendPreview || (source
         ? `${source.nickname || source.sender_id}: ${plainMessagePreview(source.local_message || source.raw_message)}`
-        : '原消息暂未加载';
+        : '原消息暂未加载');
       card.appendChild(preview);
       container.appendChild(card);
     };

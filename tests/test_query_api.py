@@ -125,6 +125,58 @@ async def test_messages_api_uses_before_timestamp_cursor(db_session):
 
 
 @pytest.mark.asyncio
+async def test_messages_api_includes_reply_preview_from_unloaded_message(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "target-1",
+            "room_id": "group-reply",
+            "message_type": "group",
+            "sender_id": "user-target",
+            "nickname": "Target User",
+            "raw_message": "original reply target",
+            "timestamp": 1783000000,
+        },
+    )
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "reply-1",
+            "room_id": "group-reply",
+            "message_type": "group",
+            "sender_id": "user-reply",
+            "nickname": "Reply User",
+            "raw_message": "[CQ:reply,id=target-1] reply body",
+            "timestamp": 1783000010,
+        },
+    )
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/messages",
+                params={"robot_id": "robot-a", "room_id": "group-reply", "limit": 1},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["raw_message"] == "[CQ:reply,id=target-1] reply body"
+    assert payload[0]["reply_to_message_id"] == "target-1"
+    assert payload[0]["reply_preview_text"] == "Target User: original reply target"
+
+
+@pytest.mark.asyncio
 async def test_bots_api_lists_discovered_bot_profiles(db_session):
     db_session.add_all(
         [

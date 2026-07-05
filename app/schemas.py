@@ -67,6 +67,8 @@ class MessageResponse(BaseModel):
     raw_message: str
     local_message: str
     timestamp: int
+    reply_to_message_id: str | None = None
+    reply_preview_text: str | None = None
 
 
 class ImportResultResponse(BaseModel):

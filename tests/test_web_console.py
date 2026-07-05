@@ -48,6 +48,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "media-image-button" in html
     assert "plainMessagePreview" in html
     assert "findReplyMessage" in html
+    assert "replyPreviewText" in html
+    assert "reply_preview_text" in html
     assert "external_message_id" in html
     assert "media-file" in html
     assert "room.display_name" in html

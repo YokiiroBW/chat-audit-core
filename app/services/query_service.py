@@ -1,7 +1,38 @@
+import re
+
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Adapter, BotProfile, Message, RobotMessage, RoomProfile, UserProfile
+
+
+_REPLY_PATTERN = re.compile(r"\[CQ:reply,([^\]]+)\]")
+
+
+def _parse_reply_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = _REPLY_PATTERN.search(value)
+    if not match:
+        return None
+    for item in match.group(1).split(","):
+        if item.startswith("id="):
+            return item.split("=", 1)[1]
+    return None
+
+
+def _plain_message_preview(value: str | None) -> str:
+    text = value or ""
+    text = re.sub(r"\[CQ:reply,[^\]]+\]", "", text)
+    text = re.sub(r"\[CQ:at,qq=([^\],]+)[^\]]*\]", r"@\1", text)
+    text = re.sub(r"\[CQ:image,[^\]]+\]", "[图片]", text)
+    text = re.sub(r"\[CQ:record,[^\]]+\]", "[语音]", text)
+    text = re.sub(r"\[CQ:video,[^\]]+\]", "[视频]", text)
+    text = re.sub(r"\[CQ:forward,[^\]]+\]", "[合并转发]", text)
+    text = re.sub(r"\[CQ:json,[^\]]+\]", "[卡片]", text)
+    text = re.sub(r"/static/storage/[a-f0-9]{32}\.[a-z0-9]+", "[媒体]", text, flags=re.I)
+    compact = re.sub(r"\s+", " ", text).strip()
+    return compact or "[消息]"
 
 
 class QueryService:
@@ -73,7 +104,28 @@ class QueryService:
             message.sender_display_name = sender_display_name
             message.sender_avatar_path = sender_avatar_path
             messages.append(message)
-        return list(reversed(messages))
+        messages = list(reversed(messages))
+        await QueryService._attach_reply_previews(db, messages)
+        return messages
+
+    @staticmethod
+    async def _attach_reply_previews(db: AsyncSession, messages: list[Message]) -> None:
+        reply_ids = {
+            reply_id
+            for message in messages
+            if (reply_id := _parse_reply_id(message.local_message or message.raw_message))
+        }
+        if not reply_ids:
+            return
+        result = await db.execute(select(Message).where(Message.external_message_id.in_(reply_ids)))
+        by_external_id = {message.external_message_id: message for message in result.scalars().all() if message.external_message_id}
+        for message in messages:
+            reply_id = _parse_reply_id(message.local_message or message.raw_message)
+            message.reply_to_message_id = reply_id
+            source = by_external_id.get(reply_id or "")
+            if source is not None:
+                sender = source.nickname or source.sender_id
+                message.reply_preview_text = f"{sender}: {_plain_message_preview(source.local_message or source.raw_message)}"
 
     @staticmethod
     async def search_messages(
