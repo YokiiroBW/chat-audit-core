@@ -10,8 +10,8 @@ read_this_first: true
 
 ## 2026-07-06 最新状态
 
-- 最新已推送提交：`5c48322 微信：新增PC托盘采集器核心骨架`。
-- 本地全量测试：`160 passed`。
+- 最新已推送提交：以 `git log -1 --oneline` 为准，本轮所有提交均已按中文信息推送到 Forgejo。
+- 本地全量测试：`161 passed`。
 - NAS 验收：部署后 `/health` 200、首页 200、管理 API 未鉴权 401 / 鉴权 200 正常。
 - 新增后端入口：`POST /api/receive_external_msg`、`POST /api/external/media`、`POST /api/wechat/media`。
 - 新增 PC 微信托盘采集器核心骨架：`wechat_tray_adapter/`。

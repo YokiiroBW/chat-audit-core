@@ -55,6 +55,38 @@ CHAT_AUDIT_WECHAT_ACCOUNT_NAME
 python -m PyInstaller --noconsole --name chat-audit-wechat-tray wechat_tray_adapter\__main__.py
 ```
 
+仓库提供了便捷脚本：
+
+```powershell
+.\scripts\build_wechat_tray.ps1
+```
+
+该脚本会安装 `wechat_tray_adapter/requirements.txt` 中的 PC 端可选依赖，并用 PyInstaller 生成无控制台 exe。
+
+## 配置与自启脚本
+
+生成配置：
+
+```powershell
+.\scripts\write_wechat_tray_config.ps1 `
+  -NasUrl "http://192.168.31.210:8000" `
+  -Token "replace-with-operator-token" `
+  -AccountId "wxid_xxx" `
+  -AccountName "微信采集账号"
+```
+
+安装当前用户开机自启：
+
+```powershell
+.\scripts\install_wechat_tray_startup.ps1 -ExePath ".\dist\chat-audit-wechat-tray\chat-audit-wechat-tray.exe"
+```
+
+卸载当前用户开机自启：
+
+```powershell
+.\scripts\uninstall_wechat_tray_startup.ps1
+```
+
 ## 仍需真实环境验收
 
 以下项目必须在你的 Windows 微信环境里完成：

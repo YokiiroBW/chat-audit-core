@@ -15,6 +15,11 @@
   - SQLite 离线队列
   - 上传/发送 worker
   - 托盘入口
+- PC 端打包与自启脚本：
+  - `scripts/build_wechat_tray.ps1`
+  - `scripts/install_wechat_tray_startup.ps1`
+  - `scripts/uninstall_wechat_tray_startup.ps1`
+  - `scripts/write_wechat_tray_config.ps1`
 - 文档：`WECHAT_TRAY_ADAPTER.md` 与 README 入口。
 
 ## 继续推进队列
@@ -22,9 +27,8 @@
 1. 托盘端真实 `wcferry` 版本适配和消息读取 API 校准。
 2. Windows 桌面托盘 UI 实机验收：图标、菜单、退出、打开 NAS、立即补发。
 3. 真实微信端到端样本：私聊、群聊、图片、语音、视频、文件、动画表情、卡片。
-4. 打包脚本：PyInstaller 无控制台构建、产物目录、版本号。
-5. 开机自启安装/卸载脚本。
-6. 托盘端配置编辑入口或最小配置向导。
+4. 托盘端配置编辑入口或最小配置向导。
+5. 打包产物版本号和发布包校验。
 
 ## 需要用户介入
 

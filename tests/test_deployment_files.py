@@ -97,3 +97,20 @@ def test_dockerignore_excludes_runtime_and_secret_files():
     assert "data/storage/*" in dockerignore
     assert "data/backups/*" in dockerignore
     assert ".git" in dockerignore
+
+
+def test_wechat_tray_packaging_scripts_are_present_and_headless():
+    build_script = (ROOT / "scripts/build_wechat_tray.ps1").read_text(encoding="utf-8")
+    install_script = (ROOT / "scripts/install_wechat_tray_startup.ps1").read_text(encoding="utf-8")
+    uninstall_script = (ROOT / "scripts/uninstall_wechat_tray_startup.ps1").read_text(encoding="utf-8")
+    config_script = (ROOT / "scripts/write_wechat_tray_config.ps1").read_text(encoding="utf-8")
+    requirements = (ROOT / "wechat_tray_adapter/requirements.txt").read_text(encoding="utf-8")
+
+    assert "--noconsole" in build_script
+    assert "wechat_tray_adapter\\__main__.py" in build_script
+    assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in install_script
+    assert "Set-ItemProperty" in install_script
+    assert "Remove-ItemProperty" in uninstall_script
+    assert "replace-with-operator-token" not in config_script
+    assert "CHAT_AUDIT_TOKEN" not in config_script
+    assert {"pystray", "Pillow", "wcferry", "pyinstaller"} <= set(requirements.splitlines())
