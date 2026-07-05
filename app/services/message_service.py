@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models import MediaAsset, Message, RobotMessage
+from app.services.capture_policy_service import CapturePolicyService
 
 
 class MessageService:
@@ -62,7 +63,11 @@ class MessageService:
         media_storage_root: str | Path | None = None,
         media_public_prefix: str | None = None,
         forward_payload_loader: Any | None = None,
-    ) -> str:
+    ) -> str | None:
+        capture_decision = await CapturePolicyService.should_capture(db, robot_id=robot_id, msg_data=msg_data)
+        if not capture_decision.should_capture:
+            return None
+
         raw_message = msg_data["raw_message"]
         room_id = msg_data["room_id"]
         sender_id = msg_data["sender_id"]
@@ -85,6 +90,7 @@ class MessageService:
                     http_client=media_http_client,
                     storage_root=media_storage_root,
                     public_prefix=media_public_prefix,
+                    allowed_media_types=capture_decision.allowed_media_types,
                 )
                 if forward_payload_loader is not None:
                     local_message = await MediaService.cache_cq_forward_payloads(
@@ -94,6 +100,7 @@ class MessageService:
                         http_client=media_http_client,
                         storage_root=media_storage_root,
                         public_prefix=media_public_prefix,
+                        allowed_media_types=capture_decision.allowed_media_types,
                     )
 
             db.add(

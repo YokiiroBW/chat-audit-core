@@ -638,10 +638,13 @@ class MediaService:
         public_prefix: str | None = None,
         max_bytes: int | None = None,
         unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
     ) -> str:
         rewritten = raw_message
 
         for segment in parse_cq_media_segments(raw_message):
+            if allowed_media_types is not None and segment.media_type not in allowed_media_types:
+                continue
             local_path = await MediaService.download_url_to_local_path(
                 db,
                 segment.url,
@@ -695,6 +698,7 @@ class MediaService:
         public_prefix: str | None = None,
         max_bytes: int | None = None,
         unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
     ) -> str:
         from app.services.message_service import MessageService
 
@@ -720,6 +724,7 @@ class MediaService:
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
                 unavailable_placeholders=unavailable_placeholders,
+                allowed_media_types=allowed_media_types,
             )
             local_path = await MessageService.save_media_asset(
                 db,
@@ -742,6 +747,7 @@ class MediaService:
         public_prefix: str | None = None,
         max_bytes: int | None = None,
         unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
     ) -> Any:
         if isinstance(content, str):
             return await MediaService.rewrite_cq_media_to_local_paths(
@@ -752,6 +758,7 @@ class MediaService:
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
                 unavailable_placeholders=unavailable_placeholders,
+                allowed_media_types=allowed_media_types,
             )
         if isinstance(content, list):
             return [
@@ -763,6 +770,7 @@ class MediaService:
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
                     unavailable_placeholders=unavailable_placeholders,
+                    allowed_media_types=allowed_media_types,
                 )
                 for item in content
             ]
@@ -775,8 +783,12 @@ class MediaService:
         if isinstance(data, dict):
             if segment_type in {"image", "record", "video", "file"}:
                 url = data.get("url") or data.get("path")
-                if isinstance(url, str) and url.startswith(("http://", "https://")):
-                    media_type = {"record": "voice"}.get(str(segment_type), str(segment_type))
+                media_type = {"record": "voice"}.get(str(segment_type), str(segment_type))
+                if (
+                    isinstance(url, str)
+                    and url.startswith(("http://", "https://"))
+                    and (allowed_media_types is None or media_type in allowed_media_types)
+                ):
                     local_path = await MediaService.download_url_to_local_path(
                         db,
                         url,
@@ -833,6 +845,7 @@ class MediaService:
         public_prefix: str | None = None,
         max_bytes: int | None = None,
         unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
     ) -> dict[str, Any]:
         localized = deepcopy(payload)
         data = localized.get("data", localized)
@@ -851,6 +864,7 @@ class MediaService:
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
                     unavailable_placeholders=unavailable_placeholders,
+                    allowed_media_types=allowed_media_types,
                 )
             if "message" in item:
                 item["message"] = await MediaService.localize_onebot_content(
@@ -861,5 +875,6 @@ class MediaService:
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
                     unavailable_placeholders=unavailable_placeholders,
+                    allowed_media_types=allowed_media_types,
                 )
         return localized

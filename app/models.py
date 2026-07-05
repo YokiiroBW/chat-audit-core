@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 from app.time_utils import utc_now
@@ -31,6 +31,29 @@ class BotProfile(Base):
     source_adapter_id = Column(String(64), nullable=True, index=True)
     first_seen_at = Column(DateTime, default=utc_now, nullable=False)
     last_seen_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class CaptureTargetPolicy(Base):
+    """Per-bot capture scope and content-type policy for one conversation target."""
+
+    __tablename__ = "capture_target_policies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    robot_id = Column(String(64), nullable=False, index=True)
+    target_type = Column(String(20), nullable=False)
+    target_id = Column(String(64), nullable=False)
+    list_mode = Column(String(20), default="none", nullable=False)
+    capture_text = Column(Boolean, default=True, nullable=False)
+    capture_image = Column(Boolean, default=True, nullable=False)
+    capture_voice = Column(Boolean, default=True, nullable=False)
+    capture_video = Column(Boolean, default=True, nullable=False)
+    capture_file = Column(Boolean, default=False, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("robot_id", "target_type", "target_id", name="uq_capture_target_policy"),
+        Index("idx_capture_policy_robot_mode", "robot_id", "list_mode"),
+    )
 
 
 class RoomProfile(Base):

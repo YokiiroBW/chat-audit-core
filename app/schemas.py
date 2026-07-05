@@ -44,6 +44,42 @@ class BotProfileResponse(BaseModel):
     last_seen_at: datetime | None = None
 
 
+class CaptureTargetPolicyUpdateRequest(BaseModel):
+    list_mode: str = Field(default="none", min_length=1, max_length=20)
+    capture_text: bool = True
+    capture_image: bool = True
+    capture_voice: bool = True
+    capture_video: bool = True
+    capture_file: bool = False
+
+
+class CaptureTargetPolicyResponse(BaseModel):
+    id: int | None = None
+    robot_id: str
+    target_type: str
+    target_id: str
+    list_mode: str = "none"
+    capture_text: bool = True
+    capture_image: bool = True
+    capture_voice: bool = True
+    capture_video: bool = True
+    capture_file: bool = False
+    display_name: str | None = None
+    avatar_path: str | None = None
+    last_timestamp: int | None = None
+    updated_at: datetime | None = None
+
+
+class CaptureTargetSettingResponse(BaseModel):
+    robot_id: str
+    target_type: str
+    target_id: str
+    display_name: str | None = None
+    avatar_path: str | None = None
+    last_timestamp: int | None = None
+    policy: CaptureTargetPolicyResponse | None = None
+
+
 class DashboardResponse(BaseModel):
     bots: int
     rooms: int
@@ -228,7 +264,9 @@ class MessageIngestRequest(BaseModel):
 
 
 class MessageIngestResponse(BaseModel):
-    msg_hash: str
+    msg_hash: str | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 class MediaBackfillFailureResponse(BaseModel):

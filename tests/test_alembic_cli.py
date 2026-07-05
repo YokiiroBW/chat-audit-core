@@ -50,9 +50,10 @@ def test_alembic_upgrade_head_initializes_current_schema(tmp_path):
         "admin_users",
         "admin_sessions",
         "system_settings",
+        "capture_target_policies",
         "alembic_version",
     } <= tables
-    assert version == "20260705_007"
+    assert version == "20260705_008"
 
 
 def test_alembic_upgrade_head_adds_legacy_compatibility_columns(tmp_path):

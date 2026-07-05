@@ -32,6 +32,9 @@ from app.schemas import (
     BackupSettingsUpdateRequest,
     BackupStatusResponse,
     BotProfileResponse,
+    CaptureTargetPolicyResponse,
+    CaptureTargetPolicyUpdateRequest,
+    CaptureTargetSettingResponse,
     DashboardResponse,
     ImportResultResponse,
     ImportValidationResponse,
@@ -51,6 +54,7 @@ from app.services.audit_log_service import AuditLogService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
 from app.services.backup_config_service import BackupConfigService, EffectiveBackupConfig
+from app.services.capture_policy_service import CapturePolicyService
 from app.services.admin_user_service import AdminUserService
 from app.services.dashboard_service import DashboardService
 from app.services.media_backfill_service import MediaBackfillService
@@ -308,6 +312,77 @@ async def list_adapters(db: AsyncSession = Depends(get_db_session)) -> list[Adap
 async def list_bots(db: AsyncSession = Depends(get_db_session)) -> list[BotProfileResponse]:
     profiles = await QueryService.list_bot_profiles(db)
     return [BotProfileResponse.model_validate(profile) for profile in profiles]
+
+
+@router.get("/bots/{robot_id}/capture-targets", response_model=list[CaptureTargetSettingResponse])
+async def list_capture_targets(
+    robot_id: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> list[CaptureTargetSettingResponse]:
+    targets = await CapturePolicyService.list_target_settings(db, robot_id=robot_id)
+    return [CaptureTargetSettingResponse(**target) for target in targets]
+
+
+@router.put("/bots/{robot_id}/capture-policies/{target_type}/{target_id}", response_model=CaptureTargetPolicyResponse)
+async def upsert_capture_policy(
+    robot_id: str,
+    target_type: str,
+    target_id: str,
+    payload: CaptureTargetPolicyUpdateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> CaptureTargetPolicyResponse:
+    action = "capture_policy.upsert"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    try:
+        policy = await CapturePolicyService.upsert_policy(
+            db,
+            robot_id=robot_id,
+            target_type=target_type,
+            target_id=target_id,
+            list_mode=payload.list_mode,
+            capture_text=payload.capture_text,
+            capture_image=payload.capture_image,
+            capture_voice=payload.capture_voice,
+            capture_video=payload.capture_video,
+            capture_file=payload.capture_file,
+        )
+    except ValueError as exc:
+        await _audit(db, request, action=action, status_="failed", target=f"{robot_id}:{target_type}:{target_id}", detail={"error": str(exc)})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _audit(
+        db,
+        request,
+        action=action,
+        status_="success",
+        target=f"{robot_id}:{policy.target_type}:{policy.target_id}",
+        detail={"list_mode": policy.list_mode},
+    )
+    return CaptureTargetPolicyResponse(**CapturePolicyService.policy_to_dict(policy))
+
+
+@router.delete("/bots/{robot_id}/capture-policies/{target_type}/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_capture_policy(
+    robot_id: str,
+    target_type: str,
+    target_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> Response:
+    action = "capture_policy.delete"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    try:
+        deleted = await CapturePolicyService.delete_policy(db, robot_id=robot_id, target_type=target_type, target_id=target_id)
+    except ValueError as exc:
+        await _audit(db, request, action=action, status_="failed", target=f"{robot_id}:{target_type}:{target_id}", detail={"error": str(exc)})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if deleted:
+        await _audit(db, request, action=action, status_="success", target=f"{robot_id}:{target_type}:{target_id}")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
@@ -801,7 +876,11 @@ async def ingest_message(
         platform=payload.platform,
         display_name=display_name,
     )
-    return MessageIngestResponse(msg_hash=msg_hash)
+    return MessageIngestResponse(
+        msg_hash=msg_hash,
+        skipped=msg_hash is None,
+        skip_reason="capture_policy" if msg_hash is None else None,
+    )
 
 
 @router.post("/wechat/events", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
@@ -863,7 +942,11 @@ async def ingest_wechat_event(
             display_name=payload.get("room_name") or payload.get("group_name"),
             avatar_path=room_avatar_path,
         )
-    return MessageIngestResponse(msg_hash=msg_hash)
+    return MessageIngestResponse(
+        msg_hash=msg_hash,
+        skipped=msg_hash is None,
+        skip_reason="capture_policy" if msg_hash is None else None,
+    )
 
 
 @router.get("/search", response_model=list[MessageResponse])

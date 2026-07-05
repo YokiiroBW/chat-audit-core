@@ -210,6 +210,43 @@
       display: grid;
       gap: 6px;
     }
+    .capture-policy-list {
+      margin-top: 10px;
+      max-height: 260px;
+      display: grid;
+      gap: 8px;
+      overflow: auto;
+    }
+    .capture-policy-item {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px;
+      display: grid;
+      gap: 8px;
+      background: #fff;
+    }
+    .capture-policy-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .capture-policy-grid {
+      display: grid;
+      grid-template-columns: minmax(96px, 132px) repeat(5, minmax(0, 1fr)) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .capture-check {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .capture-check input { width: auto; }
     .adapter-item, .room-item, .result-item {
       width: 100%;
       text-align: left;
@@ -592,6 +629,12 @@
         </div>
         <div id="authStatusReport" class="report"></div>
         <div class="settings-title">
+          <span>角色抓取策略</span>
+          <button id="refreshCapturePoliciesButton" class="btn link">刷新策略</button>
+        </div>
+        <div class="hint">空策略默认记录所有会话；文件下载默认关闭。白名单存在时仅抓取白名单目标。</div>
+        <div id="capturePolicyList" class="capture-policy-list"></div>
+        <div class="settings-title">
           <span>账号设置</span>
           <button id="newAdapterButton" class="btn link">新增账号</button>
         </div>
@@ -769,6 +812,8 @@
       backupStatus: null,
       backupRunResult: null,
       backupSettingsSaving: false,
+      captureTargetList: [],
+      capturePolicyError: '',
       adminTokenList: [],
       adminTokenCreateResult: null,
       adminTokenError: '',
@@ -1061,6 +1106,7 @@
       el('adapterId').disabled = Boolean(state.editingAdapterId);
       el('saveAdapterButton').textContent = state.editingAdapterId ? '保存修改' : '添加账号';
       renderAuthStatus();
+      renderCapturePolicies();
       renderBackupStatus();
       renderAdminTokens();
       renderAdminUsers();
@@ -1090,6 +1136,94 @@
         valueNode.textContent = value;
         row.append(label, valueNode);
         box.appendChild(row);
+      });
+    };
+
+    const capturePolicyValue = (target, key) => {
+      const policy = target.policy || {};
+      if (key === 'list_mode') return policy.list_mode || 'none';
+      if (Object.prototype.hasOwnProperty.call(policy, key)) return Boolean(policy[key]);
+      return key === 'capture_file' ? false : true;
+    };
+
+    const targetDisplayName = (target) => {
+      const name = target.display_name || target.target_id;
+      return target.display_name ? `${name} (${target.target_id})` : target.target_id;
+    };
+
+    const renderCapturePolicies = () => {
+      const container = el('capturePolicyList');
+      clearNode(container);
+      if (!state.currentRobot) {
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '先选择一个机器人角色档案' }));
+        return;
+      }
+      if (state.capturePolicyError) {
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'bad', textContent: state.capturePolicyError }));
+        return;
+      }
+      if (!state.captureTargetList.length) {
+        container.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '暂无已发现群聊或私聊；收到消息后会自动出现在这里' }));
+        return;
+      }
+      state.captureTargetList.forEach((target) => {
+        const row = document.createElement('div');
+        row.className = 'capture-policy-item';
+        const head = document.createElement('div');
+        head.className = 'capture-policy-head';
+        const title = document.createElement('strong');
+        title.className = 'truncate';
+        title.textContent = `${target.target_type === 'group' ? '群聊' : '私聊'} · ${targetDisplayName(target)}`;
+        const meta = document.createElement('span');
+        meta.className = 'hint';
+        meta.textContent = target.policy ? '已设置' : '默认';
+        head.append(title, meta);
+
+        const grid = document.createElement('div');
+        grid.className = 'capture-policy-grid';
+        const mode = document.createElement('select');
+        mode.dataset.field = 'list_mode';
+        [
+          ['none', '默认'],
+          ['blacklist', '黑名单'],
+          ['whitelist', '白名单'],
+        ].forEach(([value, label]) => {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = label;
+          mode.appendChild(option);
+        });
+        mode.value = capturePolicyValue(target, 'list_mode');
+        grid.appendChild(mode);
+
+        [
+          ['capture_text', '文字'],
+          ['capture_image', '图片'],
+          ['capture_voice', '语音'],
+          ['capture_video', '视频'],
+          ['capture_file', '文件'],
+        ].forEach(([field, label]) => {
+          const wrap = document.createElement('label');
+          wrap.className = 'capture-check';
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.dataset.field = field;
+          input.checked = capturePolicyValue(target, field);
+          wrap.append(input, document.createTextNode(label));
+          grid.appendChild(wrap);
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'button-row';
+        const save = button('保存', 'btn primary', () => saveCapturePolicy(target, row));
+        const reset = button('恢复默认', 'btn', () => resetCapturePolicy(target));
+        save.disabled = !canRole('operator');
+        reset.disabled = !target.policy || !canRole('operator');
+        actions.append(save, reset);
+        grid.appendChild(actions);
+
+        row.append(head, grid);
+        container.appendChild(row);
       });
     };
 
@@ -1245,6 +1379,7 @@
       el('createAdminTokenButton').disabled = !isAdmin;
       el('createAdminUserButton').disabled = !isAdmin;
       el('refreshAdminSessionsButton').disabled = !isAdmin;
+      el('refreshCapturePoliciesButton').disabled = !state.currentRobot;
       el('saveAdapterButton').disabled = !isOperator;
       el('runBackupButton').disabled = !isOperator;
       el('saveBackupSettingsButton').disabled = el('saveBackupSettingsButton').disabled || !isOperator;
@@ -1772,7 +1907,16 @@
       state.loadingRooms = true;
       renderAll();
       try {
-        state.roomList = await apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`);
+        const [rooms, captureTargets] = await Promise.all([
+          apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`),
+          apiGet(`/api/bots/${encodeURIComponent(acc.id)}/capture-targets`),
+        ]);
+        state.roomList = rooms;
+        state.captureTargetList = captureTargets;
+        state.capturePolicyError = '';
+      } catch (error) {
+        state.capturePolicyError = error.message || String(error);
+        throw error;
       } finally {
         state.loadingRooms = false;
         renderAll();
@@ -1897,6 +2041,48 @@
         state.authError = error.message || String(error);
       }
       renderSettings();
+    }
+
+    async function refreshCapturePolicies() {
+      if (!state.currentRobot) {
+        state.captureTargetList = [];
+        state.capturePolicyError = '';
+        renderSettings();
+        return;
+      }
+      try {
+        state.captureTargetList = await apiGet(`/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-targets`);
+        state.capturePolicyError = '';
+      } catch (error) {
+        state.captureTargetList = [];
+        state.capturePolicyError = error.message || String(error);
+      }
+      renderSettings();
+    }
+
+    async function saveCapturePolicy(target, row) {
+      const payload = {
+        list_mode: row.querySelector('[data-field="list_mode"]').value,
+        capture_text: row.querySelector('[data-field="capture_text"]').checked,
+        capture_image: row.querySelector('[data-field="capture_image"]').checked,
+        capture_voice: row.querySelector('[data-field="capture_voice"]').checked,
+        capture_video: row.querySelector('[data-field="capture_video"]').checked,
+        capture_file: row.querySelector('[data-field="capture_file"]').checked,
+      };
+      await apiSend(
+        `/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-policies/${encodeURIComponent(target.target_type)}/${encodeURIComponent(target.target_id)}`,
+        'PUT',
+        payload,
+      );
+      await refreshCapturePolicies();
+    }
+
+    async function resetCapturePolicy(target) {
+      await apiSend(
+        `/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-policies/${encodeURIComponent(target.target_type)}/${encodeURIComponent(target.target_id)}`,
+        'DELETE',
+      );
+      await refreshCapturePolicies();
     }
 
     async function loginWithPassword() {
@@ -2256,6 +2442,7 @@
       el('loginButton').addEventListener('click', loginWithPassword);
       el('logoutButton').addEventListener('click', logoutAuth);
       el('refreshAuthButton').addEventListener('click', refreshAuthIdentity);
+      el('refreshCapturePoliciesButton').addEventListener('click', refreshCapturePolicies);
       el('settingsToggle').addEventListener('click', () => { state.settingsMode = !state.settingsMode; renderSettings(); });
       el('newAdapterButton').addEventListener('click', resetAdapterForm);
       el('clearAdapterButton').addEventListener('click', resetAdapterForm);
@@ -2310,6 +2497,9 @@
     window.loginWithPassword = loginWithPassword;
     window.logoutAuth = logoutAuth;
     window.refreshAuthIdentity = refreshAuthIdentity;
+    window.refreshCapturePolicies = refreshCapturePolicies;
+    window.saveCapturePolicy = saveCapturePolicy;
+    window.resetCapturePolicy = resetCapturePolicy;
     window.createAdminUser = createAdminUser;
     window.revokeAdminUser = revokeAdminUser;
     window.refreshAdminSessions = refreshAdminSessions;

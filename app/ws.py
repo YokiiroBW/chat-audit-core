@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.database import AsyncSessionLocal, get_db_session
 from app.models import Message, RoomProfile, UserProfile
 from app.services.bot_profile_service import BotProfileService
+from app.services.capture_policy_service import CapturePolicyService
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
@@ -62,6 +63,15 @@ async def _hydrate_forward_payloads(robot_id: str, msg_hash: str) -> None:
         if message is None:
             return
         local_message = message.local_message
+        decision = await CapturePolicyService.should_capture(
+            session,
+            robot_id=robot_id,
+            msg_data={
+                "room_id": message.room_id,
+                "message_type": message.message_type,
+                "raw_message": message.raw_message,
+            },
+        )
 
         async def load_forward(forward_id: str) -> dict[str, Any]:
             return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
@@ -74,6 +84,7 @@ async def _hydrate_forward_payloads(robot_id: str, msg_hash: str) -> None:
             storage_root=settings.storage_root,
             public_prefix=settings.public_storage_prefix,
             max_bytes=settings.media_max_bytes,
+            allowed_media_types=decision.allowed_media_types,
         )
         if updated == local_message:
             return
@@ -174,7 +185,7 @@ async def onebot11_reverse_ws(
                 msg_data=normalized.msg_data,
                 media_http_client=media_http_client,
             )
-            if "[CQ:forward," in normalized.msg_data.get("raw_message", ""):
+            if msg_hash and "[CQ:forward," in normalized.msg_data.get("raw_message", ""):
                 asyncio.create_task(_hydrate_forward_payloads(normalized.robot_id, msg_hash))
             asyncio.create_task(
                 _hydrate_user_profile(
