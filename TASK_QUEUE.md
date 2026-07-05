@@ -36,12 +36,14 @@
 
 ### T4 NAS 启用 FFmpeg 转码
 
-状态：compose 可选路径已完成，实际启用待确认。
+状态：compose 可选路径已完成，NAS 实测未启用成功，已恢复默认安全配置。
 
-待确认：
+已确认：
 
-- 若 NAS/宿主机已有 FFmpeg，设置 `FFMPEG_HOST_BIN` 并使用 `docker-compose.ffmpeg-host.yml` 挂载。
-- 若 NAS/宿主机没有 FFmpeg，使用 `docker-compose.ffmpeg.yml` 自动构建内置 FFmpeg 镜像；该路径依赖 apt 源可用。
+- NAS/宿主机存在 `/usr/bin/ffmpeg`，版本 `4.1.9`。
+- 直接挂载宿主机二进制后，容器内会缺少动态库 `libavdevice.so.58`，`/api/system/runtime` 返回 `ffmpeg_available=false`。
+- 使用 `docker-compose.ffmpeg.yml` 自动构建内置 FFmpeg 镜像时，NAS 上 `docker compose up -d --build` 长时间卡住；已终止本地等待并恢复普通 compose。
+- 当前 NAS 已恢复为 `MEDIA_TRANSCODE_ENABLED=false`，服务健康。
 
 当前可用能力：
 
@@ -52,7 +54,7 @@
 
 验收：
 
-- NAS 使用宿主机挂载或内置 FFmpeg 镜像启动。
+- 需要新增更可靠的 FFmpeg 启用方案，例如静态 FFmpeg 二进制挂载，或预构建并推送固定 FFmpeg 镜像。
 - `/api/system/runtime` 返回 `ffmpeg_available=true`。
 - 语音/视频转码样本验收通过。
 

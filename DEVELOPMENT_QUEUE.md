@@ -16,7 +16,7 @@
 
 ### 1. FFmpeg 与媒体转码流水线
 
-状态：代码与 compose 支持已完成，NAS 实际启用待确认。
+状态：代码与 compose 支持已完成，NAS 实测两条现有启用路径均未通过，当前已恢复默认安全配置。
 
 已完成：
 
@@ -28,11 +28,19 @@
 - `docker-compose.ffmpeg-host.yml` 支持宿主机/NAS 已有 FFmpeg 时直接挂载可执行文件。
 - `GET /api/system/runtime` 可查看 `ffmpeg_available`、`ffmpeg_version` 与转码配置。
 
+NAS 实测结果：
+
+- 宿主机 `/usr/bin/ffmpeg` 存在，版本 `4.1.9`。
+- 使用 `docker-compose.ffmpeg-host.yml` 挂载宿主机二进制后，容器内缺少动态库 `libavdevice.so.58`，runtime 判定 `ffmpeg_available=false`。
+- 使用 `docker-compose.ffmpeg.yml` 自动构建内置 FFmpeg 镜像时，NAS 上构建命令长时间卡住，无有效输出；已终止本地等待并恢复普通 compose。
+- 恢复后 NAS 服务健康，`/api/system/runtime` 为 `media_transcode_enabled=false`、`ffmpeg_available=false`。
+
 剩余：
 
-- 检查 NAS 是否已有可挂载 FFmpeg。
-- 若可用，启用宿主机挂载覆盖并验收。
-- 若不可用，确认是否允许使用 apt 源构建内置 FFmpeg 镜像。
+- 新增更可靠的启用方案：
+  - 方案 A：提供静态 FFmpeg 二进制并通过 volume 挂载。
+  - 方案 B：在可联网环境预构建含 FFmpeg 的镜像，推送到 NAS 可拉取的镜像仓库或离线导入。
+- 新方案完成后再启用 NAS 转码并验收。
 
 验收：
 

@@ -17,12 +17,13 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交：`e03ba27 修正：明确文件抓取范围`
+- 最新提交：`f095768 文档：更新交接状态和剩余队列`
 - 本地全量测试：`144 passed`
-- 最近一次 NAS 部署验收：`fc9428b 功能：增加角色抓取黑白名单策略`
+- 最近一次 NAS 部署验收：`f095768 文档：更新交接状态和剩余队列`
 - NAS 基础验收：健康检查 200、首页 200、管理鉴权 401/200 正常
 - NAS 迁移状态：`20260705_008_capture_target_policies` 已应用
 - NAS 抓取策略接口：`GET /api/bots/{robot_id}/capture-targets` 正常返回已发现群聊/私聊、名称、头像和策略
+- NAS FFmpeg 状态：默认配置已恢复为 `MEDIA_TRANSCODE_ENABLED=false`。宿主机 `/usr/bin/ffmpeg` 存在，但直接挂载进容器会缺少 `libavdevice.so.58`；内置 FFmpeg 镜像构建在 NAS 上卡住，已终止本地等待并恢复普通 compose。
 
 ## 已完成能力
 
@@ -112,7 +113,7 @@ git push ssh://git@192.168.31.210:2222/YokiiroBW/chat-audit-core.git main
 
 仍需处理：
 
-- FFmpeg 转码在 NAS 上实际启用：compose 已支持宿主机已有 FFmpeg 直接挂载；若宿主机没有 FFmpeg，可用自动安装覆盖镜像，但该路径依赖 apt 源可用。
+- FFmpeg 转码在 NAS 上实际启用：当前两条现有路径均未成功。宿主机挂载受动态库缺失影响，自动安装镜像构建在 NAS 上卡住。后续建议改为提交一个静态 FFmpeg 二进制挂载方案，或构建并推送一个已含 FFmpeg 的固定镜像。
 - 微信 Hook 专用映射：当前已支持常见字段、数字类型和通用样本回放；后续应根据最终选定客户端追加专属真实样本和部署说明。
 - 持续更新交接文档：每次版本推进后更新最新提交、测试数量、NAS 状态和剩余队列。
 
