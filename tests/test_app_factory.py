@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import json
 from sqlalchemy import text
 
 from app.config import Settings
@@ -21,9 +22,37 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
 
     with TestClient(app) as client:
         response = client.get("/health")
+        migrations_response = client.get("/api/system/migrations")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "app": "chat-audit-core"}
+    assert migrations_response.status_code == 200
+    assert migrations_response.json() == [
+        {
+            "version": "20260705_001_adapter_current_robot_id",
+            "description": "Add adapters.current_robot_id",
+            "applied": True,
+            "applied_at": migrations_response.json()[0]["applied_at"],
+        },
+        {
+            "version": "20260705_002_message_external_message_id",
+            "description": "Add messages.external_message_id",
+            "applied": True,
+            "applied_at": migrations_response.json()[1]["applied_at"],
+        },
+        {
+            "version": "20260705_003_audit_logs",
+            "description": "Create audit_logs table",
+            "applied": True,
+            "applied_at": migrations_response.json()[2]["applied_at"],
+        },
+        {
+            "version": "20260705_004_schema_migrations",
+            "description": "Create schema_migrations table",
+            "applied": True,
+            "applied_at": migrations_response.json()[3]["applied_at"],
+        },
+    ]
     assert storage_root.exists()
     assert backup_root.exists()
 
@@ -174,4 +203,41 @@ def test_create_app_rejects_missing_admin_api_token_in_production(tmp_path):
     import pytest
 
     with pytest.raises(ValueError, match="ADMIN_API_TOKEN"):
+        create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+
+
+def test_create_app_accepts_role_tokens_in_production(tmp_path):
+    settings = Settings(
+        app_env="production",
+        app_secret_key="strong-production-secret",
+        onebot_access_token="secret-token",
+        admin_api_token="",
+        admin_api_tokens=json.dumps([{"name": "ops", "role": "operator", "token": "operator-token"}]),
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+
+    app = create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+
+    assert app.title == "chat-audit-core"
+
+
+def test_create_app_rejects_invalid_role_tokens_in_production(tmp_path):
+    settings = Settings(
+        app_env="production",
+        app_secret_key="strong-production-secret",
+        onebot_access_token="secret-token",
+        admin_api_token="",
+        admin_api_tokens="not-json",
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="ADMIN_API_TOKENS"):
         create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)

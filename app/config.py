@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_secret_key: str = "change-me"
     system_instance_id: str = "chat-audit-core"
     admin_api_token: str = ""
+    admin_api_tokens: str = ""
 
     database_url: str = "sqlite+aiosqlite:///./data/chat_audit.sqlite3"
 

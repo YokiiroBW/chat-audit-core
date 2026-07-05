@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.wechat_pc import normalize_wechat_event
 from app.config import Settings, get_settings
-from app.database import get_db_session
+from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
+from app.models import Message, RobotMessage, SchemaMigration
 from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
@@ -27,6 +28,7 @@ from app.schemas import (
     MessageIngestRequest,
     MessageIngestResponse,
     MessageResponse,
+    MigrationStatusResponse,
     OfflineAuditResponse,
     OfflineRepairResponse,
     RoomResponse,
@@ -46,10 +48,10 @@ from app.services.profile_placeholder_service import ProfilePlaceholderService
 from app.services.query_service import QueryService
 from app.services.room_profile_service import RoomProfileService
 from app.services.user_profile_service import UserProfileService
-from app.models import Message, RobotMessage
 
 
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
+_VALID_ADMIN_ROLES = {"viewer", "operator", "admin"}
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -61,18 +63,69 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     return token
 
 
+def _normalize_admin_role(role: Any) -> str:
+    normalized = str(role or "viewer").strip().lower()
+    return normalized if normalized in _VALID_ADMIN_ROLES else "viewer"
+
+
+def _admin_token_records(settings: Settings) -> dict[str, dict[str, str]]:
+    records: dict[str, dict[str, str]] = {}
+    legacy_token = settings.admin_api_token.strip()
+    if legacy_token:
+        records[legacy_token] = {"role": "admin", "name": "admin-token"}
+
+    raw_tokens = settings.admin_api_tokens.strip()
+    if not raw_tokens:
+        return records
+
+    try:
+        parsed = json.loads(raw_tokens)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="ADMIN_API_TOKENS must be valid JSON") from exc
+
+    if isinstance(parsed, list):
+        for index, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                continue
+            token = str(item.get("token") or "").strip()
+            if not token:
+                continue
+            records[token] = {
+                "role": _normalize_admin_role(item.get("role")),
+                "name": str(item.get("name") or f"token-{index + 1}"),
+            }
+    elif isinstance(parsed, dict):
+        for token, role in parsed.items():
+            token_value = str(token).strip()
+            if not token_value:
+                continue
+            records[token_value] = {
+                "role": _normalize_admin_role(role),
+                "name": f"{_normalize_admin_role(role)}-token",
+            }
+    else:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="ADMIN_API_TOKENS must be a JSON object or array")
+
+    return records
+
+
 async def require_admin_api_token(
     request: Request,
     settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db_session),
 ) -> None:
-    configured_token = settings.admin_api_token.strip()
-    if not configured_token:
+    token_records = _admin_token_records(settings)
+    if not token_records:
+        request.state.admin_role = "admin"
+        request.state.admin_actor = "development-open"
         return
 
     header_token = request.headers.get("x-admin-token")
     bearer_token = _extract_bearer_token(request.headers.get("authorization"))
-    if header_token == configured_token or bearer_token == configured_token:
+    matched = token_records.get(header_token or "") or token_records.get(bearer_token or "")
+    if matched:
+        request.state.admin_role = matched["role"]
+        request.state.admin_actor = matched["name"]
         return
 
     await AuditLogService.record(
@@ -98,10 +151,30 @@ def _client_ip(request: Request) -> str | None:
 
 
 def _actor(request: Request) -> str:
-    token = request.headers.get("x-admin-token") or _extract_bearer_token(request.headers.get("authorization"))
-    if token:
-        return "admin-token"
-    return "development-open"
+    return str(getattr(request.state, "admin_actor", "development-open"))
+
+
+def require_admin_role(*allowed_roles: str):
+    allowed = {_normalize_admin_role(role) for role in allowed_roles}
+
+    async def dependency(
+        request: Request,
+        db: AsyncSession = Depends(get_db_session),
+    ) -> None:
+        role = str(getattr(request.state, "admin_role", "viewer"))
+        if role == "admin" or role in allowed:
+            return
+        await _audit(
+            db,
+            request,
+            action="auth.forbidden",
+            status_="failed",
+            target=request.url.path,
+            detail={"method": request.method, "role": role, "required_roles": sorted(allowed)},
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient admin role")
+
+    return dependency
 
 
 def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Settings) -> None:
@@ -183,6 +256,7 @@ async def run_backup_now(
     request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> BackupRunResponse:
     action = "backup.run"
     _enforce_high_risk_rate_limit(request, action, settings)
@@ -214,10 +288,26 @@ async def list_audit_logs(
     return [AuditLogResponse.model_validate(log) for log in logs]
 
 
+@router.get("/system/migrations", response_model=list[MigrationStatusResponse])
+async def list_migration_status(db: AsyncSession = Depends(get_db_session)) -> list[MigrationStatusResponse]:
+    result = await db.execute(select(SchemaMigration))
+    applied = {migration.version: migration for migration in result.scalars().all()}
+    return [
+        MigrationStatusResponse(
+            version=version,
+            description=description,
+            applied=version in applied,
+            applied_at=applied[version].applied_at if version in applied else None,
+        )
+        for version, description in LIGHTWEIGHT_MIGRATIONS.items()
+    ]
+
+
 @router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)
 async def create_adapter(
     payload: AdapterCreateRequest,
     db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> AdapterResponse:
     try:
         adapter = await AdapterService.create_adapter(
@@ -238,6 +328,7 @@ async def update_adapter(
     adapter_id: str,
     payload: AdapterUpdateRequest,
     db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> AdapterResponse:
     adapter = await AdapterService.update_adapter(
         db,
@@ -260,6 +351,7 @@ async def delete_adapter(
     request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
 ) -> Response:
     action = "adapter.delete"
     _enforce_high_risk_rate_limit(request, action, settings)
@@ -361,6 +453,7 @@ async def list_messages(
 async def ingest_message(
     payload: MessageIngestRequest,
     db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> MessageIngestResponse:
     msg_hash = await MessageService.process_incoming_message(
         db,
@@ -392,6 +485,7 @@ async def ingest_wechat_event(
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> MessageIngestResponse:
     normalized = normalize_wechat_event(payload)
     if normalized is None:
@@ -481,6 +575,7 @@ async def backfill_media(
     failure_limit: int = Query(default=20, ge=0, le=200),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> MediaBackfillResponse:
     action = "media.backfill"
     if not dry_run:
@@ -560,6 +655,7 @@ async def repair_offline_media_integrity(
     limit: int = Query(default=50000, ge=1, le=50000),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
 ) -> OfflineRepairResponse:
     action = "offline.repair"
     _enforce_high_risk_rate_limit(request, action, settings)
@@ -698,6 +794,7 @@ async def import_data(
     request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
 ) -> ImportResultResponse:
     action = "import.run"
     _enforce_high_risk_rate_limit(request, action, settings)

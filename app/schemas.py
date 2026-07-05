@@ -82,6 +82,13 @@ class AuditLogResponse(BaseModel):
     created_at: datetime | None = None
 
 
+class MigrationStatusResponse(BaseModel):
+    version: str
+    description: str
+    applied: bool
+    applied_at: datetime | None = None
+
+
 class RoomResponse(BaseModel):
     room_id: str
     last_timestamp: int

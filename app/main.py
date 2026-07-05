@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -17,6 +18,23 @@ from app.services.backup_service import start_auto_backup_scheduler
 from app.ws import router as ws_router
 
 
+def _has_configured_admin_tokens(settings: Settings) -> bool:
+    if settings.admin_api_token.strip():
+        return True
+    raw_tokens = settings.admin_api_tokens.strip()
+    if not raw_tokens:
+        return False
+    try:
+        parsed = json.loads(raw_tokens)
+    except json.JSONDecodeError as exc:
+        raise ValueError("ADMIN_API_TOKENS must be valid JSON in production") from exc
+    if isinstance(parsed, list):
+        return any(isinstance(item, dict) and str(item.get("token") or "").strip() for item in parsed)
+    if isinstance(parsed, dict):
+        return any(str(token).strip() for token in parsed.keys())
+    return False
+
+
 def validate_production_settings(settings: Settings) -> None:
     if settings.app_env.lower() != "production":
         return
@@ -27,7 +45,7 @@ def validate_production_settings(settings: Settings) -> None:
     if settings.onebot_access_token.strip() in unsafe_onebot_values:
         raise ValueError("ONEBOT_ACCESS_TOKEN must be set to a non-default value in production")
     unsafe_admin_values = {"", "replace-with-admin-api-token"}
-    if settings.admin_api_token.strip() in unsafe_admin_values:
+    if settings.admin_api_token.strip() in unsafe_admin_values and not _has_configured_admin_tokens(settings):
         raise ValueError("ADMIN_API_TOKEN must be set to a non-default value in production")
 
 

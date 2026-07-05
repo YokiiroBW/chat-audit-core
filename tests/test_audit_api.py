@@ -1,4 +1,5 @@
 from httpx import ASGITransport, AsyncClient
+import json
 import pytest
 
 from app.api import _RATE_LIMIT_BUCKETS
@@ -97,3 +98,73 @@ async def test_high_risk_rate_limit_blocks_repeated_operation(db_session):
 
     assert first.status_code == 204
     assert second.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_role_token_viewer_can_read_but_cannot_write(db_session, tmp_path):
+    settings = Settings(
+        admin_api_tokens=json.dumps([{"name": "readonly", "role": "viewer", "token": "viewer-token"}]),
+        storage_root=tmp_path / "storage",
+    )
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            read_response = await client.get("/api/adapters", headers={"Authorization": "Bearer viewer-token"})
+            write_response = await client.post("/api/offline/repair", headers={"Authorization": "Bearer viewer-token"})
+            logs = await client.get("/api/audit/logs", headers={"Authorization": "Bearer viewer-token"}, params={"action": "auth.forbidden"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert read_response.status_code == 200
+    assert write_response.status_code == 403
+    assert logs.status_code == 200
+    assert logs.json()[0]["action"] == "auth.forbidden"
+    assert logs.json()[0]["target"] == "/api/offline/repair"
+
+
+@pytest.mark.asyncio
+async def test_role_token_operator_can_repair_but_cannot_delete(db_session, tmp_path):
+    settings = Settings(
+        admin_api_tokens=json.dumps([{"name": "ops", "role": "operator", "token": "operator-token"}]),
+        storage_root=tmp_path / "storage",
+    )
+    await AdapterService.create_adapter(db_session, adapter_id="robot-operator-delete", platform="qq")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            repair_response = await client.post("/api/offline/repair", headers={"Authorization": "Bearer operator-token"})
+            delete_response = await client.delete("/api/adapters/robot-operator-delete", headers={"Authorization": "Bearer operator-token"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert repair_response.status_code == 200
+    assert delete_response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_legacy_admin_api_token_keeps_admin_role(db_session):
+    settings = Settings(admin_api_token="legacy-admin")
+    await AdapterService.create_adapter(db_session, adapter_id="robot-legacy-admin", platform="qq")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.delete("/api/adapters/robot-legacy-admin", headers={"Authorization": "Bearer legacy-admin"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 204
