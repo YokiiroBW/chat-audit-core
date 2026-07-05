@@ -89,6 +89,25 @@ class MediaBackfillResponse(BaseModel):
     failures: list[MediaBackfillFailureResponse]
 
 
+class OfflineAuditIssueResponse(BaseModel):
+    kind: str
+    target: str
+    reason: str
+    msg_hash: str | None = None
+
+
+class OfflineAuditResponse(BaseModel):
+    offline_ready: bool
+    messages_scanned: int
+    media_assets_checked: int
+    remote_media_urls: int
+    uncached_card_pages: int
+    uncached_forwards: int
+    missing_media_assets: int
+    missing_media_files: int
+    issues: list[OfflineAuditIssueResponse]
+
+
 class ImportResultResponse(BaseModel):
     messages: int
     robot_messages: int

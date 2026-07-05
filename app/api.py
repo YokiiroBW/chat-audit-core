@@ -18,6 +18,7 @@ from app.schemas import (
     ImportValidationResponse,
     MediaBackfillResponse,
     MessageResponse,
+    OfflineAuditResponse,
     RoomResponse,
 )
 from app.services.adapter_service import AdapterService
@@ -25,6 +26,7 @@ from app.services.backup_service import BackupService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
 from app.services.message_service import MessageService
+from app.services.offline_audit_service import OfflineAuditService
 from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.query_service import QueryService
 from app.services.room_profile_service import RoomProfileService
@@ -262,6 +264,37 @@ async def backfill_media(
         media_failed=report.media_failed,
         forward_failed=report.forward_failed,
         failures=[failure.__dict__ for failure in report.failures],
+    )
+
+
+@router.get("/offline/audit", response_model=OfflineAuditResponse)
+async def audit_offline_readiness(
+    robot_id: str | None = Query(default=None, min_length=1),
+    room_id: str | None = Query(default=None, min_length=1),
+    limit: int = Query(default=5000, ge=1, le=50000),
+    issue_limit: int = Query(default=100, ge=0, le=1000),
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> OfflineAuditResponse:
+    report = await OfflineAuditService.audit_offline_readiness(
+        db,
+        robot_id=robot_id,
+        room_id=room_id,
+        limit=limit,
+        issue_limit=issue_limit,
+        storage_root=settings.storage_root,
+        public_storage_prefix=settings.public_storage_prefix,
+    )
+    return OfflineAuditResponse(
+        offline_ready=report.offline_ready,
+        messages_scanned=report.messages_scanned,
+        media_assets_checked=report.media_assets_checked,
+        remote_media_urls=report.remote_media_urls,
+        uncached_card_pages=report.uncached_card_pages,
+        uncached_forwards=report.uncached_forwards,
+        missing_media_assets=report.missing_media_assets,
+        missing_media_files=report.missing_media_files,
+        issues=[issue.__dict__ for issue in report.issues],
     )
 
 

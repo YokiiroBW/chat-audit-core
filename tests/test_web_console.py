@@ -71,6 +71,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "高级过滤导出" in html
     assert "openExportDialog" in html
     assert "exportModal" in html
+    assert "offlineAuditModal" in html
+    assert "openOfflineAuditDialog" in html
+    assert "/api/offline/audit" in html
     assert "exportRobotId" in html
     assert "downloadExportPackage" in html
     assert "/api/export" in html

@@ -589,6 +589,7 @@
         </div>
         <div class="top-actions">
           <button id="refreshButton" class="btn">刷新</button>
+          <button id="openOfflineAuditButton" class="btn">离线验收</button>
           <button id="openImportButton" class="btn">导入 JSON</button>
           <button id="openExportButton" class="btn primary">高级过滤导出</button>
         </div>
@@ -638,6 +639,22 @@
     </div>
   </div>
 
+  <div id="offlineAuditModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <strong>离线验收</strong>
+        <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="offlineAuditReport" class="report"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
+        <button id="runOfflineAuditButton" class="btn primary">重新验收</button>
+      </div>
+    </div>
+  </div>
+
   <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop">
     <div class="image-preview">
       <button class="btn image-preview-close" data-close-modal="imagePreviewModal">关闭</button>
@@ -661,6 +678,7 @@
       settingsMode: false,
       editingAdapterId: null,
       importValidationReport: null,
+      offlineAuditReport: null,
       adminApiToken: localStorage.getItem('chatAuditAdminApiToken') || '',
     };
 
@@ -1606,6 +1624,57 @@
       });
     };
 
+    const openOfflineAuditDialog = async () => {
+      state.offlineAuditReport = null;
+      renderOfflineAuditReport();
+      openModal('offlineAuditModal');
+      await runOfflineAudit();
+    };
+
+    async function runOfflineAudit() {
+      const params = new URLSearchParams({ limit: '50000' });
+      if (state.currentRobot) params.append('robot_id', state.currentRobot.id);
+      if (state.currentRoom) params.append('room_id', state.currentRoom.room_id);
+      state.offlineAuditReport = await apiGet(`/api/offline/audit?${params.toString()}`);
+      renderOfflineAuditReport();
+    }
+
+    const renderOfflineAuditReport = () => {
+      const box = el('offlineAuditReport');
+      clearNode(box);
+      const report = state.offlineAuditReport;
+      if (!report) {
+        box.textContent = '正在验收本地缓存...';
+        return;
+      }
+      const rows = [
+        ['验收结果', report.offline_ready ? '通过' : '存在未缓存项', report.offline_ready ? 'ok' : 'bad'],
+        ['messages', report.messages_scanned],
+        ['media_assets', report.media_assets_checked],
+        ['remote_media_urls', report.remote_media_urls],
+        ['uncached_card_pages', report.uncached_card_pages],
+        ['uncached_forwards', report.uncached_forwards],
+        ['missing_media_assets', report.missing_media_assets],
+        ['missing_media_files', report.missing_media_files],
+      ];
+      rows.forEach(([name, value, className]) => {
+        const row = document.createElement('div');
+        const label = document.createElement('strong');
+        label.textContent = `${name}：`;
+        const valueNode = document.createElement('span');
+        if (className) valueNode.className = className;
+        valueNode.textContent = value;
+        row.append(label, valueNode);
+        box.appendChild(row);
+      });
+      (report.issues || []).slice(0, 20).forEach((issue) => {
+        const row = document.createElement('div');
+        row.className = 'bad';
+        row.textContent = `${issue.kind}: ${issue.target} (${issue.reason})`;
+        box.appendChild(row);
+      });
+    };
+
     const openModal = (id) => el(id).classList.add('open');
     const closeModal = (id) => {
       el(id).classList.remove('open');
@@ -1632,6 +1701,8 @@
       el('clearSearchButton').addEventListener('click', clearSearch);
       el('refreshButton').addEventListener('click', reloadCurrentRoom);
       el('chatWindow').addEventListener('scroll', handleWindowScroll);
+      el('openOfflineAuditButton').addEventListener('click', openOfflineAuditDialog);
+      el('runOfflineAuditButton').addEventListener('click', runOfflineAudit);
       el('openExportButton').addEventListener('click', openExportDialog);
       el('downloadExportButton').addEventListener('click', downloadExportPackage);
       el('openImportButton').addEventListener('click', openImportDialog);
@@ -1656,6 +1727,8 @@
     window.selectSearchResult = selectSearchResult;
     window.openExportDialog = openExportDialog;
     window.downloadExportPackage = downloadExportPackage;
+    window.openOfflineAuditDialog = openOfflineAuditDialog;
+    window.runOfflineAudit = runOfflineAudit;
     window.openImportDialog = openImportDialog;
     window.validateImportPackage = validateImportPackage;
     window.submitImportPackage = submitImportPackage;
