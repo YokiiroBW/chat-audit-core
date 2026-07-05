@@ -20,6 +20,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "Vue" not in html
     assert "/api/adapters" in html
     assert "/api/bots" in html
+    assert "/api/dashboard" in html
+    assert "dashboardSummary" in html
+    assert "renderDashboard" in html
     assert "/api/rooms" in html
     assert "/api/messages" in html
     assert "/api/search" in html

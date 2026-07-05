@@ -14,6 +14,7 @@ from app.schemas import (
     AdapterResponse,
     AdapterUpdateRequest,
     BotProfileResponse,
+    DashboardResponse,
     ImportResultResponse,
     ImportValidationResponse,
     MediaBackfillResponse,
@@ -27,6 +28,7 @@ from app.schemas import (
 from app.services.adapter_service import AdapterService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
+from app.services.dashboard_service import DashboardService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
 from app.services.message_service import MessageService
@@ -77,6 +79,14 @@ async def list_adapters(db: AsyncSession = Depends(get_db_session)) -> list[Adap
 async def list_bots(db: AsyncSession = Depends(get_db_session)) -> list[BotProfileResponse]:
     profiles = await QueryService.list_bot_profiles(db)
     return [BotProfileResponse.model_validate(profile) for profile in profiles]
+
+
+@router.get("/dashboard", response_model=DashboardResponse)
+async def get_dashboard_summary(
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> DashboardResponse:
+    return DashboardResponse(**await DashboardService.get_summary(db, backup_root=settings.backup_root))
 
 
 @router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)

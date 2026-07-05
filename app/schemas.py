@@ -44,6 +44,17 @@ class BotProfileResponse(BaseModel):
     last_seen_at: datetime | None = None
 
 
+class DashboardResponse(BaseModel):
+    bots: int
+    rooms: int
+    messages: int
+    robot_views: int
+    media_assets: int
+    media_bytes: int
+    backups: int
+    latest_backup: str | None = None
+
+
 class RoomResponse(BaseModel):
     room_id: str
     last_timestamp: int

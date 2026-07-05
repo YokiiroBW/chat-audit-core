@@ -141,6 +141,31 @@
       font-weight: 700;
     }
     .hint { color: var(--muted); font-size: 12px; }
+    .dashboard-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .dashboard-stat {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 6px;
+      background: #f8fafc;
+    }
+    .dashboard-stat strong {
+      display: block;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.1;
+    }
+    .dashboard-stat span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
     .search-row { display: flex; gap: 8px; margin-top: 12px; }
     .search-row input { flex: 1; }
     .rooms, .search-results, .adapter-list, .chat-scroll { overflow: auto; }
@@ -550,6 +575,7 @@
       <div class="side-head">
         <h1>多租户社交资产审计</h1>
         <div class="hint">状态枚举：green/red/gray</div>
+        <div id="dashboardSummary" class="dashboard-strip"></div>
         <div class="search-row">
           <input id="searchInput" placeholder="全局搜索当前机器人视角消息..." />
           <button id="searchButton" class="btn primary">搜索</button>
@@ -679,6 +705,7 @@
     const state = {
       accountList: [],
       adapterList: [],
+      dashboard: null,
       currentRobot: null,
       roomList: [],
       currentRoom: null,
@@ -829,6 +856,27 @@
         const remove = button('删除', 'btn link danger', () => deleteAdapter(acc.id));
         row.append(edit, remove);
         container.appendChild(row);
+      });
+    };
+
+    const renderDashboard = () => {
+      const container = el('dashboardSummary');
+      clearNode(container);
+      const dashboard = state.dashboard || {};
+      [
+        ['messages', dashboard.messages || 0],
+        ['rooms', dashboard.rooms || 0],
+        ['media', dashboard.media_assets || 0],
+        ['backups', dashboard.backups || 0],
+      ].forEach(([label, value]) => {
+        const item = document.createElement('div');
+        item.className = 'dashboard-stat';
+        const number = document.createElement('strong');
+        number.textContent = value;
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        item.append(number, caption);
+        container.appendChild(item);
       });
     };
 
@@ -1423,6 +1471,7 @@
     };
 
     const renderAll = () => {
+      renderDashboard();
       renderAccounts();
       renderSettings();
       renderSearchResults();
@@ -1431,7 +1480,8 @@
     };
 
     const loadAdapters = async () => {
-      const [bots, adapters] = await Promise.all([apiGet('/api/bots'), apiGet('/api/adapters')]);
+      const [dashboard, bots, adapters] = await Promise.all([apiGet('/api/dashboard'), apiGet('/api/bots'), apiGet('/api/adapters')]);
+      state.dashboard = dashboard;
       state.accountList = bots;
       state.adapterList = adapters;
       if (state.accountList.length > 0 && !state.currentRobot) {
