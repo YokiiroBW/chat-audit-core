@@ -162,8 +162,11 @@ class BackupService:
         result = await db.execute(stmt)
         messages = list(result.scalars().unique().all())
         msg_hashes = [message.msg_hash for message in messages]
-        room_ids = sorted({message.room_id for message in messages})
-        user_ids = sorted({message.sender_id for message in messages})
+        room_ids = sorted({message.room_id for message in messages if message.message_type == "group"})
+        user_ids = sorted(
+            {message.sender_id for message in messages}
+            | {message.room_id for message in messages if message.message_type == "private"}
+        )
 
         robot_messages: list[dict[str, str]] = []
         if msg_hashes:

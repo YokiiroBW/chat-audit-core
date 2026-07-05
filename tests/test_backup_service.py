@@ -3,7 +3,7 @@ import pytest
 
 from app.database import get_db_session
 from app.main import app
-from app.models import MediaAsset
+from app.models import MediaAsset, UserProfile
 from app.services.backup_service import BackupService
 from app.services.message_service import MessageService
 
@@ -82,6 +82,64 @@ async def test_backup_service_exports_filtered_messages_and_manifest(db_session)
             "local_path": "/static/storage/media-a.jpg",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_backup_service_exports_private_room_user_profile_and_avatar(db_session, tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    avatar_content = b"private avatar"
+    avatar_file = storage_root / "private-avatar.svg"
+    avatar_file.write_bytes(avatar_content)
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "private-user",
+            "message_type": "private",
+            "sender_id": "robot-a",
+            "nickname": "Bot A",
+            "raw_message": "hello private",
+            "timestamp": 101,
+        },
+    )
+    db_session.add(
+        UserProfile(
+            user_id="private-user",
+            platform="qq",
+            display_name="Private User",
+            avatar_path="/static/storage/private-avatar.svg",
+        )
+    )
+    db_session.add(
+        MediaAsset(
+            file_hash="private-avatar",
+            file_type="image",
+            file_size=len(avatar_content),
+            local_path="/static/storage/private-avatar.svg",
+        )
+    )
+    await db_session.commit()
+
+    package = await BackupService.export_package(
+        db_session,
+        robot_id="robot-a",
+        storage_root=storage_root,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert package["room_profiles"] == []
+    assert package["user_profiles"] == [
+        {
+            "user_id": "private-user",
+            "platform": "qq",
+            "display_name": "Private User",
+            "avatar_path": "/static/storage/private-avatar.svg",
+        }
+    ]
+    assert package["media_assets"][0]["local_path"] == "/static/storage/private-avatar.svg"
+    assert package["media_files"][0]["content_base64"]
 
 
 @pytest.mark.asyncio
