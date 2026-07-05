@@ -55,6 +55,20 @@ class DashboardResponse(BaseModel):
     latest_backup: str | None = None
 
 
+class BackupStatusResponse(BaseModel):
+    enabled: bool
+    cron: str
+    keep_latest: int
+    backup_root: str
+    backups: int
+    latest_backup: str | None = None
+
+
+class BackupRunResponse(BaseModel):
+    path: str
+    filename: str
+
+
 class RoomResponse(BaseModel):
     room_id: str
     last_timestamp: int

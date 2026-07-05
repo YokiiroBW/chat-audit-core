@@ -15,6 +15,8 @@ from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
     AdapterUpdateRequest,
+    BackupRunResponse,
+    BackupStatusResponse,
     BotProfileResponse,
     DashboardResponse,
     ImportResultResponse,
@@ -90,6 +92,44 @@ async def get_dashboard_summary(
     settings: Settings = Depends(get_settings),
 ) -> DashboardResponse:
     return DashboardResponse(**await DashboardService.get_summary(db, backup_root=settings.backup_root))
+
+
+def _auto_backup_enabled(cron_expr: str) -> bool:
+    value = (cron_expr or "").strip().lower()
+    return bool(value and value not in {"off", "disabled", "none", "false", "0"})
+
+
+@router.get("/backup/status", response_model=BackupStatusResponse)
+async def get_backup_status(settings: Settings = Depends(get_settings)) -> BackupStatusResponse:
+    backup_root = settings.backup_root
+    backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name)) if backup_root.exists() else []
+    latest = backups[-1].name if backups else None
+    return BackupStatusResponse(
+        enabled=_auto_backup_enabled(settings.auto_backup_cron),
+        cron=settings.auto_backup_cron,
+        keep_latest=settings.auto_backup_keep_latest,
+        backup_root=str(backup_root),
+        backups=len(backups),
+        latest_backup=latest,
+    )
+
+
+@router.post("/backup/run", response_model=BackupRunResponse)
+async def run_backup_now(
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> BackupRunResponse:
+    path = await BackupService.write_auto_backup_file(
+        db,
+        backup_root=settings.backup_root,
+        storage_root=settings.storage_root,
+        public_storage_prefix=settings.public_storage_prefix,
+        max_media_bytes=settings.media_max_bytes,
+        keep_latest=settings.auto_backup_keep_latest,
+        system_id=settings.system_instance_id,
+        signing_key=settings.app_secret_key,
+    )
+    return BackupRunResponse(path=str(path), filename=path.name)
 
 
 @router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)

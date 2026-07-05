@@ -604,6 +604,11 @@
             <button id="clearAdapterButton" class="btn">清空</button>
           </div>
         </div>
+        <div class="settings-title">
+          <span>自动备份</span>
+          <button id="runBackupButton" class="btn link">立即备份</button>
+        </div>
+        <div id="backupStatusReport" class="report"></div>
         <div id="adapterList" class="adapter-list"></div>
       </div>
 
@@ -706,6 +711,8 @@
       accountList: [],
       adapterList: [],
       dashboard: null,
+      backupStatus: null,
+      backupRunResult: null,
       currentRobot: null,
       roomList: [],
       currentRoom: null,
@@ -982,7 +989,38 @@
       el('settingsPanel').classList.toggle('open', state.settingsMode);
       el('adapterId').disabled = Boolean(state.editingAdapterId);
       el('saveAdapterButton').textContent = state.editingAdapterId ? '保存修改' : '添加账号';
+      renderBackupStatus();
       renderAdapters();
+    };
+
+    const renderBackupStatus = () => {
+      const box = el('backupStatusReport');
+      clearNode(box);
+      const status = state.backupStatus;
+      if (!status) {
+        box.textContent = '备份状态未加载';
+        return;
+      }
+      const rows = [
+        ['enabled', status.enabled ? '开启' : '关闭', status.enabled ? 'ok' : undefined],
+        ['cron', status.cron || '-'],
+        ['keep_latest', status.keep_latest],
+        ['backups', status.backups],
+        ['latest', status.latest_backup || '-'],
+      ];
+      if (state.backupRunResult) {
+        rows.push(['manual', state.backupRunResult.filename || '-', 'ok']);
+      }
+      rows.forEach(([name, value, className]) => {
+        const row = document.createElement('div');
+        const label = document.createElement('strong');
+        label.textContent = `${name}：`;
+        const valueNode = document.createElement('span');
+        if (className) valueNode.className = className;
+        valueNode.textContent = value;
+        row.append(label, valueNode);
+        box.appendChild(row);
+      });
     };
 
     const renderChat = () => {
@@ -1480,8 +1518,9 @@
     };
 
     const loadAdapters = async () => {
-      const [dashboard, bots, adapters] = await Promise.all([apiGet('/api/dashboard'), apiGet('/api/bots'), apiGet('/api/adapters')]);
+      const [dashboard, backupStatus, bots, adapters] = await Promise.all([apiGet('/api/dashboard'), apiGet('/api/backup/status'), apiGet('/api/bots'), apiGet('/api/adapters')]);
       state.dashboard = dashboard;
+      state.backupStatus = backupStatus;
       state.accountList = bots;
       state.adapterList = adapters;
       if (state.accountList.length > 0 && !state.currentRobot) {
@@ -1544,6 +1583,13 @@
       await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
       await loadAdapters();
     };
+
+    async function runManualBackup() {
+      state.backupRunResult = await apiSend('/api/backup/run', 'POST');
+      state.backupStatus = await apiGet('/api/backup/status');
+      state.dashboard = await apiGet('/api/dashboard');
+      renderAll();
+    }
 
     async function selectRoom(room) {
       state.currentRoom = room;
@@ -1800,6 +1846,7 @@
       el('newAdapterButton').addEventListener('click', resetAdapterForm);
       el('clearAdapterButton').addEventListener('click', resetAdapterForm);
       el('saveAdapterButton').addEventListener('click', saveAdapter);
+      el('runBackupButton').addEventListener('click', runManualBackup);
       el('searchButton').addEventListener('click', performSearch);
       el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
       el('clearSearchButton').addEventListener('click', clearSearch);
@@ -1838,6 +1885,7 @@
     window.openImportDialog = openImportDialog;
     window.validateImportPackage = validateImportPackage;
     window.submitImportPackage = submitImportPackage;
+    window.runManualBackup = runManualBackup;
 
     bindEvents();
     renderAll();

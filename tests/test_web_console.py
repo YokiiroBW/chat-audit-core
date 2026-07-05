@@ -21,6 +21,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/adapters" in html
     assert "/api/bots" in html
     assert "/api/dashboard" in html
+    assert "/api/backup/status" in html
+    assert "/api/backup/run" in html
     assert "dashboardSummary" in html
     assert "renderDashboard" in html
     assert "/api/rooms" in html
@@ -63,6 +65,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "roomDisplayName" in html
     assert "sender_avatar_path" in html
     assert "账号设置" in html
+    assert "自动备份" in html
+    assert "runManualBackup" in html
+    assert "backupStatusReport" in html
     assert "adapterId" in html
     assert "saveAdapter" in html
     assert "deleteAdapter" in html
