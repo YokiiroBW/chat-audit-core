@@ -3,8 +3,44 @@ import json
 from sqlalchemy import text
 
 from app.config import Settings
-from app.database import create_async_engine_and_sessionmaker
+from app.database import LIGHTWEIGHT_MIGRATION_REGISTRY, LIGHTWEIGHT_MIGRATIONS, create_async_engine_and_sessionmaker, ensure_schema_compatibility
 from app.main import create_app
+
+
+def test_lightweight_migration_registry_drives_status_order():
+    versions = [migration.version for migration in LIGHTWEIGHT_MIGRATION_REGISTRY]
+
+    assert versions == list(LIGHTWEIGHT_MIGRATIONS)
+    assert len(versions) == len(set(versions))
+    assert all(migration.description == LIGHTWEIGHT_MIGRATIONS[migration.version] for migration in LIGHTWEIGHT_MIGRATION_REGISTRY)
+
+
+def test_lightweight_migrations_upgrade_legacy_sqlite_schema(tmp_path):
+    database_path = tmp_path / "legacy.sqlite3"
+    engine, _sessionmaker = create_async_engine_and_sessionmaker(f"sqlite+aiosqlite:///{database_path.as_posix()}")
+
+    async def arrange_legacy_schema():
+        async with engine.begin() as conn:
+            await conn.execute(text("create table adapters (id varchar(64) primary key, platform varchar(20) not null, config_json text, status varchar(20) not null, updated_at datetime not null)"))
+            await conn.execute(text("create table messages (msg_hash varchar(64) primary key, platform varchar(20) not null, room_id varchar(64) not null, message_type varchar(20) not null, sender_id varchar(64) not null, nickname varchar(128), raw_message text not null, local_message text not null, timestamp integer not null, created_at datetime not null)"))
+
+    async def inspect_after_upgrade():
+        await ensure_schema_compatibility(engine)
+        async with engine.connect() as conn:
+            adapter_columns = [row[1] for row in (await conn.execute(text("pragma table_info(adapters)"))).fetchall()]
+            message_columns = [row[1] for row in (await conn.execute(text("pragma table_info(messages)"))).fetchall()]
+            migrations = [row[0] for row in (await conn.execute(text("select version from schema_migrations order by version"))).fetchall()]
+        await engine.dispose()
+        return adapter_columns, message_columns, migrations
+
+    import anyio
+
+    anyio.run(arrange_legacy_schema)
+    adapter_columns, message_columns, migrations = anyio.run(inspect_after_upgrade)
+
+    assert "current_robot_id" in adapter_columns
+    assert "external_message_id" in message_columns
+    assert migrations == list(LIGHTWEIGHT_MIGRATIONS)
 
 
 def test_create_app_lifespan_initializes_storage_and_database(tmp_path):

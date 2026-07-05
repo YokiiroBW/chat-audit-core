@@ -43,7 +43,7 @@
 
 ### T3 轻量迁移体系增强
 
-状态：待处理
+状态：已完成
 
 目标：
 - 将当前启动期兼容迁移整理为更清晰的迁移注册结构。
@@ -53,6 +53,11 @@
 验收：
 - 新库初始化和旧库升级均通过测试。
 - `/api/system/migrations` 能展示所有迁移状态。
+
+已完成：
+- 将启动期兼容迁移整理为 `LIGHTWEIGHT_MIGRATION_REGISTRY`。
+- 每条迁移具备 version、description 和 apply 函数。
+- 新增旧 SQLite schema 升级回归测试，全量测试通过。
 
 ## 需要外部条件
 

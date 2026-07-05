@@ -267,8 +267,9 @@ HIGH_RISK_RATE_LIMIT_PER_MINUTE=10
 - `audit_logs`
 - `schema_migrations`
 - `admin_tokens`
+- `system_settings`
 
-这不是完整 Alembic 体系，但已经能追踪启动期兼容迁移；后续需要复杂结构变更时，可在此基础上迁入 Alembic。
+这不是完整 Alembic 体系，但轻量迁移已经收拢为显式注册表：每条迁移都有版本、说明和执行函数，并覆盖新库初始化与旧库升级测试；后续需要复杂结构变更时，可在此基础上迁入 Alembic。
 
 迁移状态查询：
 

@@ -112,7 +112,7 @@
 
 ### 5. 生产权限、限流与操作审计
 
-状态：已完成第二版
+状态：已完成第三版
 
 目标：
 - 对管理接口增加操作审计日志。
@@ -150,8 +150,10 @@
 已完成：
 - 新增 `schema_migrations` 表。
 - 启动期兼容迁移会记录版本。
-- 当前已追踪 `adapters.current_robot_id`、`messages.external_message_id`、`audit_logs`、`schema_migrations`、`admin_tokens`。
+- 将启动期兼容迁移整理为 `LIGHTWEIGHT_MIGRATION_REGISTRY`，每条迁移具备版本、说明和执行函数。
+- 当前已追踪 `adapters.current_robot_id`、`messages.external_message_id`、`audit_logs`、`schema_migrations`、`admin_tokens`、`system_settings`。
 - 新增 `GET /api/system/migrations` 查询当前已知轻量迁移的应用状态。
+- 新增旧 SQLite schema 升级回归测试。
 
 剩余：
 - 尚未引入完整 Alembic；复杂结构变更时应继续迁入 Alembic，当前版本先提供可观测的轻量迁移状态。

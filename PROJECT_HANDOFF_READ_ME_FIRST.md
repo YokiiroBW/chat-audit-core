@@ -17,7 +17,7 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`功能：持久化自动备份配置`
+- 最新提交主题：`重构：整理轻量迁移注册表`
 - 本地全量测试：`123 passed`
 - NAS 部署：已部署最新版本
 - NAS 离线验收：`offline_ready=true`
@@ -59,7 +59,7 @@ c035c19 功能：增加资产统计仪表盘
 - 操作审计：`audit_logs` 与 `GET /api/audit/logs`
 - 高风险接口简单限流：`HIGH_RISK_RATE_LIMIT_PER_MINUTE`
 - 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`，支持 `viewer`、`operator`、`admin`，Web 设置页可创建/列表/吊销托管 Token
-- 轻量迁移记录：`schema_migrations` 与 `GET /api/system/migrations`
+- 轻量迁移注册表与记录：`LIGHTWEIGHT_MIGRATION_REGISTRY`、`schema_migrations` 与 `GET /api/system/migrations`
 - 运行时状态：`GET /api/system/runtime`，可检查 FFmpeg 可用性和转码配置
 - 可选 FFmpeg 镜像：`Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`
 
