@@ -43,6 +43,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_004_schema_migrations", "Create schema_migrations table", _noop_migration),
     LightweightMigration("20260705_005_admin_tokens", "Create admin_tokens table", _noop_migration),
     LightweightMigration("20260705_006_system_settings", "Create system_settings table", _noop_migration),
+    LightweightMigration("20260705_007_admin_users_sessions", "Create admin_users and admin_sessions tables", _noop_migration),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}

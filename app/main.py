@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.api import router as api_router
+from app.api import public_router as public_api_router, router as api_router
 from app.config import Settings, get_settings
 from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
 from app.schemas import HealthResponse
@@ -90,6 +90,7 @@ def create_app(
         StaticFiles(directory=active_settings.storage_root, check_dir=False),
         name="storage",
     )
+    app.include_router(public_api_router, prefix="/api")
     app.include_router(api_router, prefix="/api")
     app.include_router(ws_router)
 

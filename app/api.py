@@ -18,8 +18,14 @@ from app.schemas import (
     AdapterResponse,
     AdapterUpdateRequest,
     AdminTokenCreateRequest,
+    AdminTokenRotateResponse,
     AdminTokenResponse,
+    AdminUserCreateRequest,
+    AdminUserResponse,
     AuditLogResponse,
+    AuthLoginRequest,
+    AuthLoginResponse,
+    AuthMeResponse,
     BackupRunResponse,
     BackupSettingsUpdateRequest,
     BackupStatusResponse,
@@ -43,6 +49,7 @@ from app.services.audit_log_service import AuditLogService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
 from app.services.backup_config_service import BackupConfigService, EffectiveBackupConfig
+from app.services.admin_user_service import AdminUserService
 from app.services.dashboard_service import DashboardService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
@@ -142,6 +149,14 @@ async def require_admin_api_token(
             request.state.admin_actor = managed_match.actor
             request.state.admin_token_id = managed_match.token_id
             return
+        session_match = await AdminUserService.match_session(db, provided_token)
+        if session_match is not None:
+            request.state.admin_role = session_match.role
+            request.state.admin_actor = session_match.actor
+            request.state.admin_user_id = session_match.user_id
+            request.state.admin_session_id = session_match.session_id
+            request.state.admin_username = session_match.username
+            return
 
     await AuditLogService.record(
         db,
@@ -155,6 +170,7 @@ async def require_admin_api_token(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid admin api token")
 
 
+public_router = APIRouter()
 router = APIRouter(dependencies=[Depends(require_admin_api_token)])
 
 
@@ -224,6 +240,60 @@ async def _audit(
         target=target,
         detail=detail,
     )
+
+
+@public_router.post("/auth/login", response_model=AuthLoginResponse)
+async def login_admin_user(
+    payload: AuthLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+) -> AuthLoginResponse:
+    user = await AdminUserService.authenticate(db, username=payload.username, password=payload.password)
+    if user is None:
+        await AuditLogService.record(
+            db,
+            action="auth.login",
+            status="failed",
+            actor=payload.username.strip().lower() or "anonymous",
+            ip_address=_client_ip(request),
+            target="admin_user",
+            detail={"reason": "invalid_credentials"},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid username or password")
+    _session, token = await AdminUserService.create_session(db, user)
+    await AuditLogService.record(
+        db,
+        action="auth.login",
+        status="success",
+        actor=f"db-user:{user.username}",
+        ip_address=_client_ip(request),
+        target=str(user.id),
+        detail={"role": user.role},
+    )
+    return AuthLoginResponse(token=token, user=AdminUserResponse.model_validate(user))
+
+
+@router.get("/auth/me", response_model=AuthMeResponse)
+async def get_auth_identity(request: Request) -> AuthMeResponse:
+    return AuthMeResponse(
+        actor=_actor(request),
+        role=str(getattr(request.state, "admin_role", "viewer")),
+        user_id=getattr(request.state, "admin_user_id", None),
+        session_id=getattr(request.state, "admin_session_id", None),
+        username=getattr(request.state, "admin_username", None),
+    )
+
+
+@router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_admin_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    token = _extract_bearer_token(request.headers.get("authorization"))
+    if token:
+        await AdminUserService.revoke_session(db, token)
+    await _audit(db, request, action="auth.logout", status_="success")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/adapters", response_model=list[AdapterResponse])
@@ -388,6 +458,61 @@ async def revoke_admin_token(
         raise HTTPException(status_code=404, detail="admin token not found")
     await _audit(db, request, action=action, status_="success", target=str(record.id), detail={"name": record.name, "role": record.role})
     return AdminTokenResponse.model_validate(record)
+
+
+@router.post("/admin/tokens/{token_id}/rotate", response_model=AdminTokenRotateResponse)
+async def rotate_admin_token(
+    token_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminTokenRotateResponse:
+    action = "admin_token.rotate"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    rotated = await AdminTokenService.rotate_token(db, token_id)
+    if rotated is None:
+        await _audit(db, request, action=action, status_="failed", target=str(token_id), detail={"reason": "not_found"})
+        raise HTTPException(status_code=404, detail="admin token not found")
+    record, token = rotated
+    await _audit(db, request, action=action, status_="success", target=str(record.id), detail={"name": record.name, "role": record.role})
+    response = AdminTokenRotateResponse.model_validate(record)
+    response.token = token
+    return response
+
+
+@router.get("/admin/users", response_model=list[AdminUserResponse])
+async def list_admin_users(
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("admin")),
+) -> list[AdminUserResponse]:
+    users = await AdminUserService.list_users(db)
+    return [AdminUserResponse.model_validate(user) for user in users]
+
+
+@router.post("/admin/users", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
+async def create_admin_user(
+    payload: AdminUserCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminUserResponse:
+    action = "admin_user.create"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    try:
+        user = await AdminUserService.create_user(
+            db,
+            username=payload.username,
+            password=payload.password,
+            role=payload.role,
+            display_name=payload.display_name,
+        )
+    except ValueError as exc:
+        await _audit(db, request, action=action, status_="failed", target=payload.username, detail={"error": str(exc)})
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await _audit(db, request, action=action, status_="success", target=str(user.id), detail={"username": user.username, "role": user.role})
+    return AdminUserResponse.model_validate(user)
 
 
 @router.get("/system/migrations", response_model=list[MigrationStatusResponse])

@@ -98,13 +98,20 @@
 
 ### T6 完整数据库用户与登录态
 
-状态：待处理
+状态：已完成第一版
 
 目标：
 - 在现有静态 Token 与数据库托管 Token 基础上，引入数据库用户、登录态和更细粒度前端角色 UI。
 
 验收：
 - 用户登录、退出、角色授权、Token 轮换均有测试。
+
+已完成：
+- 新增 `admin_users`、`admin_sessions` 与轻量迁移记录。
+- 新增 `/api/auth/login`、`/api/auth/me`、`/api/auth/logout`。
+- 新增 `/api/admin/users` 创建/列表入口。
+- 新增 `/api/admin/tokens/{id}/rotate`，旧 token 失效，新 token 可用。
+- Web 设置页支持登录/退出、当前角色显示和数据库用户创建/列表。
 
 ### T7 完整 Alembic 迁移体系
 

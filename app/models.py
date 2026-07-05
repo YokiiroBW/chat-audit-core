@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 from app.time_utils import utc_now
@@ -124,6 +124,37 @@ class AdminToken(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(128), nullable=False)
     role = Column(String(20), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_prefix = Column(String(16), nullable=False)
+    status = Column(String(20), default="active", nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+
+class AdminUser(Base):
+    """Database-managed console user."""
+
+    __tablename__ = "admin_users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), nullable=False, unique=True, index=True)
+    display_name = Column(String(128), nullable=True)
+    role = Column(String(20), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    status = Column(String(20), default="active", nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+
+class AdminSession(Base):
+    """Bearer login session for database-managed users."""
+
+    __tablename__ = "admin_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("admin_users.id"), nullable=False, index=True)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
     token_prefix = Column(String(16), nullable=False)
     status = Column(String(20), default="active", nullable=False, index=True)

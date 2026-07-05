@@ -115,6 +115,16 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "submitImportPackage" in html
     assert "chatAuditAdminApiToken" in html
     assert "Authorization" in html
+    assert "/api/auth/login" in html
+    assert "/api/auth/me" in html
+    assert "/api/auth/logout" in html
+    assert "/api/admin/users" in html
+    assert "loginWithPassword" in html
+    assert "logoutAuth" in html
+    assert "refreshAuthIdentity" in html
+    assert "createAdminUser" in html
+    assert "authStatusReport" in html
+    assert "adminUserList" in html
     assert "/api/import/validate" in html
     assert "/api/import" in html
     assert "signature" in html

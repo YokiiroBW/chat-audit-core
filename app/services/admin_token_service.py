@@ -75,3 +75,17 @@ class AdminTokenService:
             await db.commit()
             await db.refresh(record)
         return record
+
+    @staticmethod
+    async def rotate_token(db: AsyncSession, token_id: int) -> tuple[AdminToken, str] | None:
+        record = await db.get(AdminToken, token_id)
+        if record is None:
+            return None
+        token = AdminTokenService.generate_token()
+        record.token_hash = AdminTokenService.hash_token(token)
+        record.token_prefix = token[:12]
+        record.status = "active"
+        record.revoked_at = None
+        await db.commit()
+        await db.refresh(record)
+        return record, token

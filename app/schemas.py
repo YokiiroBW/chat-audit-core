@@ -110,6 +110,49 @@ class AdminTokenResponse(BaseModel):
     token: str | None = None
 
 
+class AdminTokenRotateResponse(AdminTokenResponse):
+    token: str | None = None
+
+
+class AdminUserCreateRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=256)
+    role: str = Field(default="viewer", min_length=1, max_length=20)
+    display_name: str | None = Field(default=None, max_length=128)
+
+
+class AdminUserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    display_name: str | None = None
+    role: str
+    status: str
+    created_at: datetime | None = None
+    last_login_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class AuthLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AuthLoginResponse(BaseModel):
+    token: str
+    token_type: str = "bearer"
+    user: AdminUserResponse
+
+
+class AuthMeResponse(BaseModel):
+    actor: str
+    role: str
+    user_id: int | None = None
+    session_id: int | None = None
+    username: str | None = None
+
+
 class MigrationStatusResponse(BaseModel):
     version: str
     description: str

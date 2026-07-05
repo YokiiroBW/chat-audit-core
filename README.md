@@ -227,11 +227,22 @@ ADMIN_API_TOKENS=[{"name":"readonly","role":"viewer","token":"replace-with-reado
 ```text
 GET    /api/admin/tokens
 POST   /api/admin/tokens       # body: {"name":"readonly","role":"viewer"}
+POST   /api/admin/tokens/{id}/rotate
 DELETE /api/admin/tokens/{id}  # 吊销
 ```
 
+数据库用户与登录态也可用于 Web 控制台日常登录。密码使用 PBKDF2-SHA256 保存，登录态只保存 token 哈希：
+
+```text
+POST /api/auth/login       # body: {"username":"ops","password":"..."}
+GET  /api/auth/me
+POST /api/auth/logout
+GET  /api/admin/users
+POST /api/admin/users      # body: {"username":"ops","password":"...","role":"operator"}
+```
+
 生产环境建议仍保留一个静态 `ADMIN_API_TOKEN` 作为 bootstrap/应急入口，再用数据库托管 Token 分配日常只读或运维权限。
-Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建和吊销入口。
+Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建、吊销入口，以及数据库用户创建、列表、登录、退出和当前角色显示。
 
 ## 操作审计与限流
 
@@ -243,6 +254,7 @@ Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建
 - 离线修复。
 - 导入 JSON。
 - 手动备份。
+- 用户登录/退出、数据库用户创建、Token 创建/轮换/吊销。
 
 查询接口：
 

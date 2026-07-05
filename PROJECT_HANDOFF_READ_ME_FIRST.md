@@ -17,7 +17,7 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`重构：整理轻量迁移注册表`
+- 最新提交主题：`功能：增加数据库用户登录态`
 - 本地全量测试：`123 passed`
 - NAS 部署：已部署最新版本
 - NAS 离线验收：`offline_ready=true`
@@ -58,7 +58,8 @@ c035c19 功能：增加资产统计仪表盘
 - 微信 Hook 第三版入口：`POST /api/wechat/events`，支持常见嵌套字段、微信数字 `MsgType` 和群聊发送者前缀，并有 `tests/fixtures/wechat_hook_samples.json` 样本回放
 - 操作审计：`audit_logs` 与 `GET /api/audit/logs`
 - 高风险接口简单限流：`HIGH_RISK_RATE_LIMIT_PER_MINUTE`
-- 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`，支持 `viewer`、`operator`、`admin`，Web 设置页可创建/列表/吊销托管 Token
+- 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`，支持 `viewer`、`operator`、`admin`，Web 设置页可创建/列表/吊销/轮换托管 Token
+- 数据库用户与登录态：`admin_users`、`admin_sessions`、`/api/auth/login`、`/api/auth/me`、`/api/auth/logout`，Web 设置页可登录/退出并显示当前角色
 - 轻量迁移注册表与记录：`LIGHTWEIGHT_MIGRATION_REGISTRY`、`schema_migrations` 与 `GET /api/system/migrations`
 - 运行时状态：`GET /api/system/runtime`，可检查 FFmpeg 可用性和转码配置
 - 可选 FFmpeg 镜像：`Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`

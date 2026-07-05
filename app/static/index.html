@@ -566,7 +566,10 @@
         <div id="accountList" class="account-stack"></div>
       </div>
       <div class="rail-footer">
+        <button id="loginButton">登录</button>
+        <button id="logoutButton">退出</button>
         <button id="settingsToggle">账号设置</button>
+        <div id="authActor" class="truncate">未登录</div>
         <div><span id="accountCount">0</span> 账号</div>
       </div>
     </aside>
@@ -583,6 +586,11 @@
       </div>
 
       <div id="settingsPanel" class="settings">
+        <div class="settings-title">
+          <span>登录状态</span>
+          <button id="refreshAuthButton" class="btn link">刷新</button>
+        </div>
+        <div id="authStatusReport" class="report"></div>
         <div class="settings-title">
           <span>账号设置</span>
           <button id="newAdapterButton" class="btn link">新增账号</button>
@@ -635,6 +643,22 @@
         </div>
         <div id="adminTokenCreateReport" class="report" hidden></div>
         <div id="adminTokenList" class="adapter-list"></div>
+        <div class="settings-title">
+          <span>数据库用户</span>
+          <button id="createAdminUserButton" class="btn link">创建用户</button>
+        </div>
+        <div class="form-grid">
+          <input id="adminUsername" placeholder="username" />
+          <input id="adminPassword" type="password" placeholder="password" />
+          <input id="adminDisplayName" placeholder="display name" />
+          <select id="adminUserRole">
+            <option value="viewer">viewer</option>
+            <option value="operator">operator</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+        <div id="adminUserCreateReport" class="report" hidden></div>
+        <div id="adminUserList" class="adapter-list"></div>
         <div id="adapterList" class="adapter-list"></div>
       </div>
 
@@ -743,6 +767,11 @@
       adminTokenList: [],
       adminTokenCreateResult: null,
       adminTokenError: '',
+      adminUserList: [],
+      adminUserCreateResult: null,
+      adminUserError: '',
+      authIdentity: null,
+      authError: '',
       currentRobot: null,
       roomList: [],
       currentRoom: null,
@@ -1019,9 +1048,35 @@
       el('settingsPanel').classList.toggle('open', state.settingsMode);
       el('adapterId').disabled = Boolean(state.editingAdapterId);
       el('saveAdapterButton').textContent = state.editingAdapterId ? '保存修改' : '添加账号';
+      renderAuthStatus();
       renderBackupStatus();
       renderAdminTokens();
+      renderAdminUsers();
       renderAdapters();
+    };
+
+    const renderAuthStatus = () => {
+      const identity = state.authIdentity;
+      el('authActor').textContent = identity ? `${identity.actor} · ${identity.role}` : (state.adminApiToken ? 'Token 已设置' : '未登录');
+      el('logoutButton').disabled = !state.adminApiToken;
+      const box = el('authStatusReport');
+      clearNode(box);
+      const rows = [
+        ['actor', identity ? identity.actor : '-'],
+        ['role', identity ? identity.role : '-'],
+        ['username', identity && identity.username ? identity.username : '-'],
+      ];
+      if (state.authError) rows.push(['error', state.authError, 'bad']);
+      rows.forEach(([name, value, className]) => {
+        const row = document.createElement('div');
+        const label = document.createElement('strong');
+        label.textContent = `${name}: `;
+        const valueNode = document.createElement('span');
+        if (className) valueNode.className = className;
+        valueNode.textContent = value;
+        row.append(label, valueNode);
+        box.appendChild(row);
+      });
     };
 
     const renderBackupStatus = () => {
@@ -1096,6 +1151,42 @@
         const revoke = button('吊销', 'btn link danger', () => revokeAdminToken(token.id));
         revoke.disabled = token.status === 'revoked';
         row.append(label, revoke);
+        container.appendChild(row);
+      });
+    };
+
+    const renderAdminUsers = () => {
+      const report = el('adminUserCreateReport');
+      clearNode(report);
+      report.hidden = !state.adminUserCreateResult && !state.adminUserError;
+      if (state.adminUserCreateResult) {
+        const ok = document.createElement('span');
+        ok.className = 'ok';
+        ok.textContent = `${state.adminUserCreateResult.username} · ${state.adminUserCreateResult.role}`;
+        report.appendChild(ok);
+      } else if (state.adminUserError) {
+        const error = document.createElement('span');
+        error.className = 'bad';
+        error.textContent = state.adminUserError;
+        report.appendChild(error);
+      }
+
+      const container = el('adminUserList');
+      clearNode(container);
+      if (!state.adminUserList.length) {
+        const empty = document.createElement('div');
+        empty.className = 'hint';
+        empty.textContent = '暂无数据库用户';
+        container.appendChild(empty);
+        return;
+      }
+      state.adminUserList.forEach((user) => {
+        const row = document.createElement('div');
+        row.className = 'adapter-item';
+        const label = document.createElement('span');
+        label.className = 'truncate';
+        label.textContent = `${user.username} · ${user.role} · ${user.status}`;
+        row.appendChild(label);
         container.appendChild(row);
       });
     };
@@ -1600,7 +1691,9 @@
       state.backupStatus = backupStatus;
       state.accountList = bots;
       state.adapterList = adapters;
+      await refreshAuthIdentity();
       await refreshAdminTokens();
+      await refreshAdminUsers();
       if (state.accountList.length > 0 && !state.currentRobot) {
         await switchAccount(state.accountList[0]);
       } else {
@@ -1705,6 +1798,71 @@
       }
     }
 
+    async function refreshAdminUsers() {
+      try {
+        state.adminUserList = await apiGet('/api/admin/users');
+        state.adminUserError = '';
+      } catch (error) {
+        state.adminUserList = [];
+        state.adminUserError = error.message || String(error);
+      }
+    }
+
+    async function refreshAuthIdentity() {
+      if (!state.adminApiToken) {
+        state.authIdentity = null;
+        state.authError = '';
+        renderSettings();
+        return;
+      }
+      try {
+        state.authIdentity = await apiGet('/api/auth/me');
+        state.authError = '';
+      } catch (error) {
+        state.authIdentity = null;
+        state.authError = error.message || String(error);
+      }
+      renderSettings();
+    }
+
+    async function loginWithPassword() {
+      const username = window.prompt('username');
+      if (!username) return;
+      const password = window.prompt('password');
+      if (!password) return;
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!response.ok) {
+        state.authError = await responseErrorMessage(response, '/api/auth/login');
+        renderSettings();
+        return;
+      }
+      const payload = await response.json();
+      state.adminApiToken = payload.token;
+      localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
+      state.authIdentity = { ...payload.user, actor: `db-user:${payload.user.username}` };
+      state.authError = '';
+      await loadAdapters();
+    }
+
+    async function logoutAuth() {
+      if (state.adminApiToken) {
+        try {
+          await apiSend('/api/auth/logout', 'POST');
+        } catch {
+          // Logging out should still clear local state if the remote session is already gone.
+        }
+      }
+      state.adminApiToken = '';
+      localStorage.removeItem('chatAuditAdminApiToken');
+      state.authIdentity = null;
+      state.authError = '';
+      renderAll();
+    }
+
     async function createAdminToken() {
       const name = el('adminTokenName').value.trim();
       const role = el('adminTokenRole').value;
@@ -1712,6 +1870,28 @@
       state.adminTokenCreateResult = await apiSend('/api/admin/tokens', 'POST', { name, role });
       el('adminTokenName').value = '';
       await refreshAdminTokens();
+      renderSettings();
+    }
+
+    async function createAdminUser() {
+      const payload = {
+        username: el('adminUsername').value.trim(),
+        password: el('adminPassword').value,
+        display_name: el('adminDisplayName').value.trim() || null,
+        role: el('adminUserRole').value,
+      };
+      if (!payload.username || !payload.password) return;
+      try {
+        state.adminUserCreateResult = await apiSend('/api/admin/users', 'POST', payload);
+        state.adminUserError = '';
+        el('adminUsername').value = '';
+        el('adminPassword').value = '';
+        el('adminDisplayName').value = '';
+        await refreshAdminUsers();
+      } catch (error) {
+        state.adminUserCreateResult = null;
+        state.adminUserError = error.message || String(error);
+      }
       renderSettings();
     }
 
@@ -1973,6 +2153,9 @@
     };
 
     const bindEvents = () => {
+      el('loginButton').addEventListener('click', loginWithPassword);
+      el('logoutButton').addEventListener('click', logoutAuth);
+      el('refreshAuthButton').addEventListener('click', refreshAuthIdentity);
       el('settingsToggle').addEventListener('click', () => { state.settingsMode = !state.settingsMode; renderSettings(); });
       el('newAdapterButton').addEventListener('click', resetAdapterForm);
       el('clearAdapterButton').addEventListener('click', resetAdapterForm);
@@ -1981,6 +2164,7 @@
       el('saveBackupSettingsButton').addEventListener('click', saveBackupSettings);
       el('resetBackupSettingsButton').addEventListener('click', resetBackupSettings);
       el('createAdminTokenButton').addEventListener('click', createAdminToken);
+      el('createAdminUserButton').addEventListener('click', createAdminUser);
       el('searchButton').addEventListener('click', performSearch);
       el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
       el('clearSearchButton').addEventListener('click', clearSearch);
@@ -2022,6 +2206,10 @@
     window.runManualBackup = runManualBackup;
     window.saveBackupSettings = saveBackupSettings;
     window.resetBackupSettings = resetBackupSettings;
+    window.loginWithPassword = loginWithPassword;
+    window.logoutAuth = logoutAuth;
+    window.refreshAuthIdentity = refreshAuthIdentity;
+    window.createAdminUser = createAdminUser;
 
     bindEvents();
     renderAll();
