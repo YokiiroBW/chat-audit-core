@@ -1,5 +1,6 @@
-revision = "20260705_005_admin_tokens"
-down_revision = "20260705_004_schema_migrations"
+revision = "20260705_005"
+down_revision = "20260705_004"
+lightweight_version = "20260705_005_admin_tokens"
 description = "Create admin_tokens table"
 
 

@@ -1,5 +1,6 @@
-revision = "20260705_001_adapter_current_robot_id"
+revision = "20260705_001"
 down_revision = None
+lightweight_version = "20260705_001_adapter_current_robot_id"
 description = "Add adapters.current_robot_id"
 
 

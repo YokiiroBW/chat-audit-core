@@ -52,7 +52,7 @@ def test_alembic_upgrade_head_initializes_current_schema(tmp_path):
         "system_settings",
         "alembic_version",
     } <= tables
-    assert version == LIGHTWEIGHT_MIGRATION_REGISTRY[-1].version
+    assert version == "20260705_007"
 
 
 def test_alembic_upgrade_head_adds_legacy_compatibility_columns(tmp_path):

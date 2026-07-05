@@ -1,5 +1,6 @@
-revision = "20260705_004_schema_migrations"
-down_revision = "20260705_003_audit_logs"
+revision = "20260705_004"
+down_revision = "20260705_003"
+lightweight_version = "20260705_004_schema_migrations"
 description = "Create schema_migrations table"
 
 

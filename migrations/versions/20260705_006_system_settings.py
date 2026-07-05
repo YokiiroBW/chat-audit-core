@@ -1,5 +1,6 @@
-revision = "20260705_006_system_settings"
-down_revision = "20260705_005_admin_tokens"
+revision = "20260705_006"
+down_revision = "20260705_005"
+lightweight_version = "20260705_006_system_settings"
 description = "Create system_settings table"
 
 

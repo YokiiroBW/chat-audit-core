@@ -1,5 +1,6 @@
-revision = "20260705_002_message_external_message_id"
-down_revision = "20260705_001_adapter_current_robot_id"
+revision = "20260705_002"
+down_revision = "20260705_001"
+lightweight_version = "20260705_002_message_external_message_id"
 description = "Add messages.external_message_id"
 
 

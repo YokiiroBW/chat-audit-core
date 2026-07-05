@@ -1,5 +1,6 @@
-revision = "20260705_007_admin_users_sessions"
-down_revision = "20260705_006_system_settings"
+revision = "20260705_007"
+down_revision = "20260705_006"
+lightweight_version = "20260705_007_admin_users_sessions"
 description = "Create admin_users and admin_sessions tables"
 
 
