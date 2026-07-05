@@ -2,62 +2,76 @@
 
 本文件只记录仍需推进的事项，按可执行优先级排列。每个完成项都需要测试、中文提交、推送 Forgejo；涉及运行时的变更还要部署 NAS 并验收。
 
+## 当前已完成摘要
+
+- QQ/NapCat OneBot 接入、适配器与机器人身份分离、主视角隔离。
+- QQ CQ 图片、语音、视频、文件、卡片、合并转发、回复预览和本地缓存。
+- 卡片网页快照、头像/群资料缓存、离线审计和离线修复。
+- 微信 Hook 通用入口和真实样本回放。
+- 导出/导入包 checksum、系统签名、媒体嵌入。
+- 自动备份状态、手动备份、数据库托管 cron/retention 配置。
+- 审计日志、高风险限流、静态多角色 Token、数据库托管 Token。
+- 数据库用户、登录态、退出、用户禁用、Token 轮换。
+- 轻量迁移注册表和 `/api/system/migrations`。
+
 ## 可立即推进
 
-### T1 微信 Hook 真实样本回放
+### T7.1 Alembic 版本脚本骨架
 
 状态：已完成
 
 目标：
-- 将常见微信 Hook 样本固化为 fixtures。
-- 使用样本回放测试覆盖文本、图片、语音、表情、分享卡片、群聊发送者前缀。
-- 后续拿到真实客户端样本后，只需追加 fixture 即可回归。
+- 在不新增运行时依赖的前提下，先建立 Alembic 风格的迁移目录与版本脚本。
+- 让当前轻量迁移注册表与版本脚本一一对应。
+- 为后续真正启用 Alembic CLI 降低切换成本。
 
 验收：
-- `tests/test_wechat_pc_adapter.py` 能读取样本并完成归一化断言。
-- 全量测试通过。
+- 每个 `LIGHTWEIGHT_MIGRATION_REGISTRY` 版本都有对应 `migrations/versions/*.py`。
+- 版本脚本链路顺序与轻量迁移注册表一致。
+- 本地全量测试通过。
 
 已完成：
-- 新增 `tests/fixtures/wechat_hook_samples.json`。
-- 覆盖文本、图片、语音、表情、分享卡片和群聊发送者前缀。
+- 新增 `migrations/versions/`，为当前 7 个轻量迁移建立 Alembic 风格版本脚本。
+- 新增 `tests/test_migration_versions.py`，校验版本脚本与轻量迁移注册表一一对应。
+- 未新增运行时依赖，NAS 部署不会因该步骤重新拉取 Alembic 包。
 
-### T2 自动备份配置持久化入口
+### T7.2 启用完整 Alembic CLI
 
-状态：已完成
+状态：待处理
 
 目标：
-- 在不直接写 `.env` 的前提下，提供数据库托管的备份配置覆盖项。
-- 支持查看/更新 cron 与保留数量。
-- 与现有自动备份状态、手动备份和审计日志联动。
+- 将 Alembic 加入依赖并提供 `alembic.ini`、`env.py` 和升级命令。
+- 本地与 NAS 均可执行版本化迁移。
+
+阻塞：
+- 需要确认 NAS Docker 构建阶段可从 PyPI 安装 `alembic`，或提供内网 wheel/预构建镜像。
 
 验收：
-- 后端 API 与前端设置页覆盖。
-- 配置变更写审计日志。
-- 全量测试通过。
+- 本地 `alembic upgrade head` 可用。
+- NAS 部署不依赖手工改表。
 
-已完成：
-- 新增 `system_settings` 轻量迁移和数据库托管覆盖项。
-- `GET /api/backup/status` 返回有效配置与来源，`PATCH /api/backup/settings` 支持更新/恢复默认值。
-- 手动备份与自动备份循环均使用数据库有效配置。
-- Web 设置页支持编辑 cron/retention、恢复 `.env` 默认值，并覆盖测试。
+### T6.2 用户与会话管理增强
 
-### T3 轻量迁移体系增强
-
-状态：已完成
+状态：待处理
 
 目标：
-- 将当前启动期兼容迁移整理为更清晰的迁移注册结构。
-- 继续保持 SQLite/PostgreSQL 兼容。
-- 为后续迁入 Alembic 降低成本。
+- 支持密码重置。
+- 支持会话列表和强制下线。
+- 进一步细化前端按角色隐藏/禁用高风险按钮。
 
 验收：
-- 新库初始化和旧库升级均通过测试。
-- `/api/system/migrations` 能展示所有迁移状态。
+- 密码重置、会话吊销、角色 UI 均有测试。
 
-已完成：
-- 将启动期兼容迁移整理为 `LIGHTWEIGHT_MIGRATION_REGISTRY`。
-- 每条迁移具备 version、description 和 apply 函数。
-- 新增旧 SQLite schema 升级回归测试，全量测试通过。
+### T8 交接文档持续更新
+
+状态：待处理
+
+目标：
+- 每次版本推进后更新 `PROJECT_HANDOFF_READ_ME_FIRST.md` 的最新提交、测试数量、NAS 验收和剩余队列。
+
+验收：
+- 文档与当前主线一致。
+- 不写入 token、密码或 NAS 敏感凭据。
 
 ## 需要外部条件
 
@@ -93,34 +107,3 @@
 验收：
 - SSH 检查通过。
 - 评估是否将长期 remote 切换为 SSH。
-
-## 后续增强
-
-### T6 完整数据库用户与登录态
-
-状态：已完成第一版
-
-目标：
-- 在现有静态 Token 与数据库托管 Token 基础上，引入数据库用户、登录态和更细粒度前端角色 UI。
-
-验收：
-- 用户登录、退出、角色授权、Token 轮换均有测试。
-
-已完成：
-- 新增 `admin_users`、`admin_sessions` 与轻量迁移记录。
-- 新增 `/api/auth/login`、`/api/auth/me`、`/api/auth/logout`。
-- 新增 `/api/admin/users` 创建/列表入口。
-- 新增 `/api/admin/users/{id}` 禁用入口，并会吊销该用户活动会话。
-- 新增 `/api/admin/tokens/{id}/rotate`，旧 token 失效，新 token 可用。
-- Web 设置页支持登录/退出、当前角色显示和数据库用户创建/列表/禁用。
-
-### T7 完整 Alembic 迁移体系
-
-状态：待处理
-
-目标：
-- 在轻量迁移稳定后引入 Alembic。
-- 将未来复杂结构变更迁入版本化迁移脚本。
-
-验收：
-- 本地测试和 NAS 部署均不依赖手工改表。

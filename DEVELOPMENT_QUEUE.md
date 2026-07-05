@@ -141,7 +141,7 @@
 
 ### 6. 数据库迁移体系
 
-状态：已完成第二版
+状态：已完成第三版
 
 目标：
 - 引入 Alembic 或等价迁移流程。
@@ -155,9 +155,10 @@
 - 当前已追踪 `adapters.current_robot_id`、`messages.external_message_id`、`audit_logs`、`schema_migrations`、`admin_tokens`、`system_settings`。
 - 新增 `GET /api/system/migrations` 查询当前已知轻量迁移的应用状态。
 - 新增旧 SQLite schema 升级回归测试。
+- 新增 `migrations/versions/` Alembic 风格版本脚本骨架，并用测试校验与轻量迁移注册表一致。
 
 剩余：
-- 尚未引入完整 Alembic；复杂结构变更时应继续迁入 Alembic，当前版本先提供可观测的轻量迁移状态。
+- 尚未启用完整 Alembic CLI；需要确认 NAS/PyPI 依赖安装路径后再加入运行依赖。
 
 验收：
 - 新库可初始化。

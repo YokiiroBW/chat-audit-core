@@ -282,7 +282,7 @@ HIGH_RISK_RATE_LIMIT_PER_MINUTE=10
 - `admin_tokens`
 - `system_settings`
 
-这不是完整 Alembic 体系，但轻量迁移已经收拢为显式注册表：每条迁移都有版本、说明和执行函数，并覆盖新库初始化与旧库升级测试；后续需要复杂结构变更时，可在此基础上迁入 Alembic。
+这不是完整 Alembic 体系，但轻量迁移已经收拢为显式注册表：每条迁移都有版本、说明和执行函数，并覆盖新库初始化与旧库升级测试。`migrations/versions/` 已提供与轻量迁移注册表一一对应的 Alembic 风格版本脚本；后续确认运行依赖可安装后，可在此基础上接入 Alembic CLI。
 
 迁移状态查询：
 
