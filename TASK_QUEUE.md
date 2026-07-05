@@ -13,6 +13,7 @@
 - 审计日志、高风险限流、静态多角色 Token、数据库托管 Token。
 - 数据库用户、登录态、退出、用户禁用、密码重置、会话列表、强制下线、Token 轮换。
 - 轻量迁移注册表和 `/api/system/migrations`。
+- Forgejo SSH 专用 key 已生成并注册，SSH 仓库连通性检查通过。
 
 ## 可立即推进
 
@@ -81,20 +82,3 @@
 - NAS 使用 FFmpeg 镜像启动。
 - `/api/system/runtime` 返回 `ffmpeg_available=true`。
 - 语音/视频转码样本验收通过。
-
-### T5 Forgejo SSH 鉴权
-
-状态：待外部配置
-
-阻塞：
-- 本机缺少 `C:\Users\Administrator\.ssh\id_ed25519_forgejo`。
-- 需要将对应公钥加入 Forgejo 账号 SSH Key 或仓库 Deploy Key。
-- 2026-07-05 复查：`C:\Users\Administrator\.ssh\id_ed25519_forgejo` 仍不存在，继续使用 HTTPS token 推送。
-
-当前可用能力：
-- HTTPS token 推送可用。
-- `scripts/git_connectivity_check.py --remote origin --skip-https` 可复查 SSH 链路。
-
-验收：
-- SSH 检查通过。
-- 评估是否将长期 remote 切换为 SSH。

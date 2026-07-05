@@ -172,12 +172,18 @@
 
 ### 7. Forgejo SSH 鉴权
 
-状态：待处理
+状态：已完成
 
 目标：
 - 配置 Forgejo SSH Key 或 Deploy Key。
 - 跑通 `scripts/git_connectivity_check.py --skip-https`。
 - 评估是否将长期远端切换为 SSH。
+
+已完成：
+- 已生成 Forgejo 专用 Ed25519 key：`C:\Users\Administrator\.ssh\id_ed25519_forgejo`。
+- 已将公钥注册到 Forgejo 账号 SSH Key。
+- 已修复 Windows 下连通性检查脚本的 SSH 私钥路径处理，并自动兼容 Git for Windows 自带 `ssh.exe`。
+- `scripts/git_connectivity_check.py --remote origin --skip-https` 已通过。
 
 验收：
 - HTTPS token 和 SSH 两条链路均可检查。

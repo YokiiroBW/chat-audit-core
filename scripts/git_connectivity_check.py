@@ -18,6 +18,7 @@ import argparse
 import os
 import pathlib
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Tuple
 from urllib.error import URLError
@@ -98,6 +99,25 @@ def _build_ssh_url(remote_url: str, ssh_port: int) -> str:
     raise ValueError('unsupported remote format for SSH check')
 
 
+def _prepare_ssh_env(key_path: pathlib.Path, ssh_port: int) -> dict[str, str]:
+    env = os.environ.copy()
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    if sys.platform == 'win32':
+        git_ssh_dir = pathlib.Path('C:/Program Files/Git/usr/bin')
+        if git_ssh_dir.exists():
+            env['PATH'] = f'{git_ssh_dir};{env.get("PATH", "")}'
+        key_for_ssh = str(key_path).replace('\\', '/')
+    else:
+        key_for_ssh = str(key_path)
+    env['GIT_SSH_COMMAND'] = (
+        f'ssh -i "{key_for_ssh}" '
+        '-o IdentitiesOnly=yes '
+        '-o StrictHostKeyChecking=accept-new '
+        f'-p {ssh_port}'
+    )
+    return env
+
+
 def _check_ssh(
     repo_dir: pathlib.Path,
     remote_url: str,
@@ -112,15 +132,7 @@ def _check_ssh(
     except Exception as exc:
         return CheckResult(False, f'ssh check skipped: {exc}')
 
-    env = os.environ.copy()
-    env['GIT_TERMINAL_PROMPT'] = '0'
-    env['GIT_SSH_COMMAND'] = (
-        f'ssh -i {key_path} '
-        '-o IdentitiesOnly=yes '
-        '-o StrictHostKeyChecking=accept-new '
-        f'-p {ssh_port}'
-    )
-
+    env = _prepare_ssh_env(key_path, ssh_port)
     proc = _run(['git', 'ls-remote', '--heads', ssh_url], repo_dir, env=env)
     if proc.returncode == 0 and proc.stdout.strip():
         first = proc.stdout.splitlines()[0] if proc.stdout else ''

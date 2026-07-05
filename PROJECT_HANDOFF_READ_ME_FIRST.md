@@ -17,7 +17,7 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`文档：更新用户会话管理验收状态`
+- 最新提交主题：`运维：启用 Forgejo SSH 鉴权`
 - 本地全量测试：`134 passed`
 - NAS 部署：已部署 `5270278 功能：增强用户会话管理`
 - NAS 基础验收：健康检查 200，首页 200，管理鉴权 401/200 正常
@@ -123,7 +123,6 @@ git -c "http.extraHeader=Authorization: Basic $credential" push origin main
 - 容器内置 FFmpeg：已有可选 FFmpeg Dockerfile/compose 覆盖文件；NAS 默认仍走离线友好镜像，启用前需确认 apt 源或使用预构建镜像。
 - 微信 Hook 专用映射：当前已支持常见字段、数字类型和通用样本回放；后续应根据最终选定客户端追加专属真实样本和部署说明。
 - 完整 Alembic：当前已有轻量 `schema_migrations` 记录与 Alembic 风格版本脚本；启用完整 CLI 前需确认 NAS/PyPI 依赖安装路径。
-- Forgejo SSH：当前 SSH 检查失败，原因是本机缺少 `C:\Users\Administrator\.ssh\id_ed25519_forgejo`。HTTPS token 推送可用。
 
 ## SSH 检查结果
 
@@ -136,17 +135,18 @@ git -c "http.extraHeader=Authorization: Basic $credential" push origin main
 结果：
 
 ```text
-[SSH] FAIL: ssh-key missing: C:\Users\Administrator\.ssh\id_ed25519_forgejo
+[SSH] PASS: ssh ok: ssh://git@192.168.31.210:2222/YokiiroBW/chat-audit-core
+[SSH] sample=56c3ddf173d7a7d5925f470648f4391d26f2e098 refs/heads/main
 [HTTPS] SKIP: --skip-https
-summary_ssh=False
+summary_ssh=True
 summary_https=True
 ```
 
-修复步骤：
+当前状态：
 
-1. 生成或放置 Forgejo 专用 SSH Key：`C:\Users\Administrator\.ssh\id_ed25519_forgejo`
-2. 将公钥加入 Forgejo 账号 SSH Key 或仓库 Deploy Key
-3. 重新执行 `scripts/git_connectivity_check.py --remote origin --skip-https`
+- Forgejo 专用 SSH key：`C:\Users\Administrator\.ssh\id_ed25519_forgejo`
+- 公钥已注册到 Forgejo 账号 SSH Key。
+- HTTPS token 推送仍可用；是否把长期 `origin` 切换为 SSH 可后续按运维偏好决定。
 
 ## 继续推进规则
 
