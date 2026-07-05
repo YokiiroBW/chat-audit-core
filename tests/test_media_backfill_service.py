@@ -239,6 +239,44 @@ async def test_backfill_historical_media_caches_old_card_page_snapshot(db_sessio
 
 
 @pytest.mark.asyncio
+async def test_backfill_historical_media_detects_json_escaped_card_urls(db_session, tmp_path):
+    client = StubAsyncClient({})
+    card = {"meta": {"detail_1": {"title": "Card", "preview": "http://media.local/preview.jpg", "url": "m.q.qq.com/a/s/card"}}}
+    escaped_json = json.dumps(card, ensure_ascii=False).replace("/", "\\/").replace(",", "&#44;")
+    raw = f"[CQ:json,data={escaped_json}]"
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-card",
+        "qq",
+        {
+            "room_id": "group-card",
+            "message_type": "group",
+            "sender_id": "user-card",
+            "nickname": "Card User",
+            "raw_message": raw,
+            "timestamp": 1783000000,
+        },
+    )
+
+    report = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        finalize_unavailable=True,
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    payload = json.loads(html.unescape(messages[0].local_message.removeprefix("[CQ:json,data=").removesuffix("]")))
+    detail = payload["meta"]["detail_1"]
+
+    assert report.candidates == 1
+    assert report.updated == 1
+    assert detail["preview"].startswith("/static/storage/")
+    assert detail["local_page"].startswith("/static/storage/")
+
+
+@pytest.mark.asyncio
 async def test_media_backfill_api_supports_dry_run(db_session, tmp_path):
     await MessageService.process_incoming_message(
         db_session,

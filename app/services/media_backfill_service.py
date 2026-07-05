@@ -163,7 +163,15 @@ class MediaBackfillService:
         report = MediaBackfillReport()
         result = await db.execute(
             select(Message)
-            .where(or_(Message.local_message.contains("http://"), Message.local_message.contains("https://"), Message.local_message.contains("[CQ:forward,")))
+            .where(
+                or_(
+                    Message.local_message.contains("http://"),
+                    Message.local_message.contains("https://"),
+                    Message.local_message.contains("http:\\/\\/"),
+                    Message.local_message.contains("https:\\/\\/"),
+                    Message.local_message.contains("[CQ:forward,"),
+                )
+            )
             .order_by(Message.timestamp.asc(), Message.msg_hash.asc())
             .limit(limit)
         )
