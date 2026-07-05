@@ -165,6 +165,7 @@ class MediaBackfillService:
             select(Message)
             .where(
                 or_(
+                    Message.local_message.contains("http"),
                     Message.local_message.contains("http://"),
                     Message.local_message.contains("https://"),
                     Message.local_message.contains("http:\\/\\/"),
