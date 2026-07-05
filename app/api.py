@@ -19,6 +19,7 @@ from app.schemas import (
     MediaBackfillResponse,
     MessageResponse,
     OfflineAuditResponse,
+    OfflineRepairResponse,
     RoomResponse,
 )
 from app.services.adapter_service import AdapterService
@@ -27,6 +28,7 @@ from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
 from app.services.message_service import MessageService
 from app.services.offline_audit_service import OfflineAuditService
+from app.services.offline_repair_service import OfflineRepairService
 from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.query_service import QueryService
 from app.services.room_profile_service import RoomProfileService
@@ -297,6 +299,27 @@ async def audit_offline_readiness(
         missing_media_assets=report.missing_media_assets,
         missing_media_files=report.missing_media_files,
         issues=[issue.__dict__ for issue in report.issues],
+    )
+
+
+@router.post("/offline/repair", response_model=OfflineRepairResponse)
+async def repair_offline_media_integrity(
+    limit: int = Query(default=50000, ge=1, le=50000),
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> OfflineRepairResponse:
+    report = await OfflineRepairService.repair_local_media_integrity(
+        db,
+        limit=limit,
+        storage_root=settings.storage_root,
+        public_storage_prefix=settings.public_storage_prefix,
+    )
+    return OfflineRepairResponse(
+        scanned_messages=report.scanned_messages,
+        repaired_media_assets=report.repaired_media_assets,
+        repaired_media_files=report.repaired_media_files,
+        repaired_file_sizes=report.repaired_file_sizes,
+        repaired_paths=report.repaired_paths,
     )
 
 

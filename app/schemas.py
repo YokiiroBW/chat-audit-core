@@ -108,6 +108,14 @@ class OfflineAuditResponse(BaseModel):
     issues: list[OfflineAuditIssueResponse]
 
 
+class OfflineRepairResponse(BaseModel):
+    scanned_messages: int
+    repaired_media_assets: int
+    repaired_media_files: int
+    repaired_file_sizes: int
+    repaired_paths: list[str]
+
+
 class ImportResultResponse(BaseModel):
     messages: int
     robot_messages: int

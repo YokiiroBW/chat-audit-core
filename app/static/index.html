@@ -661,6 +661,7 @@
       </div>
       <div class="modal-footer">
         <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
+        <button id="repairOfflineAuditButton" class="btn">自动修复并复验</button>
         <button id="runOfflineAuditButton" class="btn primary">重新验收</button>
       </div>
     </div>
@@ -690,6 +691,7 @@
       editingAdapterId: null,
       importValidationReport: null,
       offlineAuditReport: null,
+      offlineRepairReport: null,
       adminApiToken: localStorage.getItem('chatAuditAdminApiToken') || '',
     };
 
@@ -1667,6 +1669,7 @@
 
     const openOfflineAuditDialog = async () => {
       state.offlineAuditReport = null;
+      state.offlineRepairReport = null;
       renderOfflineAuditReport();
       openModal('offlineAuditModal');
       await runOfflineAudit();
@@ -1678,6 +1681,12 @@
       if (state.currentRoom) params.append('room_id', state.currentRoom.room_id);
       state.offlineAuditReport = await apiGet(`/api/offline/audit?${params.toString()}`);
       renderOfflineAuditReport();
+    }
+
+    async function repairOfflineAudit() {
+      const params = new URLSearchParams({ limit: '50000' });
+      state.offlineRepairReport = await apiSend(`/api/offline/repair?${params.toString()}`, 'POST');
+      await runOfflineAudit();
     }
 
     const renderOfflineAuditReport = () => {
@@ -1708,6 +1717,16 @@
         row.append(label, valueNode);
         box.appendChild(row);
       });
+      if (state.offlineRepairReport) {
+        const repaired = state.offlineRepairReport;
+        const row = document.createElement('div');
+        const label = document.createElement('strong');
+        label.textContent = 'repair: ';
+        const valueNode = document.createElement('span');
+        valueNode.textContent = `assets ${repaired.repaired_media_assets}, files ${repaired.repaired_media_files}, sizes ${repaired.repaired_file_sizes}`;
+        row.append(label, valueNode);
+        box.appendChild(row);
+      }
       (report.issues || []).slice(0, 20).forEach((issue) => {
         const row = document.createElement('div');
         row.className = 'bad';
@@ -1744,6 +1763,7 @@
       el('chatWindow').addEventListener('scroll', handleWindowScroll);
       el('openOfflineAuditButton').addEventListener('click', openOfflineAuditDialog);
       el('runOfflineAuditButton').addEventListener('click', runOfflineAudit);
+      el('repairOfflineAuditButton').addEventListener('click', repairOfflineAudit);
       el('openExportButton').addEventListener('click', openExportDialog);
       el('downloadExportButton').addEventListener('click', downloadExportPackage);
       el('openImportButton').addEventListener('click', openImportDialog);
@@ -1770,6 +1790,7 @@
     window.downloadExportPackage = downloadExportPackage;
     window.openOfflineAuditDialog = openOfflineAuditDialog;
     window.runOfflineAudit = runOfflineAudit;
+    window.repairOfflineAudit = repairOfflineAudit;
     window.openImportDialog = openImportDialog;
     window.validateImportPackage = validateImportPackage;
     window.submitImportPackage = submitImportPackage;

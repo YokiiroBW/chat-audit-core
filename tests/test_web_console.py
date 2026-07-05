@@ -76,6 +76,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "offlineAuditModal" in html
     assert "openOfflineAuditDialog" in html
     assert "/api/offline/audit" in html
+    assert "repairOfflineAudit" in html
+    assert "/api/offline/repair" in html
     assert "exportRobotId" in html
     assert "downloadExportPackage" in html
     assert "/api/export" in html

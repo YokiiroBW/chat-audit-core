@@ -10,6 +10,7 @@ from app.models import MediaAsset
 from app.services.message_service import MessageService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.offline_audit_service import OfflineAuditService
+from app.services.offline_repair_service import OfflineRepairService
 from tests.test_media_service import StubAsyncClient
 
 
@@ -166,6 +167,84 @@ async def test_offline_audit_accepts_finalized_unavailable_media_placeholder(db_
 
 
 @pytest.mark.asyncio
+async def test_offline_repair_creates_missing_media_asset_index(db_session, tmp_path):
+    media_path = tmp_path / "missing-index.jpg"
+    media_path.write_bytes(b"existing local image")
+    local_path = "/static/storage/missing-index.jpg"
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-repair",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "missing index",
+            "local_message": local_path,
+            "timestamp": 1783000000,
+        },
+    )
+
+    repair = await OfflineRepairService.repair_local_media_integrity(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+    report = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert repair.scanned_messages == 1
+    assert repair.repaired_media_assets == 1
+    assert repair.repaired_media_files == 0
+    assert local_path in repair.repaired_paths
+    assert report.offline_ready is True
+    assert report.missing_media_assets == 0
+
+
+@pytest.mark.asyncio
+async def test_offline_repair_creates_missing_media_asset_file(db_session, tmp_path):
+    local_path = "/static/storage/missing-file.gif"
+    db_session.add(MediaAsset(file_hash="missing-file", file_type="image", file_size=999, local_path=local_path))
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-repair",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "missing file",
+            "local_message": local_path,
+            "timestamp": 1783000000,
+        },
+    )
+    await db_session.commit()
+
+    repair = await OfflineRepairService.repair_local_media_integrity(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+    report = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert repair.repaired_media_files == 1
+    assert repair.repaired_file_sizes == 1
+    assert local_path in repair.repaired_paths
+    assert (tmp_path / "missing-file.gif").exists()
+    assert report.offline_ready is True
+    assert report.missing_media_files == 0
+
+
+@pytest.mark.asyncio
 async def test_offline_audit_api_returns_report(db_session, tmp_path):
     await MessageService.process_incoming_message(
         db_session,
@@ -199,3 +278,46 @@ async def test_offline_audit_api_returns_report(db_session, tmp_path):
     assert payload["messages_scanned"] == 1
     assert payload["uncached_forwards"] == 1
     assert payload["issues"][0]["kind"] == "forward"
+
+
+@pytest.mark.asyncio
+async def test_offline_repair_api_returns_counts_and_clears_audit(db_session, tmp_path):
+    local_path = "/static/storage/api-missing-index.jpg"
+    (tmp_path / "api-missing-index.jpg").write_bytes(b"api local image")
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-api",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "api repair",
+            "local_message": local_path,
+            "timestamp": 1783000000,
+        },
+    )
+    settings = Settings(storage_root=tmp_path, public_storage_prefix="/static/storage")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            repair_response = await client.post("/api/offline/repair", params={"limit": 50000})
+            audit_response = await client.get("/api/offline/audit", params={"robot_id": "robot-a"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert repair_response.status_code == 200
+    repair_payload = repair_response.json()
+    assert repair_payload["scanned_messages"] == 1
+    assert repair_payload["repaired_media_assets"] == 1
+    assert repair_payload["repaired_media_files"] == 0
+    assert repair_payload["repaired_file_sizes"] == 0
+    assert local_path in repair_payload["repaired_paths"]
+    assert audit_response.status_code == 200
+    assert audit_response.json()["offline_ready"] is True
