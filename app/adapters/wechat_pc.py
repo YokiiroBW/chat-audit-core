@@ -35,7 +35,7 @@ def _pick_nested(data: dict[str, Any], *keys: str) -> Any:
 
 def _candidate_containers(data: dict[str, Any]) -> list[dict[str, Any]]:
     containers = [data]
-    for key in ("data", "payload", "msg", "message"):
+    for key in ("data", "payload", "msg", "message", "extra", "media"):
         value = data.get(key)
         if isinstance(value, dict):
             containers.append(value)
@@ -95,8 +95,29 @@ def _wechat_message_type(event: dict[str, Any], room_id: str) -> str:
 
 def _wechat_content(event: dict[str, Any], room_id: str | None = None) -> tuple[str | None, str | None]:
     msg_type = _normalize_msg_type(_pick(event, "msg_type", "message_kind", "type", "MsgType", "msgType"))
-    url = _pick_nested(event, "media_url", "file_url", "url", "Url", "URL", "cdn_url", "cdnUrl", "download_url", "FileUrl", "ThumbUrl")
-    file_name = _pick_nested(event, "file_name", "filename", "name", "file", "FileName", "fileName")
+    url = _pick_nested(
+        event,
+        "local_path",
+        "local_url",
+        "uploaded_path",
+        "uploaded_url",
+        "media_path",
+        "path",
+        "media_url",
+        "file_url",
+        "url",
+        "Url",
+        "URL",
+        "cdn_url",
+        "cdnUrl",
+        "download_url",
+        "FileUrl",
+        "ThumbUrl",
+        "thumb",
+        "Thumb",
+        "extra",
+    )
+    file_name = _pick_nested(event, "file_name", "filename", "name", "file", "FileName", "fileName", "FilePath", "path")
 
     if msg_type in {"image", "img", "picture"} and url:
         return _cq_segment("image", {"file": file_name or _guess_file_name(url, "wechat-image.jpg"), "url": url}), None
@@ -126,8 +147,21 @@ def normalize_wechat_event(event: dict[str, Any]) -> NormalizedWechatMessageEven
     if event_type is not None and str(event_type).lower() not in {"message", "message_sent", "wechat_message", "recv_msg", "new_message"}:
         return None
 
-    robot_id = _pick(event, "robot_id", "self_id", "wxid", "account_id", "current_wxid", "CurrentWxid", "currentWxid")
-    room_id = _pick(event, "room_id", "talker", "conversation_id", "from_wxid", "to_wxid", "FromUserName", "ToUserName", "fromUser", "toUser")
+    robot_id = _pick(event, "robot_id", "self_id", "self_wxid", "wxid", "account_id", "current_wxid", "CurrentWxid", "currentWxid")
+    room_id = _pick(
+        event,
+        "room_id",
+        "roomid",
+        "roomId",
+        "talker",
+        "conversation_id",
+        "from_wxid",
+        "to_wxid",
+        "FromUserName",
+        "ToUserName",
+        "fromUser",
+        "toUser",
+    )
     sender_id = _pick(event, "sender_id", "sender", "sender_wxid", "from_user", "from_wxid", "user_id", "SenderWxid", "FromUserName", "fromUser")
     raw_message, prefixed_sender_id = _wechat_content(event, str(room_id) if room_id is not None else None)
     if robot_id is None or room_id is None or raw_message is None:
@@ -145,7 +179,7 @@ def normalize_wechat_event(event: dict[str, Any]) -> NormalizedWechatMessageEven
         timestamp = int(time.time())
 
     nickname = _pick(event, "nickname", "sender_name", "sender_nickname", "display_name", "remark", "SenderName", "PushContent")
-    message_id = _pick(event, "message_id", "msg_id", "msgid", "id", "client_msg_id", "MsgId", "NewMsgId")
+    message_id = _pick(event, "message_id", "msg_id", "msgid", "msgId", "id", "client_msg_id", "MsgId", "NewMsgId")
 
     msg_data = {
         "room_id": str(room_id),

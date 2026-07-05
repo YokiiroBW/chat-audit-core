@@ -1,5 +1,9 @@
 import asyncio
+from email.parser import BytesParser
+from email.policy import default as email_policy
+import hashlib
 import json
+from pathlib import Path
 import re
 import time
 from typing import Any
@@ -36,6 +40,7 @@ from app.schemas import (
     CaptureTargetPolicyUpdateRequest,
     CaptureTargetSettingResponse,
     DashboardResponse,
+    ExternalMediaUploadResponse,
     ImportResultResponse,
     ImportValidationResponse,
     MediaBackfillResponse,
@@ -72,6 +77,12 @@ from app.services.user_profile_service import UserProfileService
 
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
 _VALID_ADMIN_ROLES = VALID_ADMIN_ROLES
+_EXTERNAL_MEDIA_TYPES = {"image", "voice", "video", "file"}
+_EXTERNAL_MEDIA_ALIASES = {
+    "audio": "voice",
+    "record": "voice",
+    "attachment": "file",
+}
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -226,6 +237,52 @@ def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Setti
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="high risk operation rate limit exceeded")
     bucket.append(now)
     _RATE_LIMIT_BUCKETS[key] = bucket
+
+
+def _normalize_external_media_type(value: Any) -> str:
+    normalized = str(value or "file").strip().lower()
+    return _EXTERNAL_MEDIA_ALIASES.get(normalized, normalized)
+
+
+def _default_external_media_ext(media_type: str) -> str:
+    return {"image": "jpg", "voice": "silk", "video": "mp4", "file": "bin"}[media_type]
+
+
+def _external_media_ext(file_name: str | None, media_type: str) -> str:
+    if file_name:
+        suffix = Path(file_name).suffix.lstrip(".").lower()
+        if suffix:
+            return suffix
+    return _default_external_media_ext(media_type)
+
+
+def _parse_external_multipart(content_type: str, body: bytes) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    if "multipart/form-data" not in content_type.lower():
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="multipart/form-data is required")
+    message = BytesParser(policy=email_policy).parsebytes(
+        b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    )
+    if not message.is_multipart():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid multipart payload")
+
+    fields: dict[str, str] = {}
+    files: dict[str, dict[str, Any]] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        payload = part.get_payload(decode=True) or b""
+        filename = part.get_filename()
+        if filename is not None or name == "file":
+            files[name] = {
+                "content": payload,
+                "file_name": filename or None,
+                "content_type": part.get_content_type(),
+            }
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        fields[name] = payload.decode(charset, errors="replace")
+    return fields, files
 
 
 async def _audit(
@@ -962,12 +1019,10 @@ async def ingest_message(
     )
 
 
-@router.post("/wechat/events", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
-async def ingest_wechat_event(
+async def _process_wechat_event_payload(
     payload: dict[str, Any],
-    db: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
-    _: None = Depends(require_admin_role("operator", "admin")),
+    db: AsyncSession,
+    settings: Settings,
 ) -> MessageIngestResponse:
     normalized = normalize_wechat_event(payload)
     if normalized is None:
@@ -1025,6 +1080,68 @@ async def ingest_wechat_event(
         msg_hash=msg_hash,
         skipped=msg_hash is None,
         skip_reason="capture_policy" if msg_hash is None else None,
+    )
+
+
+@router.post("/wechat/events", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+async def ingest_wechat_event(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> MessageIngestResponse:
+    return await _process_wechat_event_payload(payload, db, settings)
+
+
+@router.post("/receive_external_msg", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+async def receive_external_message(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> MessageIngestResponse:
+    return await _process_wechat_event_payload(payload, db, settings)
+
+
+@router.post("/external/media", response_model=ExternalMediaUploadResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/wechat/media", response_model=ExternalMediaUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_external_media(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> ExternalMediaUploadResponse:
+    fields, files = _parse_external_multipart(request.headers.get("content-type", ""), await request.body())
+    uploaded = files.get("file")
+    if uploaded is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="file field is required")
+
+    content = uploaded["content"]
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="file content is empty")
+    if len(content) > settings.media_max_bytes:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="file exceeds MEDIA_MAX_BYTES")
+
+    media_type = _normalize_external_media_type(fields.get("media_type"))
+    if media_type not in _EXTERNAL_MEDIA_TYPES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unsupported media_type")
+
+    file_name = (fields.get("file_name") or uploaded.get("file_name") or "").strip() or None
+    file_hash = hashlib.md5(content).hexdigest()
+    local_path = await MessageService.save_media_asset(
+        db,
+        file_content=content,
+        file_type=media_type,
+        ext=_external_media_ext(file_name, media_type),
+        storage_root=settings.storage_root,
+        public_prefix=settings.public_storage_prefix,
+    )
+    return ExternalMediaUploadResponse(
+        local_path=local_path,
+        media_type=media_type,
+        file_name=file_name,
+        file_size=len(content),
+        file_hash=file_hash,
     )
 
 

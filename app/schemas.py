@@ -271,6 +271,14 @@ class MessageIngestResponse(BaseModel):
     skip_reason: str | None = None
 
 
+class ExternalMediaUploadResponse(BaseModel):
+    local_path: str
+    media_type: str
+    file_name: str | None = None
+    file_size: int
+    file_hash: str
+
+
 class MediaBackfillFailureResponse(BaseModel):
     msg_hash: str
     kind: str
