@@ -74,11 +74,15 @@ def test_normalize_wechat_image_event_builds_cq_media_segment():
 
 
 @pytest.mark.asyncio
-async def test_wechat_event_api_ingests_text_message(db_session):
+async def test_wechat_event_api_ingests_text_message(db_session, tmp_path):
     async def override_db_session():
         yield db_session
 
+    def override_settings():
+        return Settings(storage_root=tmp_path, public_storage_prefix="/static/storage")
+
     app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = override_settings
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             ingest_response = await client.post(
@@ -108,6 +112,7 @@ async def test_wechat_event_api_ingests_text_message(db_session):
     assert message["external_message_id"] == "wx-hook-1"
     assert message["raw_message"] == "hello from hook"
     assert message["sender_display_name"] == "微信好友"
+    assert message["sender_avatar_path"].startswith("/static/storage/")
 
 
 @pytest.mark.asyncio
@@ -145,6 +150,6 @@ async def test_wechat_event_api_localizes_image_message(db_session, tmp_path, mo
 
     assert response.status_code == 201
     assert stub_client.requested_urls == ["http://media.local/wechat.jpg"]
-    assert len(assets) == 1
+    assert len(assets) == 2
     assert messages[0].platform == "wechat"
-    assert messages[0].local_message == assets[0].local_path
+    assert messages[0].local_message in {asset.local_path for asset in assets}

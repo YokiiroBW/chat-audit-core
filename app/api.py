@@ -37,6 +37,7 @@ from app.services.message_service import MessageService
 from app.services.offline_audit_service import OfflineAuditService
 from app.services.offline_repair_service import OfflineRepairService
 from app.services.onebot_rpc_service import OneBotRPCService
+from app.services.profile_placeholder_service import ProfilePlaceholderService
 from app.services.query_service import QueryService
 from app.services.room_profile_service import RoomProfileService
 from app.services.user_profile_service import UserProfileService
@@ -282,18 +283,36 @@ async def ingest_wechat_event(
         platform=normalized.platform,
         display_name=payload.get("robot_name") or payload.get("account_name"),
     )
+    sender_avatar_path = await ProfilePlaceholderService.save_placeholder_avatar(
+        db,
+        profile_type="user",
+        profile_id=normalized.msg_data["sender_id"],
+        display_name=normalized.msg_data.get("nickname"),
+        storage_root=settings.storage_root,
+        public_prefix=settings.public_storage_prefix,
+    )
     await UserProfileService.upsert_user_profile(
         db,
         user_id=normalized.msg_data["sender_id"],
         platform=normalized.platform,
         display_name=normalized.msg_data.get("nickname"),
+        avatar_path=sender_avatar_path,
     )
     if normalized.msg_data["message_type"] == "group":
+        room_avatar_path = await ProfilePlaceholderService.save_placeholder_avatar(
+            db,
+            profile_type="room",
+            profile_id=normalized.msg_data["room_id"],
+            display_name=payload.get("room_name") or payload.get("group_name"),
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+        )
         await RoomProfileService.upsert_room_profile(
             db,
             room_id=normalized.msg_data["room_id"],
             platform=normalized.platform,
             display_name=payload.get("room_name") or payload.get("group_name"),
+            avatar_path=room_avatar_path,
         )
     return MessageIngestResponse(msg_hash=msg_hash)
 
