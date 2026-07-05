@@ -20,6 +20,7 @@
   - `scripts/install_wechat_tray_startup.ps1`
   - `scripts/uninstall_wechat_tray_startup.ps1`
   - `scripts/write_wechat_tray_config.ps1`
+- 打包产物版本号和发布包校验：`wechat_tray_adapter/version.py` 与构建 manifest/SHA256。
 - 文档：`WECHAT_TRAY_ADAPTER.md` 与 README 入口。
 
 ## 继续推进队列
@@ -28,7 +29,6 @@
 2. Windows 桌面托盘 UI 实机验收：图标、菜单、退出、打开 NAS、立即补发。
 3. 真实微信端到端样本：私聊、群聊、图片、语音、视频、文件、动画表情、卡片。
 4. 托盘端配置编辑入口或最小配置向导。
-5. 打包产物版本号和发布包校验。
 
 ## 需要用户介入
 

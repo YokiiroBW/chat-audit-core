@@ -11,7 +11,7 @@ read_this_first: true
 ## 2026-07-06 最新状态
 
 - 最新已推送提交：以 `git log -1 --oneline` 为准，本轮所有提交均已按中文信息推送到 Forgejo。
-- 本地全量测试：`161 passed`。
+- 本地全量测试：`162 passed`，当前有 1 个既有 asyncio 资源警告，不影响测试结果。
 - NAS 验收：部署后 `/health` 200、首页 200、管理 API 未鉴权 401 / 鉴权 200 正常。
 - 新增后端入口：`POST /api/receive_external_msg`、`POST /api/external/media`、`POST /api/wechat/media`。
 - 新增 PC 微信托盘采集器核心骨架：`wechat_tray_adapter/`。

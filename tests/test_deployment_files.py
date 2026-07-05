@@ -108,9 +108,18 @@ def test_wechat_tray_packaging_scripts_are_present_and_headless():
 
     assert "--noconsole" in build_script
     assert "wechat_tray_adapter\\__main__.py" in build_script
+    assert "wechat_tray_adapter.version" in build_script
+    assert "Get-FileHash -Algorithm SHA256" in build_script
+    assert "manifest.json" in build_script
     assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in install_script
     assert "Set-ItemProperty" in install_script
     assert "Remove-ItemProperty" in uninstall_script
     assert "replace-with-operator-token" not in config_script
     assert "CHAT_AUDIT_TOKEN" not in config_script
     assert {"pystray", "Pillow", "wcferry", "pyinstaller"} <= set(requirements.splitlines())
+
+
+def test_wechat_tray_adapter_has_package_version():
+    version_file = (ROOT / "wechat_tray_adapter/version.py").read_text(encoding="utf-8")
+
+    assert '__version__ = "0.1.0"' in version_file

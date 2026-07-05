@@ -62,6 +62,7 @@ python -m PyInstaller --noconsole --name chat-audit-wechat-tray wechat_tray_adap
 ```
 
 该脚本会安装 `wechat_tray_adapter/requirements.txt` 中的 PC 端可选依赖，并用 PyInstaller 生成无控制台 exe。
+构建完成后会在 `dist\chat-audit-wechat-tray\manifest.json` 写入版本号、exe 文件名、SHA256 和构建时间。
 
 ## 配置与自启脚本
 
