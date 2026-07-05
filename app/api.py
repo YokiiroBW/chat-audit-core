@@ -1,12 +1,14 @@
 import asyncio
 import json
 import re
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapters.wechat_pc import normalize_wechat_event
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.schemas import (
@@ -250,6 +252,49 @@ async def ingest_message(
         platform=payload.platform,
         display_name=display_name,
     )
+    return MessageIngestResponse(msg_hash=msg_hash)
+
+
+@router.post("/wechat/events", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+async def ingest_wechat_event(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> MessageIngestResponse:
+    normalized = normalize_wechat_event(payload)
+    if normalized is None:
+        raise HTTPException(status_code=422, detail="unsupported wechat message event")
+
+    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        msg_hash = await MessageService.process_incoming_message(
+            db,
+            robot_id=normalized.robot_id,
+            platform=normalized.platform,
+            msg_data=normalized.msg_data,
+            media_http_client=client,
+            media_storage_root=settings.storage_root,
+            media_public_prefix=settings.public_storage_prefix,
+        )
+
+    await BotProfileService.upsert_bot_profile(
+        db,
+        robot_id=normalized.robot_id,
+        platform=normalized.platform,
+        display_name=payload.get("robot_name") or payload.get("account_name"),
+    )
+    await UserProfileService.upsert_user_profile(
+        db,
+        user_id=normalized.msg_data["sender_id"],
+        platform=normalized.platform,
+        display_name=normalized.msg_data.get("nickname"),
+    )
+    if normalized.msg_data["message_type"] == "group":
+        await RoomProfileService.upsert_room_profile(
+            db,
+            room_id=normalized.msg_data["room_id"],
+            platform=normalized.platform,
+            display_name=payload.get("room_name") or payload.get("group_name"),
+        )
     return MessageIngestResponse(msg_hash=msg_hash)
 
 

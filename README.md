@@ -109,6 +109,24 @@ FFMPEG_BIN=ffmpeg
 - 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
 - 默认 Docker 镜像保持离线友好，不在构建期联网安装 FFmpeg；需要转码时请使用已内置 FFmpeg 的自定义镜像，或在运行环境中提供可执行的 `FFMPEG_BIN`。
 
+## 微信 Hook 接入
+
+系统提供通用微信事件接收入口：
+
+```text
+POST /api/wechat/events
+```
+
+该接口复用管理 API 鉴权，支持常见 Hook 字段名，例如：
+
+- 机器人账号：`robot_id`、`self_id`、`wxid`、`account_id`
+- 会话：`room_id`、`talker`、`conversation_id`、`from_wxid`
+- 发送者：`sender_id`、`sender_wxid`、`from_user`
+- 内容：`raw_message`、`content`、`message`、`text`
+- 媒体：`msg_type=image/voice/video/file` 搭配 `media_url`、`file_url`、`url`
+
+微信事件会被规范化为内部消息模型并以 `platform=wechat` 入库；图片、语音、视频和文件会转成现有 CQ 片段，继续复用本地媒体缓存、导出导入和离线验收链路。
+
 ## 自动备份
 
 应用启动时会根据 `AUTO_BACKUP_CRON` 启动自动备份任务，将导出包写入 `BACKUP_ROOT`。
