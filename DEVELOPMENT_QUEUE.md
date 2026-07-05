@@ -16,7 +16,7 @@
 
 ### 1. FFmpeg 与媒体转码流水线
 
-状态：已完成第二版
+状态：已完成第三版
 
 目标：
 - Docker 运行时包含可用 FFmpeg。
@@ -125,9 +125,12 @@
 - 高风险写操作增加每分钟简单限流，配置项为 `HIGH_RISK_RATE_LIMIT_PER_MINUTE`。
 - 新增 `ADMIN_API_TOKENS` 多角色静态 Token 配置。
 - 支持 `viewer`、`operator`、`admin` 三类权限边界，旧 `ADMIN_API_TOKEN` 继续保持最高权限。
+- 新增 `admin_tokens` 表和数据库托管 Token API。
+- 支持创建、列表、吊销数据库 Token；完整 token 只在创建时返回一次，数据库仅保存哈希和短前缀。
+- 鉴权链路同时支持静态 Token 和数据库托管 Token。
 
 剩余：
-- 当前多角色权限为静态环境变量配置，尚未实现数据库用户、登录态、Token 轮换和前端角色管理。
+- 尚未实现完整数据库用户、登录态和前端角色管理；当前版本已支持 API 级 Token 轮换和吊销。
 
 验收：
 - 导入、删除适配器、离线修复等操作写入审计记录。
@@ -145,7 +148,7 @@
 已完成：
 - 新增 `schema_migrations` 表。
 - 启动期兼容迁移会记录版本。
-- 当前已追踪 `adapters.current_robot_id`、`messages.external_message_id`、`audit_logs`、`schema_migrations`。
+- 当前已追踪 `adapters.current_robot_id`、`messages.external_message_id`、`audit_logs`、`schema_migrations`、`admin_tokens`。
 - 新增 `GET /api/system/migrations` 查询当前已知轻量迁移的应用状态。
 
 剩余：

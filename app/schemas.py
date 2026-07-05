@@ -82,6 +82,25 @@ class AuditLogResponse(BaseModel):
     created_at: datetime | None = None
 
 
+class AdminTokenCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    role: str = Field(default="viewer", min_length=1, max_length=20)
+
+
+class AdminTokenResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    role: str
+    token_prefix: str
+    status: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    token: str | None = None
+
+
 class MigrationStatusResponse(BaseModel):
     version: str
     description: str

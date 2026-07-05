@@ -168,3 +168,43 @@ async def test_legacy_admin_api_token_keeps_admin_role(db_session):
         app.dependency_overrides.clear()
 
     assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_database_managed_admin_token_lifecycle(db_session):
+    settings = Settings(admin_api_token="bootstrap-admin")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            created = await client.post(
+                "/api/admin/tokens",
+                headers={"Authorization": "Bearer bootstrap-admin"},
+                json={"name": "readonly-db", "role": "viewer"},
+            )
+            created_body = created.json()
+            managed_token = created_body["token"]
+            listed = await client.get("/api/admin/tokens", headers={"Authorization": "Bearer bootstrap-admin"})
+            read_response = await client.get("/api/adapters", headers={"Authorization": f"Bearer {managed_token}"})
+            write_response = await client.post("/api/offline/repair", headers={"Authorization": f"Bearer {managed_token}"})
+            revoked = await client.delete(f"/api/admin/tokens/{created_body['id']}", headers={"Authorization": "Bearer bootstrap-admin"})
+            after_revoke = await client.get("/api/adapters", headers={"Authorization": f"Bearer {managed_token}"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert created.status_code == 201
+    assert managed_token.startswith("cat_")
+    assert created_body["token_prefix"] == managed_token[:12]
+    assert created_body["role"] == "viewer"
+    assert listed.status_code == 200
+    assert listed.json()[0]["name"] == "readonly-db"
+    assert listed.json()[0]["token"] is None
+    assert read_response.status_code == 200
+    assert write_response.status_code == 403
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+    assert after_revoke.status_code == 401

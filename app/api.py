@@ -17,6 +17,8 @@ from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
     AdapterUpdateRequest,
+    AdminTokenCreateRequest,
+    AdminTokenResponse,
     AuditLogResponse,
     BackupRunResponse,
     BackupStatusResponse,
@@ -35,6 +37,7 @@ from app.schemas import (
     RuntimeStatusResponse,
 )
 from app.services.adapter_service import AdapterService
+from app.services.admin_token_service import AdminTokenService, VALID_ADMIN_ROLES
 from app.services.audit_log_service import AuditLogService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
@@ -53,7 +56,7 @@ from app.services.user_profile_service import UserProfileService
 
 
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
-_VALID_ADMIN_ROLES = {"viewer", "operator", "admin"}
+_VALID_ADMIN_ROLES = VALID_ADMIN_ROLES
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -124,11 +127,19 @@ async def require_admin_api_token(
 
     header_token = request.headers.get("x-admin-token")
     bearer_token = _extract_bearer_token(request.headers.get("authorization"))
+    provided_token = header_token or bearer_token
     matched = token_records.get(header_token or "") or token_records.get(bearer_token or "")
     if matched:
         request.state.admin_role = matched["role"]
         request.state.admin_actor = matched["name"]
         return
+    if provided_token:
+        managed_match = await AdminTokenService.match_token(db, provided_token)
+        if managed_match is not None:
+            request.state.admin_role = managed_match.role
+            request.state.admin_actor = managed_match.actor
+            request.state.admin_token_id = managed_match.token_id
+            return
 
     await AuditLogService.record(
         db,
@@ -288,6 +299,50 @@ async def list_audit_logs(
 ) -> list[AuditLogResponse]:
     logs = await AuditLogService.list_logs(db, action=action, limit=limit)
     return [AuditLogResponse.model_validate(log) for log in logs]
+
+
+@router.get("/admin/tokens", response_model=list[AdminTokenResponse])
+async def list_admin_tokens(
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("admin")),
+) -> list[AdminTokenResponse]:
+    tokens = await AdminTokenService.list_tokens(db)
+    return [AdminTokenResponse.model_validate(token) for token in tokens]
+
+
+@router.post("/admin/tokens", response_model=AdminTokenResponse, status_code=status.HTTP_201_CREATED)
+async def create_admin_token(
+    payload: AdminTokenCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminTokenResponse:
+    action = "admin_token.create"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    record, token = await AdminTokenService.create_token(db, name=payload.name, role=payload.role)
+    await _audit(db, request, action=action, status_="success", target=str(record.id), detail={"name": record.name, "role": record.role})
+    response = AdminTokenResponse.model_validate(record)
+    response.token = token
+    return response
+
+
+@router.delete("/admin/tokens/{token_id}", response_model=AdminTokenResponse)
+async def revoke_admin_token(
+    token_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminTokenResponse:
+    action = "admin_token.revoke"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    record = await AdminTokenService.revoke_token(db, token_id)
+    if record is None:
+        await _audit(db, request, action=action, status_="failed", target=str(token_id), detail={"reason": "not_found"})
+        raise HTTPException(status_code=404, detail="admin token not found")
+    await _audit(db, request, action=action, status_="success", target=str(record.id), detail={"name": record.name, "role": record.role})
+    return AdminTokenResponse.model_validate(record)
 
 
 @router.get("/system/migrations", response_model=list[MigrationStatusResponse])

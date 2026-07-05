@@ -116,6 +116,22 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False, index=True)
 
 
+class AdminToken(Base):
+    """Database-managed admin API token metadata."""
+
+    __tablename__ = "admin_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False)
+    role = Column(String(20), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_prefix = Column(String(16), nullable=False)
+    status = Column(String(20), default="active", nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+
 class SchemaMigration(Base):
     """Applied lightweight schema migration marker."""
 

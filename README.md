@@ -212,6 +212,16 @@ ADMIN_API_TOKENS=[{"name":"readonly","role":"viewer","token":"replace-with-reado
 - `operator`：包含只读权限，并可执行媒体回填、离线修复、手动备份、适配器创建/更新。
 - `admin`：最高权限，可删除适配器、执行导入等破坏性写操作。
 
+也可以使用数据库托管 Token 做日常分权和轮换。托管 Token 只保存 SHA-256 哈希，完整 token 仅在创建成功时返回一次：
+
+```text
+GET    /api/admin/tokens
+POST   /api/admin/tokens       # body: {"name":"readonly","role":"viewer"}
+DELETE /api/admin/tokens/{id}  # 吊销
+```
+
+生产环境建议仍保留一个静态 `ADMIN_API_TOKEN` 作为 bootstrap/应急入口，再用数据库托管 Token 分配日常只读或运维权限。
+
 ## 操作审计与限流
 
 系统会将高风险管理操作写入 `audit_logs`，包括：
@@ -245,6 +255,7 @@ HIGH_RISK_RATE_LIMIT_PER_MINUTE=10
 - `messages.external_message_id`
 - `audit_logs`
 - `schema_migrations`
+- `admin_tokens`
 
 这不是完整 Alembic 体系，但已经能追踪启动期兼容迁移；后续需要复杂结构变更时，可在此基础上迁入 Alembic。
 
