@@ -1,12 +1,14 @@
 import hashlib
+import html
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaAsset, Message
+from app.models import MediaAsset, Message, RoomProfile, UserProfile
 from app.services.backup_service import BackupService
+from app.services.message_service import MessageService
 
 
 @dataclass
@@ -15,6 +17,7 @@ class OfflineRepairReport:
     repaired_media_assets: int = 0
     repaired_media_files: int = 0
     repaired_file_sizes: int = 0
+    repaired_profile_avatars: int = 0
     repaired_paths: list[str] = field(default_factory=list)
 
 
@@ -41,8 +44,26 @@ class OfflineRepairService:
         report.scanned_messages = len(messages)
 
         local_paths: set[str] = set()
+        group_room_ids: set[str] = set()
+        user_names: dict[str, str | None] = {}
         for message in messages:
             local_paths.update(BackupService._extract_local_media_paths(message.local_message, public_storage_prefix))
+            if message.message_type == "group":
+                group_room_ids.add(message.room_id)
+            elif message.message_type == "private":
+                user_names.setdefault(message.room_id, None)
+            user_names.setdefault(message.sender_id, message.nickname)
+
+        profile_paths = await OfflineRepairService._repair_profile_avatars(
+            db,
+            group_room_ids=group_room_ids,
+            user_names=user_names,
+            storage_root=root,
+            public_storage_prefix=public_storage_prefix,
+        )
+        report.repaired_profile_avatars = len(profile_paths)
+        local_paths.update(profile_paths)
+        report.repaired_paths.extend(path for path in profile_paths if path not in report.repaired_paths)
 
         asset_result = await db.execute(select(MediaAsset))
         assets = list(asset_result.scalars().all())
@@ -100,6 +121,106 @@ class OfflineRepairService:
 
         await db.commit()
         return report
+
+    @staticmethod
+    async def _repair_profile_avatars(
+        db: AsyncSession,
+        *,
+        group_room_ids: set[str],
+        user_names: dict[str, str | None],
+        storage_root: Path,
+        public_storage_prefix: str,
+    ) -> list[str]:
+        repaired_paths: list[str] = []
+        room_profiles: dict[str, RoomProfile] = {}
+        user_profiles: dict[str, UserProfile] = {}
+
+        if group_room_ids:
+            room_result = await db.execute(select(RoomProfile).where(RoomProfile.room_id.in_(group_room_ids)))
+            room_profiles = {profile.room_id: profile for profile in room_result.scalars().all()}
+        if user_names:
+            user_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_names)))
+            user_profiles = {profile.user_id: profile for profile in user_result.scalars().all()}
+
+        for room_id in sorted(group_room_ids):
+            profile = room_profiles.get(room_id)
+            if profile is not None and OfflineRepairService._is_local_profile_avatar(profile.avatar_path, public_storage_prefix):
+                continue
+            local_path = await OfflineRepairService._save_profile_placeholder(
+                db,
+                profile_type="room",
+                profile_id=room_id,
+                storage_root=storage_root,
+                public_storage_prefix=public_storage_prefix,
+            )
+            if profile is None:
+                profile = RoomProfile(room_id=room_id, platform="qq")
+                db.add(profile)
+            profile.platform = "qq"
+            profile.avatar_path = local_path
+            repaired_paths.append(local_path)
+
+        for user_id, display_name in sorted(user_names.items()):
+            profile = user_profiles.get(user_id)
+            if profile is not None and OfflineRepairService._is_local_profile_avatar(profile.avatar_path, public_storage_prefix):
+                continue
+            local_path = await OfflineRepairService._save_profile_placeholder(
+                db,
+                profile_type="user",
+                profile_id=user_id,
+                storage_root=storage_root,
+                public_storage_prefix=public_storage_prefix,
+            )
+            if profile is None:
+                profile = UserProfile(user_id=user_id, platform="qq")
+                db.add(profile)
+            profile.platform = "qq"
+            if display_name and not profile.display_name:
+                profile.display_name = display_name
+            profile.avatar_path = local_path
+            repaired_paths.append(local_path)
+
+        return repaired_paths
+
+    @staticmethod
+    def _is_local_profile_avatar(avatar_path: str | None, public_storage_prefix: str) -> bool:
+        return bool(avatar_path and avatar_path.startswith(public_storage_prefix.rstrip("/") + "/"))
+
+    @staticmethod
+    async def _save_profile_placeholder(
+        db: AsyncSession,
+        *,
+        profile_type: str,
+        profile_id: str,
+        storage_root: Path,
+        public_storage_prefix: str,
+    ) -> str:
+        content = OfflineRepairService._profile_placeholder_svg(profile_type, profile_id)
+        return await MessageService.save_media_asset(
+            db,
+            file_content=content,
+            file_type="image",
+            ext="svg",
+            storage_root=storage_root,
+            public_prefix=public_storage_prefix,
+        )
+
+    @staticmethod
+    def _profile_placeholder_svg(profile_type: str, profile_id: str) -> bytes:
+        label = (profile_id or "--")[-2:]
+        title = html.escape(f"{profile_type}:{profile_id}", quote=True)
+        label_text = html.escape(label, quote=True)
+        color = "#2563eb" if profile_type == "room" else "#0f766e"
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">'
+            f"<title>{title}</title>"
+            f'<rect width="96" height="96" rx="18" fill="{color}"/>'
+            '<circle cx="48" cy="38" r="16" fill="#ffffff" opacity=".9"/>'
+            '<path d="M20 82c4-16 15-26 28-26s24 10 28 26" fill="#ffffff" opacity=".9"/>'
+            f'<text x="48" y="91" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#ffffff">{label_text}</text>'
+            "</svg>"
+        )
+        return svg.encode("utf-8")
 
     @staticmethod
     def _file_hash_for(local_path: str, content: bytes, used_hashes: set[str]) -> str:

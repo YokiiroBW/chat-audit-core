@@ -42,9 +42,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderLocalMediaParts" in html
     assert "renderLocalMediaAsset" in html
     assert "renderAvatar" in html
-    assert "qqUserAvatarUrl" in html
-    assert "qqGroupAvatarUrl" in html
-    assert "qlogo.cn" in html
+    assert "qlogo.cn" not in html
     assert "responseErrorMessage" in html
     assert "imagePreviewModal" in html
     assert "openImagePreview" in html
@@ -78,6 +76,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/offline/audit" in html
     assert "repairOfflineAudit" in html
     assert "/api/offline/repair" in html
+    assert "profile_avatars" in html
+    assert "repaired_profile_avatars" in html
     assert "exportRobotId" in html
     assert "downloadExportPackage" in html
     assert "/api/export" in html

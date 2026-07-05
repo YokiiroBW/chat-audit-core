@@ -755,19 +755,10 @@
       const value = text(id).trim();
       return value ? value.slice(-2).toUpperCase() : '--';
     };
-    const isNumericId = (id) => /^\d+$/.test(text(id).trim());
-    const qqUserAvatarUrl = (id) => {
-      const value = text(id).trim();
-      return isNumericId(value) ? `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(value)}&s=100` : '';
-    };
-    const qqGroupAvatarUrl = (id) => {
-      const value = text(id).trim();
-      return isNumericId(value) ? `https://p.qlogo.cn/gh/${encodeURIComponent(value)}/${encodeURIComponent(value)}/100` : '';
-    };
     const renderAvatar = (container, id, type = 'user', src = '') => {
       clearNode(container);
       container.textContent = avatarText(id);
-      const url = src || (type === 'group' ? qqGroupAvatarUrl(id) : qqUserAvatarUrl(id));
+      const url = src || '';
       if (!url) return;
       const img = document.createElement('img');
       img.alt = '';
@@ -1701,6 +1692,7 @@
         ['验收结果', report.offline_ready ? '通过' : '存在未缓存项', report.offline_ready ? 'ok' : 'bad'],
         ['messages', report.messages_scanned],
         ['media_assets', report.media_assets_checked],
+        ['profile_avatars', `${report.profile_avatars_checked} / ${report.missing_profile_avatars}`],
         ['remote_media_urls', report.remote_media_urls],
         ['uncached_card_pages', report.uncached_card_pages],
         ['uncached_forwards', report.uncached_forwards],
@@ -1723,7 +1715,7 @@
         const label = document.createElement('strong');
         label.textContent = 'repair: ';
         const valueNode = document.createElement('span');
-        valueNode.textContent = `assets ${repaired.repaired_media_assets}, files ${repaired.repaired_media_files}, sizes ${repaired.repaired_file_sizes}`;
+        valueNode.textContent = `assets ${repaired.repaired_media_assets}, files ${repaired.repaired_media_files}, sizes ${repaired.repaired_file_sizes}, profile avatars ${repaired.repaired_profile_avatars}`;
         row.append(label, valueNode);
         box.appendChild(row);
       }

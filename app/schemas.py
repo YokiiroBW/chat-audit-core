@@ -100,9 +100,11 @@ class OfflineAuditResponse(BaseModel):
     offline_ready: bool
     messages_scanned: int
     media_assets_checked: int
+    profile_avatars_checked: int
     remote_media_urls: int
     uncached_card_pages: int
     uncached_forwards: int
+    missing_profile_avatars: int
     missing_media_assets: int
     missing_media_files: int
     issues: list[OfflineAuditIssueResponse]
@@ -113,6 +115,7 @@ class OfflineRepairResponse(BaseModel):
     repaired_media_assets: int
     repaired_media_files: int
     repaired_file_sizes: int
+    repaired_profile_avatars: int
     repaired_paths: list[str]
 
 

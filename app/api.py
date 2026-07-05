@@ -293,9 +293,11 @@ async def audit_offline_readiness(
         offline_ready=report.offline_ready,
         messages_scanned=report.messages_scanned,
         media_assets_checked=report.media_assets_checked,
+        profile_avatars_checked=report.profile_avatars_checked,
         remote_media_urls=report.remote_media_urls,
         uncached_card_pages=report.uncached_card_pages,
         uncached_forwards=report.uncached_forwards,
+        missing_profile_avatars=report.missing_profile_avatars,
         missing_media_assets=report.missing_media_assets,
         missing_media_files=report.missing_media_files,
         issues=[issue.__dict__ for issue in report.issues],
@@ -319,6 +321,7 @@ async def repair_offline_media_integrity(
         repaired_media_assets=report.repaired_media_assets,
         repaired_media_files=report.repaired_media_files,
         repaired_file_sizes=report.repaired_file_sizes,
+        repaired_profile_avatars=report.repaired_profile_avatars,
         repaired_paths=report.repaired_paths,
     )
 
