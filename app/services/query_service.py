@@ -1,7 +1,7 @@
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Adapter, BotProfile, Message, RobotMessage, RoomProfile
+from app.models import Adapter, BotProfile, Message, RobotMessage, RoomProfile, UserProfile
 
 
 class QueryService:
@@ -22,11 +22,12 @@ class QueryService:
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
                 func.max(Message.message_type).label("message_type"),
-                func.max(RoomProfile.display_name).label("display_name"),
-                func.max(RoomProfile.avatar_path).label("avatar_path"),
+                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name)).label("display_name"),
+                func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
             .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
             .outerjoin(RoomProfile, RoomProfile.room_id == Message.room_id)
+            .outerjoin(UserProfile, UserProfile.user_id == Message.room_id)
             .where(RobotMessage.robot_id == robot_id)
             .group_by(Message.room_id)
             .order_by(desc("last_timestamp"), Message.room_id.asc())
@@ -51,8 +52,13 @@ class QueryService:
         limit: int = 50,
     ) -> list[Message]:
         stmt = (
-            select(Message)
+            select(
+                Message,
+                UserProfile.display_name.label("sender_display_name"),
+                UserProfile.avatar_path.label("sender_avatar_path"),
+            )
             .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(UserProfile, UserProfile.user_id == Message.sender_id)
             .where(RobotMessage.robot_id == robot_id, Message.room_id == room_id)
         )
         if before_timestamp is not None:
@@ -62,7 +68,11 @@ class QueryService:
         # them in chronological order for stable chat rendering.
         stmt = stmt.order_by(Message.timestamp.desc(), Message.msg_hash.desc()).limit(limit)
         result = await db.execute(stmt)
-        messages = list(result.scalars().all())
+        messages = []
+        for message, sender_display_name, sender_avatar_path in result.all():
+            message.sender_display_name = sender_display_name
+            message.sender_avatar_path = sender_avatar_path
+            messages.append(message)
         return list(reversed(messages))
 
     @staticmethod

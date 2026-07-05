@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaAsset, Message, RobotMessage
+from app.models import MediaAsset, Message, RobotMessage, RoomProfile, UserProfile
 from app.time_utils import utc_now
 
 BACKUP_SCHEMA = "chat-audit-core.backup.v1"
@@ -23,6 +23,8 @@ class BackupService:
         "robot_messages": ("robot_id", "msg_hash"),
         "media_assets": ("file_hash", "file_type", "file_size", "local_path"),
         "media_files": ("local_path", "file_size", "file_checksum", "content_base64"),
+        "room_profiles": ("room_id", "platform"),
+        "user_profiles": ("user_id", "platform"),
     }
 
     @staticmethod
@@ -88,6 +90,24 @@ class BackupService:
         return item
 
     @staticmethod
+    def _room_profile_to_dict(profile: RoomProfile) -> dict[str, Any]:
+        return {
+            "room_id": profile.room_id,
+            "platform": profile.platform,
+            "display_name": profile.display_name,
+            "avatar_path": profile.avatar_path,
+        }
+
+    @staticmethod
+    def _user_profile_to_dict(profile: UserProfile) -> dict[str, Any]:
+        return {
+            "user_id": profile.user_id,
+            "platform": profile.platform,
+            "display_name": profile.display_name,
+            "avatar_path": profile.avatar_path,
+        }
+
+    @staticmethod
     def _extract_local_media_paths(local_message: str, public_storage_prefix: str = "/static/storage") -> set[str]:
         prefix = public_storage_prefix.rstrip("/") + "/"
         pattern = re.compile(rf"{re.escape(prefix)}[^\s\"'<>),\]]+")
@@ -142,6 +162,8 @@ class BackupService:
         result = await db.execute(stmt)
         messages = list(result.scalars().unique().all())
         msg_hashes = [message.msg_hash for message in messages]
+        room_ids = sorted({message.room_id for message in messages})
+        user_ids = sorted({message.sender_id for message in messages})
 
         robot_messages: list[dict[str, str]] = []
         if msg_hashes:
@@ -154,8 +176,23 @@ class BackupService:
                 for assoc in assoc_result.scalars().all()
             ]
 
+        room_profiles: list[dict[str, Any]] = []
+        user_profiles: list[dict[str, Any]] = []
+        profile_media_paths: set[str] = set()
+        if room_ids:
+            room_profile_result = await db.execute(select(RoomProfile).where(RoomProfile.room_id.in_(room_ids)).order_by(RoomProfile.room_id.asc()))
+            room_profile_models = list(room_profile_result.scalars().all())
+            room_profiles = [BackupService._room_profile_to_dict(profile) for profile in room_profile_models]
+            profile_media_paths.update(profile.avatar_path for profile in room_profile_models if profile.avatar_path)
+        if user_ids:
+            user_profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)).order_by(UserProfile.user_id.asc()))
+            user_profile_models = list(user_profile_result.scalars().all())
+            user_profiles = [BackupService._user_profile_to_dict(profile) for profile in user_profile_models]
+            profile_media_paths.update(profile.avatar_path for profile in user_profile_models if profile.avatar_path)
+
         media_paths = sorted(
-            {
+            profile_media_paths
+            | {
                 local_path
                 for message in messages
                 if isinstance(message.local_message, str)
@@ -193,12 +230,16 @@ class BackupService:
                     "robot_messages": len(robot_messages),
                     "media_assets": len(media_assets),
                     "media_files": len(media_files),
+                    "room_profiles": len(room_profiles),
+                    "user_profiles": len(user_profiles),
                 },
             },
             "messages": [BackupService._message_to_dict(message) for message in messages],
             "robot_messages": robot_messages,
             "media_assets": media_assets,
             "media_files": media_files,
+            "room_profiles": room_profiles,
+            "user_profiles": user_profiles,
         }
         return BackupService.attach_package_checksum(package)
 
@@ -424,6 +465,8 @@ class BackupService:
             "robot_messages": len(package.get("robot_messages", []) or []),
             "media_assets": len(package.get("media_assets", []) or []),
             "media_files": len(package.get("media_files", []) or []),
+            "room_profiles": len(package.get("room_profiles", []) or []),
+            "user_profiles": len(package.get("user_profiles", []) or []),
         }
         media_files = BackupService._validate_media_files(package, storage_root, public_storage_prefix, errors)
 
@@ -601,6 +644,38 @@ class BackupService:
                 asset.file_size = item["file_size"]
                 asset.local_path = item["local_path"]
             media_asset_count += 1
+
+        for item in package.get("room_profiles", []) or []:
+            profile = await db.get(RoomProfile, item["room_id"])
+            if profile is None:
+                db.add(
+                    RoomProfile(
+                        room_id=item["room_id"],
+                        platform=item["platform"],
+                        display_name=item.get("display_name"),
+                        avatar_path=item.get("avatar_path"),
+                    )
+                )
+            else:
+                profile.platform = item["platform"]
+                profile.display_name = item.get("display_name")
+                profile.avatar_path = item.get("avatar_path")
+
+        for item in package.get("user_profiles", []) or []:
+            profile = await db.get(UserProfile, item["user_id"])
+            if profile is None:
+                db.add(
+                    UserProfile(
+                        user_id=item["user_id"],
+                        platform=item["platform"],
+                        display_name=item.get("display_name"),
+                        avatar_path=item.get("avatar_path"),
+                    )
+                )
+            else:
+                profile.platform = item["platform"]
+                profile.display_name = item.get("display_name")
+                profile.avatar_path = item.get("avatar_path")
 
         await db.commit()
         return {

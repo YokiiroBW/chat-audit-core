@@ -838,7 +838,7 @@
         body.style.flex = '1';
         const name = document.createElement('div');
         name.className = 'truncate';
-        name.textContent = room.display_name ? `${room.display_name}（${room.room_id}）` : room.room_id;
+        name.textContent = roomDisplayName(room);
         const meta = document.createElement('div');
         meta.className = 'hint truncate';
         meta.textContent = `最近存盘: ${formatTs(room.last_timestamp)}`;
@@ -896,6 +896,11 @@
       return state.messageList.find((msg) => String(msg.external_message_id || '') === String(replyId)) || null;
     };
 
+    const roomDisplayName = (room) => {
+      if (!room) return '请选择会话';
+      return room.display_name ? `${room.display_name}（${room.room_id}）` : room.room_id;
+    };
+
     const renderSettings = () => {
       el('settingsPanel').classList.toggle('open', state.settingsMode);
       el('adapterId').disabled = Boolean(state.editingAdapterId);
@@ -904,7 +909,7 @@
     };
 
     const renderChat = () => {
-      el('roomTitle').textContent = state.currentRoom ? state.currentRoom.room_id : '请选择会话';
+      el('roomTitle').textContent = roomDisplayName(state.currentRoom);
       el('robotView').textContent = state.currentRobot ? ` 视角: ${state.currentRobot.display_name || state.currentRobot.id}` : '';
       el('refreshButton').disabled = !state.currentRoom;
       el('openExportButton').disabled = !state.currentRobot;
@@ -934,7 +939,7 @@
         row.className = `message${mine ? ' mine' : ''}`;
         const avatar = document.createElement('div');
         avatar.className = 'avatar message-avatar';
-        renderAvatar(avatar, msg.sender_id);
+        renderAvatar(avatar, msg.sender_id, 'user', msg.sender_avatar_path);
         const body = document.createElement('div');
         body.className = 'message-body';
         const meta = document.createElement('div');

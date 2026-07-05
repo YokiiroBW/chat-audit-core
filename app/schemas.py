@@ -61,6 +61,8 @@ class MessageResponse(BaseModel):
     message_type: str
     external_message_id: str | None = None
     sender_id: str
+    sender_display_name: str | None = None
+    sender_avatar_path: str | None = None
     nickname: str | None = None
     raw_message: str
     local_message: str

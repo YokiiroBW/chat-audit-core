@@ -30,13 +30,13 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
     async def inspect_tables():
         async with engine.connect() as conn:
             result = await conn.execute(
-                text("select name from sqlite_master where type='table' and name in ('messages', 'robot_messages', 'media_assets', 'adapters', 'bot_profiles', 'room_profiles')")
+                text("select name from sqlite_master where type='table' and name in ('messages', 'robot_messages', 'media_assets', 'adapters', 'bot_profiles', 'room_profiles', 'user_profiles')")
             )
             return {row[0] for row in result.fetchall()}
 
     import anyio
 
-    assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters", "bot_profiles", "room_profiles"}
+    assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters", "bot_profiles", "room_profiles", "user_profiles"}
 
 
 

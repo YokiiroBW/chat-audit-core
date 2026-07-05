@@ -290,7 +290,14 @@ async def test_import_validate_api_reports_valid_package_without_writing(db_sess
     assert report["schema"] == "chat-audit-core.backup.v1"
     assert report["checksum_valid"] is True
     assert report["errors"] == []
-    assert report["counts"] == {"messages": 1, "robot_messages": 1, "media_assets": 0, "media_files": 0}
+    assert report["counts"] == {
+        "messages": 1,
+        "robot_messages": 1,
+        "media_assets": 0,
+        "media_files": 0,
+        "room_profiles": 0,
+        "user_profiles": 0,
+    }
 
 
 @pytest.mark.asyncio

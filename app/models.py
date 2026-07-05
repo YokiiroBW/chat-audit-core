@@ -45,6 +45,18 @@ class RoomProfile(Base):
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 
+class UserProfile(Base):
+    """Cached user metadata for local avatars and private chats."""
+
+    __tablename__ = "user_profiles"
+
+    user_id = Column(String(64), primary_key=True)
+    platform = Column(String(20), nullable=False)
+    display_name = Column(String(128), nullable=True)
+    avatar_path = Column(String(255), nullable=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+
 class Message(Base):
     """全局消息池表。"""
 

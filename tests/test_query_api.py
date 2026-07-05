@@ -3,7 +3,7 @@ import pytest
 
 from app.database import get_db_session
 from app.main import app
-from app.models import Adapter, BotProfile, RoomProfile
+from app.models import Adapter, BotProfile, RoomProfile, UserProfile
 from app.services.message_service import MessageService
 
 
@@ -38,6 +38,7 @@ async def test_query_api_respects_robot_view_isolation(db_session):
     await MessageService.process_incoming_message(db_session, "robot-b", "qq", shared_payload)
     await MessageService.process_incoming_message(db_session, "robot-a", "qq", robot_a_only_payload)
     db_session.add(RoomProfile(room_id="group-shared", platform="qq", display_name="测试群", avatar_path="/static/storage/group.jpg"))
+    db_session.add(UserProfile(user_id="user-1", platform="qq", display_name="Alice Local", avatar_path="/static/storage/user-1.jpg"))
     await db_session.commit()
 
     async def override_db_session():
@@ -76,6 +77,8 @@ async def test_query_api_respects_robot_view_isolation(db_session):
     assert len(messages_b) == 1
     assert messages_b[0]["room_id"] == "group-shared"
     assert messages_b[0]["raw_message"] == "shared message"
+    assert messages_b[0]["sender_display_name"] == "Alice Local"
+    assert messages_b[0]["sender_avatar_path"] == "/static/storage/user-1.jpg"
 
     assert hidden_messages_response.status_code == 200
     assert hidden_messages_response.json() == []

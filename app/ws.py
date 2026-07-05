@@ -9,12 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.onebot11 import normalize_message_event
 from app.config import get_settings
 from app.database import AsyncSessionLocal, get_db_session
-from app.models import Message, RoomProfile
+from app.models import Message, RoomProfile, UserProfile
 from app.services.bot_profile_service import BotProfileService
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.room_profile_service import RoomProfileService
+from app.services.user_profile_service import UserProfileService
 
 router = APIRouter()
 
@@ -108,6 +109,26 @@ async def _hydrate_group_profile(robot_id: str, platform: str, room_id: str) -> 
         )
 
 
+async def _hydrate_user_profile(platform: str, user_id: str, display_name: str | None = None) -> None:
+    settings = get_settings()
+    async with AsyncSessionLocal() as session:
+        existing = await session.get(UserProfile, user_id)
+        if existing is not None and existing.avatar_path and (existing.display_name or not display_name):
+            return
+
+    async with AsyncSessionLocal() as session, httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        await UserProfileService.cache_qq_user_profile(
+            session,
+            user_id=user_id,
+            platform=platform,
+            display_name=display_name,
+            http_client=client,
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+            max_bytes=settings.media_max_bytes,
+        )
+
+
 @router.websocket("/onebot/v11/ws")
 async def onebot11_reverse_ws(
     websocket: WebSocket,
@@ -155,6 +176,13 @@ async def onebot11_reverse_ws(
             )
             if "[CQ:forward," in normalized.msg_data.get("raw_message", ""):
                 asyncio.create_task(_hydrate_forward_payloads(normalized.robot_id, msg_hash))
+            asyncio.create_task(
+                _hydrate_user_profile(
+                    normalized.platform,
+                    normalized.msg_data["sender_id"],
+                    normalized.msg_data.get("nickname"),
+                )
+            )
             if normalized.msg_data.get("message_type") == "group":
                 asyncio.create_task(_hydrate_group_profile(normalized.robot_id, normalized.platform, normalized.msg_data["room_id"]))
     except WebSocketDisconnect:

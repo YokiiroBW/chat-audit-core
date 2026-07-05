@@ -26,6 +26,7 @@ from app.services.message_service import MessageService
 from app.services.onebot_rpc_service import OneBotRPCService
 from app.services.query_service import QueryService
 from app.services.room_profile_service import RoomProfileService
+from app.services.user_profile_service import UserProfileService
 from app.models import Message, RobotMessage
 
 
@@ -130,19 +131,26 @@ async def list_rooms(
 
 
 async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms: list[dict], settings: Settings) -> bool:
-    missing_rooms = [
+    missing_group_rooms = [
         room
         for room in rooms
         if room.get("message_type") == "group"
         and str(room.get("room_id") or "").isdigit()
         and (not room.get("display_name") or not room.get("avatar_path"))
     ]
-    if not missing_rooms:
+    missing_private_rooms = [
+        room
+        for room in rooms
+        if room.get("message_type") == "private"
+        and str(room.get("room_id") or "").isdigit()
+        and (not room.get("display_name") or not room.get("avatar_path"))
+    ]
+    if not missing_group_rooms and not missing_private_rooms:
         return False
 
     changed = False
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for room in missing_rooms[:20]:
+        for room in missing_group_rooms[:20]:
             room_id = str(room["room_id"])
             group_info = None
             try:
@@ -156,6 +164,19 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
                 room_id=room_id,
                 platform="qq",
                 group_info=group_info,
+                http_client=client,
+                storage_root=settings.storage_root,
+                public_prefix=settings.public_storage_prefix,
+                max_bytes=settings.media_max_bytes,
+            )
+            changed = True
+        for room in missing_private_rooms[:20]:
+            room_id = str(room["room_id"])
+            await UserProfileService.cache_qq_user_profile(
+                db,
+                user_id=room_id,
+                platform="qq",
+                display_name=None,
                 http_client=client,
                 storage_root=settings.storage_root,
                 public_prefix=settings.public_storage_prefix,
