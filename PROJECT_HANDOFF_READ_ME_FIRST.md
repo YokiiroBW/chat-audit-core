@@ -17,12 +17,13 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`迁移：启用 Alembic CLI`
+- 最新提交主题：`文档：更新 Alembic CLI 验收状态`
 - 本地全量测试：`136 passed`
-- NAS 部署：已部署 `5270278 功能：增强用户会话管理`
+- NAS 部署：已部署 `6d8604e 修复：缩短 Alembic 版本号兼容 PostgreSQL`
 - NAS 基础验收：健康检查 200，首页 200，管理鉴权 401/200 正常
 - NAS 用户/session 专项验收：密码重置、旧会话失效、新密码登录、强制下线均通过
-- NAS 离线验收：`offline_ready=true`，`messages_scanned=7151`，`media_assets_checked=2834`，`missing_media_assets=0`，`missing_media_files=0`
+- NAS Alembic 验收：容器内 `python -m alembic upgrade head` 通过，当前版本 `20260705_007 (head)`
+- NAS 离线验收：`offline_ready=true`，`messages_scanned=7411`，`media_assets_checked=2896`，`missing_media_assets=0`，`missing_media_files=0`
 
 最近主线提交：
 

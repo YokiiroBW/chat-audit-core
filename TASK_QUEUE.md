@@ -12,48 +12,10 @@
 - 自动备份状态、手动备份、数据库托管 cron/retention 配置。
 - 审计日志、高风险限流、静态多角色 Token、数据库托管 Token。
 - 数据库用户、登录态、退出、用户禁用、密码重置、会话列表、强制下线、Token 轮换。
-- 轻量迁移注册表和 `/api/system/migrations`。
+- 轻量迁移注册表、`/api/system/migrations`、Alembic CLI、容器内 `alembic upgrade head` 验收。
 - Forgejo SSH 专用 key 已生成并注册，SSH 仓库连通性检查通过。
 
 ## 可立即推进
-
-### T7.1 Alembic 版本脚本骨架
-
-状态：已完成
-
-目标：
-- 在不新增运行时依赖的前提下，先建立 Alembic 风格的迁移目录与版本脚本。
-- 让当前轻量迁移注册表与版本脚本一一对应。
-- 为后续真正启用 Alembic CLI 降低切换成本。
-
-验收：
-- 每个 `LIGHTWEIGHT_MIGRATION_REGISTRY` 版本都有对应 `migrations/versions/*.py`。
-- 版本脚本链路顺序与轻量迁移注册表一致。
-- 本地全量测试通过。
-
-已完成：
-- 新增 `migrations/versions/`，为当前 7 个轻量迁移建立 Alembic 风格版本脚本。
-- 新增 `tests/test_migration_versions.py`，校验版本脚本与轻量迁移注册表一一对应。
-- 未新增运行时依赖，NAS 部署不会因该步骤重新拉取 Alembic 包。
-
-### T7.2 启用完整 Alembic CLI
-
-状态：已完成
-
-目标：
-- 将 Alembic 加入依赖并提供 `alembic.ini`、`env.py` 和升级命令。
-- 本地与 NAS 均可执行版本化迁移。
-
-已完成：
-- `requirements.txt` 新增 `alembic==1.16.5`。
-- 新增 `alembic.ini` 与 `migrations/env.py`，读取当前 `DATABASE_URL` 执行迁移。
-- 现有 7 个版本脚本已改为可执行幂等迁移。
-- 新增 `tests/test_alembic_cli.py`，覆盖空库初始化和旧库兼容列补齐。
-- 本地 `python -m alembic upgrade head` 与 `python -m alembic current` 已通过。
-
-验收：
-- 本地 `alembic upgrade head` 可用。
-- NAS 部署不依赖手工改表。
 
 ### T8 交接文档持续更新
 
