@@ -69,6 +69,19 @@ class BackupRunResponse(BaseModel):
     filename: str
 
 
+class AuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action: str
+    status: str
+    actor: str | None = None
+    ip_address: str | None = None
+    target: str | None = None
+    detail_json: str | None = None
+    created_at: datetime | None = None
+
+
 class RoomResponse(BaseModel):
     room_id: str
     last_timestamp: int

@@ -184,6 +184,42 @@ X-Admin-Token: 你的管理API Token
 
 内置 Web 控制台遇到 401 时会提示输入该 token，并缓存在浏览器本地存储中。
 
+## 操作审计与限流
+
+系统会将高风险管理操作写入 `audit_logs`，包括：
+
+- 管理 API 鉴权失败。
+- 删除适配器。
+- 媒体回填。
+- 离线修复。
+- 导入 JSON。
+- 手动备份。
+
+查询接口：
+
+```text
+GET /api/audit/logs?action=offline.repair&limit=100
+```
+
+高风险写操作有简单每分钟限流，默认：
+
+```text
+HIGH_RISK_RATE_LIMIT_PER_MINUTE=10
+```
+
+设置为 `0` 可关闭该限流。
+
+## 数据库迁移记录
+
+应用启动时会执行 `create_all` 与轻量兼容迁移，并将已确认的兼容迁移写入 `schema_migrations`。当前迁移记录覆盖：
+
+- `adapters.current_robot_id`
+- `messages.external_message_id`
+- `audit_logs`
+- `schema_migrations`
+
+这不是完整 Alembic 体系，但已经能追踪启动期兼容迁移；后续需要复杂结构变更时，可在此基础上迁入 Alembic。
+
 ## Forgejo
 
 局域网仓库：

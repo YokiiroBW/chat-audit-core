@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     media_transcode_enabled: bool = False
     media_transcode_voice_ext: str = "mp3"
     media_transcode_video_ext: str = "mp4"
+    high_risk_rate_limit_per_minute: int = 10
 
     auto_backup_cron: str = "0 3 * * *"
     auto_backup_keep_latest: int = 7

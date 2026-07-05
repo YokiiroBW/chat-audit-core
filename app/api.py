@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
     AdapterUpdateRequest,
+    AuditLogResponse,
     BackupRunResponse,
     BackupStatusResponse,
     BotProfileResponse,
@@ -30,6 +32,7 @@ from app.schemas import (
     RoomResponse,
 )
 from app.services.adapter_service import AdapterService
+from app.services.audit_log_service import AuditLogService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
 from app.services.dashboard_service import DashboardService
@@ -46,6 +49,9 @@ from app.services.user_profile_service import UserProfileService
 from app.models import Message, RobotMessage
 
 
+_RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
+
+
 def _extract_bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
@@ -55,9 +61,10 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     return token
 
 
-def require_admin_api_token(
+async def require_admin_api_token(
     request: Request,
     settings: Settings = Depends(get_settings),
+    db: AsyncSession = Depends(get_db_session),
 ) -> None:
     configured_token = settings.admin_api_token.strip()
     if not configured_token:
@@ -68,10 +75,67 @@ def require_admin_api_token(
     if header_token == configured_token or bearer_token == configured_token:
         return
 
+    await AuditLogService.record(
+        db,
+        action="auth.failed",
+        status="failed",
+        actor="anonymous",
+        ip_address=_client_ip(request),
+        target=request.url.path,
+        detail={"method": request.method},
+    )
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid admin api token")
 
 
 router = APIRouter(dependencies=[Depends(require_admin_api_token)])
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return request.client.host if request.client else None
+
+
+def _actor(request: Request) -> str:
+    token = request.headers.get("x-admin-token") or _extract_bearer_token(request.headers.get("authorization"))
+    if token:
+        return "admin-token"
+    return "development-open"
+
+
+def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Settings) -> None:
+    limit = settings.high_risk_rate_limit_per_minute
+    if limit <= 0:
+        return
+    now = time.monotonic()
+    key = (_client_ip(request) or "unknown", action)
+    bucket = [timestamp for timestamp in _RATE_LIMIT_BUCKETS.get(key, []) if now - timestamp < 60]
+    if len(bucket) >= limit:
+        _RATE_LIMIT_BUCKETS[key] = bucket
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="high risk operation rate limit exceeded")
+    bucket.append(now)
+    _RATE_LIMIT_BUCKETS[key] = bucket
+
+
+async def _audit(
+    db: AsyncSession,
+    request: Request,
+    *,
+    action: str,
+    status_: str,
+    target: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    await AuditLogService.record(
+        db,
+        action=action,
+        status=status_,
+        actor=_actor(request),
+        ip_address=_client_ip(request),
+        target=target,
+        detail=detail,
+    )
 
 
 @router.get("/adapters", response_model=list[AdapterResponse])
@@ -116,20 +180,38 @@ async def get_backup_status(settings: Settings = Depends(get_settings)) -> Backu
 
 @router.post("/backup/run", response_model=BackupRunResponse)
 async def run_backup_now(
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> BackupRunResponse:
-    path = await BackupService.write_auto_backup_file(
-        db,
-        backup_root=settings.backup_root,
-        storage_root=settings.storage_root,
-        public_storage_prefix=settings.public_storage_prefix,
-        max_media_bytes=settings.media_max_bytes,
-        keep_latest=settings.auto_backup_keep_latest,
-        system_id=settings.system_instance_id,
-        signing_key=settings.app_secret_key,
-    )
+    action = "backup.run"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    try:
+        path = await BackupService.write_auto_backup_file(
+            db,
+            backup_root=settings.backup_root,
+            storage_root=settings.storage_root,
+            public_storage_prefix=settings.public_storage_prefix,
+            max_media_bytes=settings.media_max_bytes,
+            keep_latest=settings.auto_backup_keep_latest,
+            system_id=settings.system_instance_id,
+            signing_key=settings.app_secret_key,
+        )
+    except Exception as exc:
+        await _audit(db, request, action=action, status_="failed", detail={"error": str(exc)})
+        raise
+    await _audit(db, request, action=action, status_="success", target=path.name)
     return BackupRunResponse(path=str(path), filename=path.name)
+
+
+@router.get("/audit/logs", response_model=list[AuditLogResponse])
+async def list_audit_logs(
+    action: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db_session),
+) -> list[AuditLogResponse]:
+    logs = await AuditLogService.list_logs(db, action=action, limit=limit)
+    return [AuditLogResponse.model_validate(log) for log in logs]
 
 
 @router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)
@@ -173,10 +255,19 @@ async def update_adapter(
 
 
 @router.delete("/adapters/{adapter_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_adapter(adapter_id: str, db: AsyncSession = Depends(get_db_session)) -> Response:
+async def delete_adapter(
+    adapter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    action = "adapter.delete"
+    _enforce_high_risk_rate_limit(request, action, settings)
     deleted = await AdapterService.delete_adapter(db, adapter_id=adapter_id)
     if not deleted:
+        await _audit(db, request, action=action, status_="failed", target=adapter_id, detail={"reason": "not_found"})
         raise HTTPException(status_code=404, detail="adapter not found")
+    await _audit(db, request, action=action, status_="success", target=adapter_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -383,6 +474,7 @@ async def search_messages(
 
 @router.post("/media/backfill", response_model=MediaBackfillResponse)
 async def backfill_media(
+    request: Request,
     limit: int = Query(default=100, ge=1, le=1000),
     dry_run: bool = Query(default=False),
     finalize_unavailable: bool = Query(default=False),
@@ -390,22 +482,33 @@ async def backfill_media(
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> MediaBackfillResponse:
+    action = "media.backfill"
+    if not dry_run:
+        _enforce_high_risk_rate_limit(request, action, settings)
+
     async def load_forward(robot_id: str, forward_id: str) -> dict:
         return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": forward_id})
 
-    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        report = await MediaBackfillService.backfill_historical_media(
-            db,
-            limit=limit,
-            dry_run=dry_run,
-            failure_limit=failure_limit,
-            http_client=client,
-            storage_root=settings.storage_root,
-            public_prefix=settings.public_storage_prefix,
-            max_bytes=settings.media_max_bytes,
-            forward_payload_loader=load_forward,
-            finalize_unavailable=finalize_unavailable,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+            report = await MediaBackfillService.backfill_historical_media(
+                db,
+                limit=limit,
+                dry_run=dry_run,
+                failure_limit=failure_limit,
+                http_client=client,
+                storage_root=settings.storage_root,
+                public_prefix=settings.public_storage_prefix,
+                max_bytes=settings.media_max_bytes,
+                forward_payload_loader=load_forward,
+                finalize_unavailable=finalize_unavailable,
+            )
+    except Exception as exc:
+        if not dry_run:
+            await _audit(db, request, action=action, status_="failed", detail={"error": str(exc), "limit": limit})
+        raise
+    if not dry_run:
+        await _audit(db, request, action=action, status_="success", detail={"limit": limit, "updated": report.updated, "failed": report.failed})
     return MediaBackfillResponse(
         scanned=report.scanned,
         candidates=report.candidates,
@@ -453,15 +556,34 @@ async def audit_offline_readiness(
 
 @router.post("/offline/repair", response_model=OfflineRepairResponse)
 async def repair_offline_media_integrity(
+    request: Request,
     limit: int = Query(default=50000, ge=1, le=50000),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> OfflineRepairResponse:
-    report = await OfflineRepairService.repair_local_media_integrity(
+    action = "offline.repair"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    try:
+        report = await OfflineRepairService.repair_local_media_integrity(
+            db,
+            limit=limit,
+            storage_root=settings.storage_root,
+            public_storage_prefix=settings.public_storage_prefix,
+        )
+    except Exception as exc:
+        await _audit(db, request, action=action, status_="failed", detail={"error": str(exc), "limit": limit})
+        raise
+    await _audit(
         db,
-        limit=limit,
-        storage_root=settings.storage_root,
-        public_storage_prefix=settings.public_storage_prefix,
+        request,
+        action=action,
+        status_="success",
+        detail={
+            "limit": limit,
+            "repaired_media_assets": report.repaired_media_assets,
+            "repaired_media_files": report.repaired_media_files,
+            "repaired_profile_avatars": report.repaired_profile_avatars,
+        },
     )
     return OfflineRepairResponse(
         scanned_messages=report.scanned_messages,
@@ -573,9 +695,12 @@ async def validate_import_data(
 @router.post("/import", response_model=ImportResultResponse)
 async def import_data(
     package: dict,
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> ImportResultResponse:
+    action = "import.run"
+    _enforce_high_risk_rate_limit(request, action, settings)
     try:
         result = await BackupService.import_package(
             db,
@@ -586,5 +711,7 @@ async def import_data(
         )
     except ValueError as exc:
         BackupService.write_failure_log(settings.backup_root, event="import", error=str(exc), context={"schema": (package.get("manifest") or {}).get("schema")})
+        await _audit(db, request, action=action, status_="failed", detail={"error": str(exc), "schema": (package.get("manifest") or {}).get("schema")})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _audit(db, request, action=action, status_="success", detail={"messages": result["messages"], "robot_messages": result["robot_messages"], "media_assets": result["media_assets"]})
     return ImportResultResponse(**result)

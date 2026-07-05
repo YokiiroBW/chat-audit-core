@@ -99,3 +99,28 @@ class MediaAsset(Base):
     file_size = Column(Integer, nullable=False)
     local_path = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class AuditLog(Base):
+    """Management operation audit log."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    action = Column(String(64), nullable=False, index=True)
+    status = Column(String(20), nullable=False)
+    actor = Column(String(128), nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    target = Column(String(255), nullable=True)
+    detail_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+
+
+class SchemaMigration(Base):
+    """Applied lightweight schema migration marker."""
+
+    __tablename__ = "schema_migrations"
+
+    version = Column(String(64), primary_key=True)
+    description = Column(String(255), nullable=False)
+    applied_at = Column(DateTime, default=utc_now, nullable=False)
