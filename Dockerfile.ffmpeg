@@ -6,13 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt ./
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
+
+COPY vendor/wheels ./vendor/wheels
+RUN pip install --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0 \
+    && python -c "import imageio_ffmpeg, os; os.symlink(imageio_ffmpeg.get_ffmpeg_exe(), '/usr/local/bin/ffmpeg')" \
+    && rm -rf ./vendor/wheels \
+    && ffmpeg -version
 
 COPY app ./app
 COPY alembic.ini ./alembic.ini

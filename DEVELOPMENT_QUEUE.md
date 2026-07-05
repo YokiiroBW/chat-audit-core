@@ -16,7 +16,7 @@
 
 ### 1. FFmpeg 与媒体转码流水线
 
-状态：代码与 compose 支持已完成，NAS 实测两条现有启用路径均未通过，当前已恢复默认安全配置。
+状态：已完成并在 NAS 验收通过。
 
 已完成：
 
@@ -24,7 +24,7 @@
 - 语音、视频转码成功路径与失败回退。
 - FFmpeg 不可用时自动保存原始文件。
 - 默认 Docker 镜像继续保持离线友好，不依赖 apt 源。
-- `Dockerfile.ffmpeg` 与 `docker-compose.ffmpeg.yml` 支持联网构建内置 FFmpeg 镜像。
+- `Dockerfile.ffmpeg` 与 `docker-compose.ffmpeg.yml` 支持离线安装 `imageio-ffmpeg` wheel，构建内置静态 FFmpeg 镜像。
 - `docker-compose.ffmpeg-host.yml` 支持宿主机/NAS 已有 FFmpeg 时直接挂载可执行文件。
 - `GET /api/system/runtime` 可查看 `ffmpeg_available`、`ffmpeg_version` 与转码配置。
 
@@ -32,21 +32,15 @@ NAS 实测结果：
 
 - 宿主机 `/usr/bin/ffmpeg` 存在，版本 `4.1.9`。
 - 使用 `docker-compose.ffmpeg-host.yml` 挂载宿主机二进制后，容器内缺少动态库 `libavdevice.so.58`，runtime 判定 `ffmpeg_available=false`。
-- 使用 `docker-compose.ffmpeg.yml` 自动构建内置 FFmpeg 镜像时，NAS 上构建命令长时间卡住，无有效输出；已终止本地等待并恢复普通 compose。
-- 恢复后 NAS 服务健康，`/api/system/runtime` 为 `media_transcode_enabled=false`、`ffmpeg_available=false`。
-
-剩余：
-
-- 新增更可靠的启用方案：
-  - 方案 A：提供静态 FFmpeg 二进制并通过 volume 挂载。
-  - 方案 B：在可联网环境预构建含 FFmpeg 的镜像，推送到 NAS 可拉取的镜像仓库或离线导入。
-- 新方案完成后再启用 NAS 转码并验收。
+- 宿主机动态库挂载后可以完成版本探测，但实际 WAV 转 MP3 smoke test 出现段错误，不作为推荐启用路径。
+- `docker-compose.ffmpeg.yml` 使用 vendored `imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl` 后，NAS 构建成功。
+- NAS 容器内 `ffmpeg version 7.0.2-static` 可用，`/api/system/runtime` 返回 `ffmpeg_available=true`。
+- WAV 转 MP3 smoke test 通过。
 
 验收：
 
-- `/api/system/runtime` 返回 `ffmpeg_available=true`。
-- 语音/视频转码样本可播放。
-- 全量测试通过。
+- 继续保留回归测试，保证 `Dockerfile.ffmpeg` 不回退到 apt 构建。
+- 后续真实语音/视频样本接入时，补充端到端可播放验收。
 
 ### 2. 微信 Hook 专用适配
 

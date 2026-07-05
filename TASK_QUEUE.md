@@ -14,6 +14,7 @@
 - 审计日志、高风险限流、静态多角色 Token、数据库托管 Token。
 - 数据库用户、登录态、退出、用户禁用、密码重置、会话列表、强制下线、Token 轮换。
 - 轻量迁移注册表、`/api/system/migrations`、Alembic CLI、容器内 `alembic upgrade head` 验收。
+- FFmpeg 可选转码：内置静态 FFmpeg 镜像构建可用，NAS `/api/system/runtime` 返回 `ffmpeg_available=true`，WAV 转 MP3 smoke test 通过。
 - Forgejo SSH 专用 key 已生成并注册，SSH 推送可用。
 
 ## 可立即推进
@@ -33,30 +34,6 @@
 - 不写入 token、密码、私钥或 NAS 敏感凭据。
 
 ## 需要外部条件
-
-### T4 NAS 启用 FFmpeg 转码
-
-状态：compose 可选路径已完成，NAS 实测未启用成功，已恢复默认安全配置。
-
-已确认：
-
-- NAS/宿主机存在 `/usr/bin/ffmpeg`，版本 `4.1.9`。
-- 直接挂载宿主机二进制后，容器内会缺少动态库 `libavdevice.so.58`，`/api/system/runtime` 返回 `ffmpeg_available=false`。
-- 使用 `docker-compose.ffmpeg.yml` 自动构建内置 FFmpeg 镜像时，NAS 上 `docker compose up -d --build` 长时间卡住；已终止本地等待并恢复普通 compose。
-- 当前 NAS 已恢复为 `MEDIA_TRANSCODE_ENABLED=false`，服务健康。
-
-当前可用能力：
-
-- `Dockerfile.ffmpeg`
-- `docker-compose.ffmpeg.yml`
-- `docker-compose.ffmpeg-host.yml`
-- `/api/system/runtime`
-
-验收：
-
-- 需要新增更可靠的 FFmpeg 启用方案，例如静态 FFmpeg 二进制挂载，或预构建并推送固定 FFmpeg 镜像。
-- `/api/system/runtime` 返回 `ffmpeg_available=true`。
-- 语音/视频转码样本验收通过。
 
 ### T9 微信 Hook 专用映射
 

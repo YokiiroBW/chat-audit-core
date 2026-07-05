@@ -16,14 +16,14 @@ read_this_first: true
 
 - 当前分支：`main`
 - 远端：`origin/main`
-- 同步状态：`behind=0 ahead=0`
-- 最新提交：`f095768 文档：更新交接状态和剩余队列`
+- 同步状态：本轮完成后需推送 Forgejo，查看 `git status --short --branch` 确认
+- 最新提交：本轮 FFmpeg 静态镜像修复提交（以 `git log -1 --oneline` 为准）
 - 本地全量测试：`144 passed`
-- 最近一次 NAS 部署验收：`f095768 文档：更新交接状态和剩余队列`
+- 最近一次 NAS 部署验收：FFmpeg 静态镜像方案已在 NAS 启动并完成 smoke test
 - NAS 基础验收：健康检查 200、首页 200、管理鉴权 401/200 正常
 - NAS 迁移状态：`20260705_008_capture_target_policies` 已应用
 - NAS 抓取策略接口：`GET /api/bots/{robot_id}/capture-targets` 正常返回已发现群聊/私聊、名称、头像和策略
-- NAS FFmpeg 状态：默认配置已恢复为 `MEDIA_TRANSCODE_ENABLED=false`。宿主机 `/usr/bin/ffmpeg` 存在，但直接挂载进容器会缺少 `libavdevice.so.58`；内置 FFmpeg 镜像构建在 NAS 上卡住，已终止本地等待并恢复普通 compose。
+- NAS FFmpeg 状态：`docker-compose.ffmpeg.yml` 已改为离线安装 `vendor/wheels/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl` 内置静态 FFmpeg，NAS 容器内 `/api/system/runtime` 返回 `ffmpeg_available=true`，版本 `7.0.2-static`；WAV 转 MP3 smoke test 已通过。宿主机挂载方案仍保留为兼容路径，但 NAS 宿主机动态库组合曾出现实际转码段错误，不作为推荐路径。
 
 ## 已完成能力
 
@@ -47,7 +47,7 @@ read_this_first: true
 - 数据库用户密码重置、会话列表、强制下线
 - 数据库迁移体系：轻量迁移注册表、`schema_migrations`、`GET /api/system/migrations`、Alembic CLI
 - 运行时状态：`GET /api/system/runtime`
-- 可选 FFmpeg 转码：宿主机挂载覆盖 `docker-compose.ffmpeg-host.yml`，或自动安装覆盖 `Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`
+- 可选 FFmpeg 转码：推荐使用内置静态 FFmpeg 覆盖 `Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`；宿主机挂载覆盖 `docker-compose.ffmpeg-host.yml` 仅作兼容路径
 - 角色抓取策略：
   - `GET /api/bots/{robot_id}/capture-targets`
   - `PUT /api/bots/{robot_id}/capture-policies/{target_type}/{target_id}`
@@ -113,7 +113,6 @@ git push ssh://git@192.168.31.210:2222/YokiiroBW/chat-audit-core.git main
 
 仍需处理：
 
-- FFmpeg 转码在 NAS 上实际启用：当前两条现有路径均未成功。宿主机挂载受动态库缺失影响，自动安装镜像构建在 NAS 上卡住。后续建议改为提交一个静态 FFmpeg 二进制挂载方案，或构建并推送一个已含 FFmpeg 的固定镜像。
 - 微信 Hook 专用映射：当前已支持常见字段、数字类型和通用样本回放；后续应根据最终选定客户端追加专属真实样本和部署说明。
 - 持续更新交接文档：每次版本推进后更新最新提交、测试数量、NAS 状态和剩余队列。
 

@@ -24,9 +24,14 @@ def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
     dockerfile = (ROOT / "Dockerfile.ffmpeg").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
-    assert "apt-get update" in dockerfile
-    assert "ffmpeg" in dockerfile
-    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
+    assert "apt-get" not in dockerfile
+    assert "COPY vendor/wheels ./vendor/wheels" in dockerfile
+    assert "pip install --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0" in dockerfile
+    assert "imageio-ffmpeg==0.6.0" in dockerfile
+    assert "imageio_ffmpeg.get_ffmpeg_exe()" in dockerfile
+    assert "/usr/local/bin/ffmpeg" in dockerfile
+    assert "ffmpeg -version" in dockerfile
+    assert (ROOT / "vendor/wheels/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl").exists()
     assert "alembic.ini" in dockerfile
     assert "migrations" in dockerfile
     assert "uvicorn" in dockerfile

@@ -108,7 +108,7 @@ FFMPEG_LIBRARY_PATH=
 
 - 语音会尝试转为 MP3，视频会尝试转为 MP4。
 - 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
-- 默认 Docker 镜像保持离线友好，不在构建期联网安装 FFmpeg；需要转码时可以选择挂载宿主机已有 FFmpeg，或自动构建内置 FFmpeg 镜像。
+- 默认 Docker 镜像保持离线友好，不在构建期安装 FFmpeg；需要转码时可以选择内置静态 FFmpeg 镜像，或挂载宿主机已有 FFmpeg。
 
 宿主机/NAS 已经有 FFmpeg 时，可直接挂载可执行文件到容器：
 
@@ -121,11 +121,13 @@ docker compose -f docker-compose.yml -f docker-compose.ffmpeg-host.yml up -d
 
 `docker-compose.ffmpeg-host.yml` 会把宿主机 FFmpeg 二进制挂载到 `/opt/host-bin/ffmpeg`，并把宿主机库目录挂载到 `/opt/host-lib64` 与 `/opt/host-usr-lib`。应用只会在调用 FFmpeg 子进程时注入 `FFMPEG_LIBRARY_PATH`，不会把宿主机库路径设为整个 Python 服务的全局 `LD_LIBRARY_PATH`。
 
-宿主机没有 FFmpeg，且部署环境允许联网 apt 构建时，可自动构建内置 FFmpeg 镜像：
+推荐方式是构建内置静态 FFmpeg 镜像。`Dockerfile.ffmpeg` 会从 `vendor/wheels/` 离线安装 `imageio-ffmpeg`，并把 wheel 内置的静态二进制链接到 `/usr/local/bin/ffmpeg`，不依赖 apt 源：
 
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build
 ```
+
+宿主机挂载路径主要用于本机已有兼容 FFmpeg 的环境。若宿主机二进制依赖动态库，需要同时设置 `FFMPEG_HOST_LIB64`、`FFMPEG_HOST_USR_LIB` 和 `FFMPEG_LIBRARY_PATH`；实际转码仍建议优先使用内置静态镜像。
 
 运行时状态查询：
 
