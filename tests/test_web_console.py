@@ -33,6 +33,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderCQJsonCard" in html
     assert "打开卡片网页" in html
     assert "json-card[href]" in html
+    assert "normalizeCardUrl" in html
+    assert "local_page" in html
+    assert "originalUrl" in html
     assert "decodeHtmlEntities" in html
     assert "renderForwardCard" in html
     assert "/api/forward" in html

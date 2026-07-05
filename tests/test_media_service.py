@@ -1,3 +1,4 @@
+import html
 import json
 
 import httpx
@@ -142,6 +143,56 @@ async def test_rewrite_cq_json_card_downloads_preview_asset(db_session, tmp_path
     assert "http://media.local/preview.jpg" not in rewritten
     assert "https://example.com/page" in rewritten
     assert "/static/storage/" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_rewrite_cq_json_card_caches_page_snapshot(db_session, tmp_path):
+    client = StubAsyncClient(
+        {
+            "http://media.local/preview.jpg": b"preview bytes",
+            "https://example.com/page": b"<html><title>snapshot</title></html>",
+        }
+    )
+    card = {"meta": {"detail_1": {"title": "Card", "preview": "http://media.local/preview.jpg", "url": "https://example.com/page"}}}
+    raw = f"[CQ:json,data={json.dumps(card, ensure_ascii=False).replace(',', '&#44;')}]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+    data = parse_cq_media_segments(rewritten)
+    assets = await MessageService.list_media_assets(db_session)
+    payload = json.loads(html.unescape(rewritten.removeprefix("[CQ:json,data=").removesuffix("]")))
+    detail = payload["meta"]["detail_1"]
+
+    assert data == []
+    assert detail["url"] == "https://example.com/page"
+    assert detail["preview"].startswith("/static/storage/")
+    assert detail["local_page"].startswith("/static/storage/")
+    assert {asset.file_type for asset in assets} == {"image", "card_page"}
+
+
+@pytest.mark.asyncio
+async def test_rewrite_cq_json_card_keeps_url_when_snapshot_fails(db_session, tmp_path):
+    client = StubAsyncClient({"http://media.local/preview.jpg": b"preview bytes"})
+    card = {"meta": {"detail_1": {"title": "Card", "preview": "http://media.local/preview.jpg", "url": "https://example.com/missing"}}}
+    raw = f"[CQ:json,data={json.dumps(card, ensure_ascii=False).replace(',', '&#44;')}]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+    payload = json.loads(html.unescape(rewritten.removeprefix("[CQ:json,data=").removesuffix("]")))
+    detail = payload["meta"]["detail_1"]
+
+    assert detail["url"] == "https://example.com/missing"
+    assert "local_page" not in detail
 
 
 @pytest.mark.asyncio

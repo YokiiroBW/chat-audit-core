@@ -45,6 +45,15 @@ _CARD_MEDIA_KEYS = {
     "thumb",
     "thumbnail",
 }
+_CARD_PAGE_URL_KEYS = {
+    "jumpurl",
+    "link",
+    "pageurl",
+    "qqdocurl",
+    "shareurl",
+    "targeturl",
+    "url",
+}
 _KNOWN_MEDIA_HOST_PARTS = (
     "gchat.qpic.cn",
     "multimedia.nt.qq.com.cn",
@@ -109,7 +118,7 @@ def _guess_ext(url: str, file_name: str | None, media_type: str) -> str:
     if file_suffix:
         return file_suffix
 
-    defaults = {"image": "jpg", "voice": "silk", "video": "mp4", "file": "bin", "json": "json"}
+    defaults = {"image": "jpg", "voice": "silk", "video": "mp4", "file": "bin", "json": "json", "card_page": "html"}
     return defaults[media_type]
 
 
@@ -124,6 +133,17 @@ def _media_type_from_url(url: str, fallback: str = "file") -> str:
     return fallback
 
 
+def _normalize_http_url(url: str) -> str | None:
+    value = url.strip()
+    if value.startswith(("http://", "https://")):
+        return value
+    if value.startswith("//"):
+        return f"https:{value}"
+    if "." in value and not value.startswith(("/", "#")):
+        return f"https://{value}"
+    return None
+
+
 def _looks_like_media_url(url: str, key: str | None = None) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -135,6 +155,16 @@ def _looks_like_media_url(url: str, key: str | None = None) -> bool:
         return True
     suffix = Path(parsed.path).suffix.lstrip(".").lower()
     return suffix in _MEDIA_EXTENSIONS
+
+
+def _looks_like_card_page_url(url: str, key: str | None = None) -> bool:
+    lowered_key = (key or "").lower()
+    if lowered_key not in _CARD_PAGE_URL_KEYS:
+        return False
+    normalized = _normalize_http_url(url)
+    if normalized is None:
+        return False
+    return not _looks_like_media_url(normalized, key)
 
 
 def parse_cq_media_segments(raw_message: str) -> list[CQMediaSegment]:
@@ -253,6 +283,84 @@ class MediaService:
         return value
 
     @staticmethod
+    async def _cache_card_page_url(
+        db: AsyncSession,
+        url: str,
+        http_client: Any | None,
+        storage_root: str | Path | None,
+        public_prefix: str | None,
+        max_bytes: int | None,
+    ) -> str | None:
+        normalized = _normalize_http_url(url)
+        if normalized is None:
+            return None
+        return await MediaService.download_url_to_local_path(
+            db,
+            normalized,
+            media_type="card_page",
+            file_name="card.html",
+            http_client=http_client,
+            storage_root=storage_root,
+            public_prefix=public_prefix,
+            max_bytes=max_bytes,
+        )
+
+    @staticmethod
+    async def _cache_card_page_snapshots(
+        db: AsyncSession,
+        value: Any,
+        http_client: Any | None,
+        storage_root: str | Path | None,
+        public_prefix: str | None,
+        max_bytes: int | None,
+        key: str | None = None,
+    ) -> Any:
+        if isinstance(value, dict):
+            cached: dict[str, Any] = {}
+            page_candidates: list[str] = []
+            existing_local_page = value.get("local_page")
+            for child_key, child_value in value.items():
+                cached[child_key] = await MediaService._cache_card_page_snapshots(
+                    db,
+                    child_value,
+                    http_client,
+                    storage_root,
+                    public_prefix,
+                    max_bytes,
+                    str(child_key),
+                )
+                if isinstance(child_value, str) and _looks_like_card_page_url(child_value, str(child_key)):
+                    page_candidates.append(child_value)
+            if not existing_local_page:
+                for candidate in page_candidates:
+                    local_page = await MediaService._cache_card_page_url(
+                        db,
+                        candidate,
+                        http_client,
+                        storage_root,
+                        public_prefix,
+                        max_bytes,
+                    )
+                    if local_page:
+                        cached["local_page"] = local_page
+                        break
+            return cached
+        if isinstance(value, list):
+            return [
+                await MediaService._cache_card_page_snapshots(
+                    db,
+                    item,
+                    http_client,
+                    storage_root,
+                    public_prefix,
+                    max_bytes,
+                    key,
+                )
+                for item in value
+            ]
+        return value
+
+    @staticmethod
     async def _localize_card_data(
         db: AsyncSession,
         data: str,
@@ -289,6 +397,14 @@ class MediaService:
         localized = await MediaService._localize_json_value(
             db,
             payload,
+            http_client,
+            storage_root,
+            public_prefix,
+            max_bytes,
+        )
+        localized = await MediaService._cache_card_page_snapshots(
+            db,
+            localized,
             http_client,
             storage_root,
             public_prefix,

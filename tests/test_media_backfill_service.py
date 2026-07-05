@@ -1,3 +1,6 @@
+import html
+import json
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -128,6 +131,43 @@ async def test_backfill_historical_media_caches_unclicked_forward_payload(db_ses
     assert report.forward_failed == 0
     assert "local=/static/storage/" in messages[0].local_message
     assert {asset.file_type for asset in assets} == {"image", "forward"}
+
+
+@pytest.mark.asyncio
+async def test_backfill_historical_media_caches_old_card_page_snapshot(db_session, tmp_path):
+    client = StubAsyncClient({"https://example.com/page": b"<html>card snapshot</html>"})
+    card = {"meta": {"detail_1": {"title": "Card", "preview": "/static/storage/existing.jpg", "url": "https://example.com/page"}}}
+    raw = f"[CQ:json,data={json.dumps(card, ensure_ascii=False).replace(',', '&#44;')}]"
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-card",
+        "qq",
+        {
+            "room_id": "group-card",
+            "message_type": "group",
+            "sender_id": "user-card",
+            "nickname": "Card User",
+            "raw_message": raw,
+            "timestamp": 1783000000,
+        },
+    )
+
+    report = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    payload = json.loads(html.unescape(messages[0].local_message.removeprefix("[CQ:json,data=").removesuffix("]")))
+    detail = payload["meta"]["detail_1"]
+
+    assert report.candidates == 1
+    assert report.updated == 1
+    assert report.failed == 0
+    assert detail["url"] == "https://example.com/page"
+    assert detail["local_page"].startswith("/static/storage/")
 
 
 @pytest.mark.asyncio

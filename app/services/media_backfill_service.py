@@ -12,6 +12,7 @@ from app.services.media_service import (
     _CQ_PATTERN,
     _URL_PATTERN,
     _looks_like_media_url,
+    _looks_like_card_page_url,
     _parse_cq_params,
     parse_cq_media_segments,
 )
@@ -87,6 +88,40 @@ def _find_card_media_urls(local_message: str) -> list[str]:
     return urls
 
 
+def _iter_uncached_card_page_urls(value: Any, key: str | None = None) -> list[str]:
+    if isinstance(value, dict):
+        urls: list[str] = []
+        has_local_page = bool(value.get("local_page"))
+        for child_key, child_value in value.items():
+            urls.extend(_iter_uncached_card_page_urls(child_value, str(child_key)))
+            if not has_local_page and isinstance(child_value, str) and _looks_like_card_page_url(child_value, str(child_key)):
+                urls.append(child_value)
+        return urls
+    if isinstance(value, list):
+        urls = []
+        for item in value:
+            urls.extend(_iter_uncached_card_page_urls(item, key))
+        return urls
+    return []
+
+
+def _find_uncached_card_page_urls(local_message: str) -> list[str]:
+    urls: list[str] = []
+    for match in _CQ_PATTERN.finditer(local_message):
+        if match.group("kind") not in {"json", "xml"}:
+            continue
+        params = _parse_cq_params(match.group("params"))
+        data = params.get("data")
+        if not data:
+            continue
+        try:
+            payload = json.loads(html.unescape(data))
+        except json.JSONDecodeError:
+            continue
+        urls.extend(_iter_uncached_card_page_urls(payload))
+    return urls
+
+
 def _find_uncached_forward_ids(local_message: str) -> list[str]:
     forward_ids: list[str] = []
     for match in _CQ_PATTERN.finditer(local_message):
@@ -106,7 +141,7 @@ def _find_uncached_media_urls(local_message: str) -> list[str]:
 
 
 def _needs_backfill(local_message: str) -> bool:
-    return bool(_find_uncached_forward_ids(local_message) or _find_uncached_media_urls(local_message))
+    return bool(_find_uncached_forward_ids(local_message) or _find_uncached_media_urls(local_message) or _find_uncached_card_page_urls(local_message))
 
 
 class MediaBackfillService:
@@ -143,6 +178,7 @@ class MediaBackfillService:
 
             before = message.local_message
             before_media_urls = set(_find_uncached_media_urls(before))
+            before_card_page_urls = set(_find_uncached_card_page_urls(before))
             before_forward_ids = set(_find_uncached_forward_ids(before))
 
             rewritten = await MediaService.rewrite_cq_media_to_local_paths(
@@ -176,6 +212,13 @@ class MediaBackfillService:
             for url in sorted(before_media_urls & after_media_urls):
                 report.add_failure(
                     MediaBackfillFailure(message.msg_hash, "media", url, "download_failed_or_expired"),
+                    failure_limit,
+                )
+
+            after_card_page_urls = set(_find_uncached_card_page_urls(rewritten))
+            for url in sorted(before_card_page_urls & after_card_page_urls):
+                report.add_failure(
+                    MediaBackfillFailure(message.msg_hash, "card_page", url, "snapshot_failed_or_unavailable"),
                     failure_limit,
                 )
 

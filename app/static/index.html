@@ -1316,6 +1316,14 @@
       return parseCQParams(match[1]);
     };
 
+    const normalizeCardUrl = (url) => {
+      if (!url) return '';
+      if (url.startsWith('/')) return url;
+      if (url.startsWith('http')) return url;
+      if (url.startsWith('//')) return `https:${url}`;
+      return `https://${url}`;
+    };
+
     const renderCQJsonCard = (container, data) => {
       let payload = null;
       try {
@@ -1328,21 +1336,24 @@
       const title = detail && detail.title ? detail.title : payload.prompt || payload.app || 'JSON 卡片';
       const desc = detail && detail.desc ? detail.desc : payload.prompt || '';
       const url = detail && (detail.qqdocurl || detail.url);
+      const localPage = detail && detail.local_page;
       const preview = detail && (detail.preview || detail.icon);
 
-      const cleanUrl = url ? (url.startsWith('http') ? url : `https://${url}`) : '';
+      const cleanUrl = normalizeCardUrl(localPage || url || '');
+      const originalUrl = normalizeCardUrl(url || '');
       const card = document.createElement(cleanUrl ? 'a' : 'div');
       card.className = 'json-card';
       if (cleanUrl) {
         card.href = cleanUrl;
         card.target = '_blank';
         card.rel = 'noreferrer';
-        card.title = '打开卡片网页';
+        if (localPage && originalUrl) card.dataset.originalUrl = originalUrl;
+        card.title = localPage && originalUrl ? `打开本地快照：${originalUrl}` : '打开卡片网页';
       }
       if (preview) {
         const img = document.createElement('img');
         img.className = 'json-card-img';
-        img.src = preview.startsWith('http') ? preview : `https://${preview}`;
+        img.src = normalizeCardUrl(preview);
         img.alt = title;
         card.appendChild(img);
       }
