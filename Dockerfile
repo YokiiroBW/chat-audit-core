@@ -11,6 +11,8 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
 COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
 COPY data/storage/.gitkeep ./data/storage/.gitkeep
 COPY data/backups/.gitkeep ./data/backups/.gitkeep
 

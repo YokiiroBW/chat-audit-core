@@ -13,6 +13,8 @@ def test_dockerfile_uses_offline_friendly_runtime_and_runs_uvicorn():
     assert "curl" not in dockerfile
     assert "pip install" in dockerfile
     assert "requirements.txt" in dockerfile
+    assert "alembic.ini" in dockerfile
+    assert "migrations" in dockerfile
     assert "uvicorn" in dockerfile
     assert "app.main:app" in dockerfile
     assert "urllib.request" in dockerfile
@@ -25,6 +27,8 @@ def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
     assert "apt-get update" in dockerfile
     assert "ffmpeg" in dockerfile
     assert "rm -rf /var/lib/apt/lists/*" in dockerfile
+    assert "alembic.ini" in dockerfile
+    assert "migrations" in dockerfile
     assert "uvicorn" in dockerfile
 
 
