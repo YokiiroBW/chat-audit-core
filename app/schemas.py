@@ -215,6 +215,7 @@ class MigrationStatusResponse(BaseModel):
 class RuntimeStatusResponse(BaseModel):
     media_transcode_enabled: bool
     ffmpeg_bin: str
+    ffmpeg_library_path: str = ""
     ffmpeg_available: bool
     ffmpeg_path: str | None = None
     ffmpeg_version: str | None = None

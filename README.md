@@ -101,6 +101,7 @@ MEDIA_TRANSCODE_ENABLED=true
 MEDIA_TRANSCODE_VOICE_EXT=mp3
 MEDIA_TRANSCODE_VIDEO_EXT=mp4
 FFMPEG_BIN=ffmpeg
+FFMPEG_LIBRARY_PATH=
 ```
 
 说明：
@@ -113,8 +114,12 @@ FFMPEG_BIN=ffmpeg
 
 ```powershell
 $env:FFMPEG_HOST_BIN='/usr/bin/ffmpeg'
+$env:FFMPEG_HOST_LIB64='/lib64'
+$env:FFMPEG_HOST_USR_LIB='/usr/lib'
 docker compose -f docker-compose.yml -f docker-compose.ffmpeg-host.yml up -d
 ```
+
+`docker-compose.ffmpeg-host.yml` 会把宿主机 FFmpeg 二进制挂载到 `/opt/host-bin/ffmpeg`，并把宿主机库目录挂载到 `/opt/host-lib64` 与 `/opt/host-usr-lib`。应用只会在调用 FFmpeg 子进程时注入 `FFMPEG_LIBRARY_PATH`，不会把宿主机库路径设为整个 Python 服务的全局 `LD_LIBRARY_PATH`。
 
 宿主机没有 FFmpeg，且部署环境允许联网 apt 构建时，可自动构建内置 FFmpeg 镜像：
 

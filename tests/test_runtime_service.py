@@ -18,20 +18,36 @@ def test_runtime_service_reports_missing_ffmpeg(monkeypatch):
 
 
 def test_runtime_service_reports_ffmpeg_version(monkeypatch):
+    seen = {}
+
     class Completed:
         returncode = 0
         stdout = "ffmpeg version 6.1-test\nbuilt with test"
         stderr = ""
 
     monkeypatch.setattr("app.services.runtime_service.shutil.which", lambda _: "C:/tools/ffmpeg.exe")
-    monkeypatch.setattr("app.services.runtime_service.subprocess.run", lambda *args, **kwargs: Completed())
 
-    status = RuntimeService.ffmpeg_status(Settings(ffmpeg_bin="ffmpeg", media_transcode_enabled=True))
+    def fake_run(*args, **kwargs):
+        seen["args"] = args
+        seen["env"] = kwargs.get("env")
+        return Completed()
+
+    monkeypatch.setattr("app.services.runtime_service.subprocess.run", fake_run)
+
+    status = RuntimeService.ffmpeg_status(
+        Settings(
+            ffmpeg_bin="ffmpeg",
+            ffmpeg_library_path="/opt/host-lib64:/opt/host-usr-lib",
+            media_transcode_enabled=True,
+        )
+    )
 
     assert status["media_transcode_enabled"] is True
+    assert status["ffmpeg_library_path"] == "/opt/host-lib64:/opt/host-usr-lib"
     assert status["ffmpeg_available"] is True
     assert status["ffmpeg_path"] == "C:/tools/ffmpeg.exe"
     assert status["ffmpeg_version"] == "ffmpeg version 6.1-test"
+    assert seen["env"]["LD_LIBRARY_PATH"] == "/opt/host-lib64:/opt/host-usr-lib"
 
 
 @pytest.mark.asyncio
@@ -50,4 +66,5 @@ async def test_runtime_status_api(db_session, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["ffmpeg_bin"] == "missing-ffmpeg"
+    assert response.json()["ffmpeg_library_path"] == ""
     assert response.json()["ffmpeg_available"] is False

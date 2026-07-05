@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     media_download_timeout_seconds: int = 30
     media_max_bytes: int = 104857600
     ffmpeg_bin: str = "ffmpeg"
+    ffmpeg_library_path: str = ""
     media_transcode_enabled: bool = False
     media_transcode_voice_ext: str = "mp3"
     media_transcode_video_ext: str = "mp4"

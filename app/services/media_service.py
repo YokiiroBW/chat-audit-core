@@ -1,6 +1,7 @@
 import asyncio
 import html
 import json
+import os
 import re
 from copy import deepcopy
 from dataclasses import dataclass
@@ -239,6 +240,7 @@ class MediaService:
         media_type: str,
         *,
         ffmpeg_bin: str,
+        ffmpeg_library_path: str = "",
         voice_ext: str = "mp3",
         video_ext: str = "mp4",
     ) -> TranscodedMedia | None:
@@ -255,12 +257,18 @@ class MediaService:
             "pipe:0",
             *MediaService._ffmpeg_args_for(media_type, target_ext),
         ]
+        env = None
+        library_path = ffmpeg_library_path.strip()
+        if library_path:
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = library_path
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             stdout, _stderr = await process.communicate(content)
         except (FileNotFoundError, OSError):
@@ -278,6 +286,7 @@ class MediaService:
         *,
         enabled: bool,
         ffmpeg_bin: str,
+        ffmpeg_library_path: str,
         voice_ext: str,
         video_ext: str,
         max_bytes: int,
@@ -289,6 +298,7 @@ class MediaService:
             content,
             media_type,
             ffmpeg_bin=ffmpeg_bin,
+            ffmpeg_library_path=ffmpeg_library_path,
             voice_ext=voice_ext,
             video_ext=video_ext,
         )
@@ -393,6 +403,7 @@ class MediaService:
                 ext,
                 enabled=settings.media_transcode_enabled if transcode_enabled is None else transcode_enabled,
                 ffmpeg_bin=ffmpeg_bin or settings.ffmpeg_bin,
+                ffmpeg_library_path=settings.ffmpeg_library_path,
                 voice_ext=settings.media_transcode_voice_ext,
                 video_ext=settings.media_transcode_video_ext,
                 max_bytes=media_max_bytes,

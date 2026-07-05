@@ -130,10 +130,11 @@ async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_pat
 async def test_download_url_to_local_path_transcodes_voice_when_enabled(db_session, tmp_path, monkeypatch):
     client = StubAsyncClient({"http://media.local/v.silk": b"silk voice"})
 
-    async def fake_transcode(content, media_type, *, ffmpeg_bin, voice_ext="mp3", video_ext="mp4"):
+    async def fake_transcode(content, media_type, *, ffmpeg_bin, ffmpeg_library_path="", voice_ext="mp3", video_ext="mp4"):
         assert content == b"silk voice"
         assert media_type == "voice"
         assert ffmpeg_bin == "fake-ffmpeg"
+        assert ffmpeg_library_path == ""
         assert voice_ext == "mp3"
         return TranscodedMedia(content=b"mp3 voice", ext="mp3")
 
@@ -163,7 +164,7 @@ async def test_download_url_to_local_path_transcodes_voice_when_enabled(db_sessi
 async def test_download_url_to_local_path_keeps_original_when_transcode_fails(db_session, tmp_path, monkeypatch):
     client = StubAsyncClient({"http://media.local/v.silk": b"silk voice"})
 
-    async def fake_transcode(content, media_type, *, ffmpeg_bin, voice_ext="mp3", video_ext="mp4"):
+    async def fake_transcode(content, media_type, *, ffmpeg_bin, ffmpeg_library_path="", voice_ext="mp3", video_ext="mp4"):
         return None
 
     monkeypatch.setattr(MediaService, "transcode_media_bytes", fake_transcode)

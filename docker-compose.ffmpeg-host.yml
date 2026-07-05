@@ -3,5 +3,8 @@ services:
     environment:
       MEDIA_TRANSCODE_ENABLED: "true"
       FFMPEG_BIN: /opt/host-bin/ffmpeg
+      FFMPEG_LIBRARY_PATH: /opt/host-lib64:/opt/host-usr-lib
     volumes:
       - ${FFMPEG_HOST_BIN:?Set FFMPEG_HOST_BIN to the host ffmpeg executable path}:/opt/host-bin/ffmpeg:ro
+      - ${FFMPEG_HOST_LIB64:-/lib64}:/opt/host-lib64:ro
+      - ${FFMPEG_HOST_USR_LIB:-/usr/lib}:/opt/host-usr-lib:ro

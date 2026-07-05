@@ -48,6 +48,7 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert services["app"]["environment"]["ADMIN_API_TOKENS"] == "${ADMIN_API_TOKENS:-}"
     assert services["app"]["environment"]["ONEBOT_ACCESS_TOKEN"] == "${ONEBOT_ACCESS_TOKEN}"
     assert services["app"]["environment"]["FFMPEG_BIN"] == "ffmpeg"
+    assert services["app"]["environment"]["FFMPEG_LIBRARY_PATH"] == "${FFMPEG_LIBRARY_PATH:-}"
     assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"
     assert services["app"]["environment"]["MEDIA_TRANSCODE_VOICE_EXT"] == "mp3"
     assert services["app"]["environment"]["MEDIA_TRANSCODE_VIDEO_EXT"] == "mp4"
@@ -77,7 +78,10 @@ def test_host_ffmpeg_compose_override_mounts_existing_binary():
     app = compose["services"]["app"]
     assert app["environment"]["MEDIA_TRANSCODE_ENABLED"] == "true"
     assert app["environment"]["FFMPEG_BIN"] == "/opt/host-bin/ffmpeg"
+    assert app["environment"]["FFMPEG_LIBRARY_PATH"] == "/opt/host-lib64:/opt/host-usr-lib"
     assert "${FFMPEG_HOST_BIN:?Set FFMPEG_HOST_BIN to the host ffmpeg executable path}:/opt/host-bin/ffmpeg:ro" in app["volumes"]
+    assert "${FFMPEG_HOST_LIB64:-/lib64}:/opt/host-lib64:ro" in app["volumes"]
+    assert "${FFMPEG_HOST_USR_LIB:-/usr/lib}:/opt/host-usr-lib:ro" in app["volumes"]
 
 
 def test_dockerignore_excludes_runtime_and_secret_files():
