@@ -111,3 +111,74 @@ async def test_database_managed_admin_token_rotation(db_session):
     assert rotated.json()["token_prefix"] == new_token[:12]
     assert old_read.status_code == 401
     assert new_read.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_user_password_reset_revokes_existing_sessions(db_session):
+    settings = Settings(admin_api_token="bootstrap-admin")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            created = await client.post(
+                "/api/admin/users",
+                headers={"Authorization": "Bearer bootstrap-admin"},
+                json={"username": "reset-user", "password": "old-password-1", "role": "viewer"},
+            )
+            login = await client.post("/api/auth/login", json={"username": "reset-user", "password": "old-password-1"})
+            old_session_token = login.json()["token"]
+            reset = await client.post(
+                f"/api/admin/users/{created.json()['id']}/password",
+                headers={"Authorization": "Bearer bootstrap-admin"},
+                json={"password": "new-password-1"},
+            )
+            old_session_read = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {old_session_token}"})
+            old_password_login = await client.post("/api/auth/login", json={"username": "reset-user", "password": "old-password-1"})
+            new_password_login = await client.post("/api/auth/login", json={"username": "reset-user", "password": "new-password-1"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert created.status_code == 201
+    assert login.status_code == 200
+    assert reset.status_code == 200
+    assert old_session_read.status_code == 401
+    assert old_password_login.status_code == 401
+    assert new_password_login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_can_list_and_force_revoke_sessions(db_session):
+    settings = Settings(admin_api_token="bootstrap-admin")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post(
+                "/api/admin/users",
+                headers={"Authorization": "Bearer bootstrap-admin"},
+                json={"username": "session-user", "password": "strong-password-1", "role": "viewer"},
+            )
+            login = await client.post("/api/auth/login", json={"username": "session-user", "password": "strong-password-1"})
+            session_token = login.json()["token"]
+            sessions = await client.get("/api/admin/sessions", headers={"Authorization": "Bearer bootstrap-admin"})
+            session_id = sessions.json()[0]["id"]
+            revoked = await client.delete(f"/api/admin/sessions/{session_id}", headers={"Authorization": "Bearer bootstrap-admin"})
+            after_revoke = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {session_token}"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert login.status_code == 200
+    assert sessions.status_code == 200
+    assert sessions.json()[0]["username"] == "session-user"
+    assert sessions.json()[0]["status"] == "active"
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+    assert after_revoke.status_code == 401

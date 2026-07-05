@@ -119,13 +119,22 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/auth/me" in html
     assert "/api/auth/logout" in html
     assert "/api/admin/users" in html
+    assert "/api/admin/sessions" in html
+    assert "/api/admin/users/${encodeURIComponent(userId)}/password" in html
+    assert "/api/admin/sessions/${encodeURIComponent(sessionId)}" in html
     assert "loginWithPassword" in html
     assert "logoutAuth" in html
     assert "refreshAuthIdentity" in html
     assert "createAdminUser" in html
     assert "revokeAdminUser" in html
+    assert "refreshAdminSessions" in html
+    assert "resetAdminUserPassword" in html
+    assert "revokeAdminSession" in html
+    assert "applyRoleUi" in html
+    assert "canRole('admin')" in html
     assert "authStatusReport" in html
     assert "adminUserList" in html
+    assert "adminSessionList" in html
     assert "/api/import/validate" in html
     assert "/api/import" in html
     assert "signature" in html

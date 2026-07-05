@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.wechat_pc import normalize_wechat_event
 from app.config import Settings, get_settings
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
-from app.models import Message, RobotMessage, SchemaMigration
+from app.models import AdminUser, Message, RobotMessage, SchemaMigration
 from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
@@ -21,7 +21,9 @@ from app.schemas import (
     AdminTokenRotateResponse,
     AdminTokenResponse,
     AdminUserCreateRequest,
+    AdminUserPasswordResetRequest,
     AdminUserResponse,
+    AdminSessionResponse,
     AuditLogResponse,
     AuthLoginRequest,
     AuthLoginResponse,
@@ -490,6 +492,28 @@ async def list_admin_users(
     return [AdminUserResponse.model_validate(user) for user in users]
 
 
+@router.get("/admin/sessions", response_model=list[AdminSessionResponse])
+async def list_admin_sessions(
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("admin")),
+) -> list[AdminSessionResponse]:
+    sessions = await AdminUserService.list_sessions(db)
+    return [
+        AdminSessionResponse(
+            id=session.id,
+            user_id=user.id,
+            username=user.username,
+            role=user.role,
+            token_prefix=session.token_prefix,
+            status=session.status,
+            created_at=session.created_at,
+            last_used_at=session.last_used_at,
+            revoked_at=session.revoked_at,
+        )
+        for session, user in sessions
+    ]
+
+
 @router.post("/admin/users", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
 async def create_admin_user(
     payload: AdminUserCreateRequest,
@@ -515,6 +539,25 @@ async def create_admin_user(
     return AdminUserResponse.model_validate(user)
 
 
+@router.post("/admin/users/{user_id}/password", response_model=AdminUserResponse)
+async def reset_admin_user_password(
+    user_id: int,
+    payload: AdminUserPasswordResetRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminUserResponse:
+    action = "admin_user.password_reset"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    user = await AdminUserService.reset_password(db, user_id, payload.password)
+    if user is None:
+        await _audit(db, request, action=action, status_="failed", target=str(user_id), detail={"reason": "not_found"})
+        raise HTTPException(status_code=404, detail="admin user not found")
+    await _audit(db, request, action=action, status_="success", target=str(user.id), detail={"username": user.username, "role": user.role})
+    return AdminUserResponse.model_validate(user)
+
+
 @router.delete("/admin/users/{user_id}", response_model=AdminUserResponse)
 async def revoke_admin_user(
     user_id: int,
@@ -531,6 +574,37 @@ async def revoke_admin_user(
         raise HTTPException(status_code=404, detail="admin user not found")
     await _audit(db, request, action=action, status_="success", target=str(user.id), detail={"username": user.username, "role": user.role})
     return AdminUserResponse.model_validate(user)
+
+
+@router.delete("/admin/sessions/{session_id}", response_model=AdminSessionResponse)
+async def revoke_admin_session(
+    session_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    _: None = Depends(require_admin_role("admin")),
+) -> AdminSessionResponse:
+    action = "admin_session.revoke"
+    _enforce_high_risk_rate_limit(request, action, settings)
+    session = await AdminUserService.revoke_session_by_id(db, session_id)
+    if session is None:
+        await _audit(db, request, action=action, status_="failed", target=str(session_id), detail={"reason": "not_found"})
+        raise HTTPException(status_code=404, detail="admin session not found")
+    user = await db.get(AdminUser, session.user_id)
+    username = user.username if user is not None else str(session.user_id)
+    role = user.role if user is not None else "viewer"
+    await _audit(db, request, action=action, status_="success", target=str(session.id), detail={"user_id": session.user_id})
+    return AdminSessionResponse(
+        id=session.id,
+        user_id=session.user_id,
+        username=username,
+        role=role,
+        token_prefix=session.token_prefix,
+        status=session.status,
+        created_at=session.created_at,
+        last_used_at=session.last_used_at,
+        revoked_at=session.revoked_at,
+    )
 
 
 @router.get("/system/migrations", response_model=list[MigrationStatusResponse])

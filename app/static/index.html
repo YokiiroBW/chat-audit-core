@@ -659,6 +659,11 @@
         </div>
         <div id="adminUserCreateReport" class="report" hidden></div>
         <div id="adminUserList" class="adapter-list"></div>
+        <div class="settings-title">
+          <span>登录会话</span>
+          <button id="refreshAdminSessionsButton" class="btn link">刷新会话</button>
+        </div>
+        <div id="adminSessionList" class="adapter-list"></div>
         <div id="adapterList" class="adapter-list"></div>
       </div>
 
@@ -770,6 +775,8 @@
       adminUserList: [],
       adminUserCreateResult: null,
       adminUserError: '',
+      adminSessionList: [],
+      adminSessionError: '',
       authIdentity: null,
       authError: '',
       currentRobot: null,
@@ -790,6 +797,9 @@
 
     const el = (id) => document.getElementById(id);
     const text = (value) => value === null || value === undefined ? '' : String(value);
+    const currentRole = () => state.authIdentity ? state.authIdentity.role : (state.adminApiToken ? 'admin' : 'viewer');
+    const roleRank = (role) => ({ viewer: 1, operator: 2, admin: 3 })[role] || 1;
+    const canRole = (role) => roleRank(currentRole()) >= roleRank(role);
 
     const promptForAdminApiToken = () => {
       const token = window.prompt('请输入管理 API Token');
@@ -920,6 +930,8 @@
         const binding = acc.current_robot_id ? ` -> ${acc.current_robot_id}` : '';
         const edit = button(`${acc.id}${binding} · ${acc.platform} · ${acc.status}`, 'btn link truncate', () => editAdapter(acc));
         const remove = button('删除', 'btn link danger', () => deleteAdapter(acc.id));
+        edit.disabled = !canRole('operator');
+        remove.disabled = !canRole('admin');
         row.append(edit, remove);
         container.appendChild(row);
       });
@@ -1052,7 +1064,9 @@
       renderBackupStatus();
       renderAdminTokens();
       renderAdminUsers();
+      renderAdminSessions();
       renderAdapters();
+      applyRoleUi();
     };
 
     const renderAuthStatus = () => {
@@ -1149,7 +1163,7 @@
         label.className = 'truncate';
         label.textContent = `${token.name} · ${token.role} · ${token.status} · ${token.token_prefix}`;
         const revoke = button('吊销', 'btn link danger', () => revokeAdminToken(token.id));
-        revoke.disabled = token.status === 'revoked';
+        revoke.disabled = token.status === 'revoked' || !canRole('admin');
         row.append(label, revoke);
         container.appendChild(row);
       });
@@ -1186,11 +1200,57 @@
         const label = document.createElement('span');
         label.className = 'truncate';
         label.textContent = `${user.username} · ${user.role} · ${user.status}`;
+        const reset = button('重置密码', 'btn link', () => resetAdminUserPassword(user.id));
         const revoke = button('禁用', 'btn link danger', () => revokeAdminUser(user.id));
-        revoke.disabled = user.status === 'revoked';
+        reset.disabled = user.status === 'revoked' || !canRole('admin');
+        revoke.disabled = user.status === 'revoked' || !canRole('admin');
+        row.append(label, reset, revoke);
+        container.appendChild(row);
+      });
+    };
+
+    const renderAdminSessions = () => {
+      const container = el('adminSessionList');
+      clearNode(container);
+      if (state.adminSessionError) {
+        const error = document.createElement('div');
+        error.className = 'bad';
+        error.textContent = state.adminSessionError;
+        container.appendChild(error);
+        return;
+      }
+      if (!state.adminSessionList.length) {
+        const empty = document.createElement('div');
+        empty.className = 'hint';
+        empty.textContent = '暂无登录会话';
+        container.appendChild(empty);
+        return;
+      }
+      state.adminSessionList.forEach((session) => {
+        const row = document.createElement('div');
+        row.className = 'adapter-item';
+        const label = document.createElement('span');
+        label.className = 'truncate';
+        label.textContent = `${session.username} · ${session.role} · ${session.status} · ${session.token_prefix}`;
+        const revoke = button('强制下线', 'btn link danger', () => revokeAdminSession(session.id));
+        revoke.disabled = session.status === 'revoked' || !canRole('admin');
         row.append(label, revoke);
         container.appendChild(row);
       });
+    };
+
+    const applyRoleUi = () => {
+      const isAdmin = canRole('admin');
+      const isOperator = canRole('operator');
+      el('createAdminTokenButton').disabled = !isAdmin;
+      el('createAdminUserButton').disabled = !isAdmin;
+      el('refreshAdminSessionsButton').disabled = !isAdmin;
+      el('saveAdapterButton').disabled = !isOperator;
+      el('runBackupButton').disabled = !isOperator;
+      el('saveBackupSettingsButton').disabled = el('saveBackupSettingsButton').disabled || !isOperator;
+      el('resetBackupSettingsButton').disabled = el('resetBackupSettingsButton').disabled || !isOperator;
+      el('repairOfflineAuditButton').disabled = !isOperator;
+      el('openImportButton').disabled = !isAdmin;
     };
 
     const renderChat = () => {
@@ -1696,6 +1756,7 @@
       await refreshAuthIdentity();
       await refreshAdminTokens();
       await refreshAdminUsers();
+      await refreshAdminSessions();
       if (state.accountList.length > 0 && !state.currentRobot) {
         await switchAccount(state.accountList[0]);
       } else {
@@ -1810,6 +1871,17 @@
       }
     }
 
+    async function refreshAdminSessions() {
+      try {
+        state.adminSessionList = await apiGet('/api/admin/sessions');
+        state.adminSessionError = '';
+      } catch (error) {
+        state.adminSessionList = [];
+        state.adminSessionError = error.message || String(error);
+      }
+      renderSettings();
+    }
+
     async function refreshAuthIdentity() {
       if (!state.adminApiToken) {
         state.authIdentity = null;
@@ -1901,6 +1973,25 @@
       await apiSend(`/api/admin/users/${encodeURIComponent(userId)}`, 'DELETE');
       state.adminUserCreateResult = null;
       await refreshAdminUsers();
+      await refreshAdminSessions();
+      renderSettings();
+    }
+
+    async function resetAdminUserPassword(userId) {
+      const password = window.prompt('请输入新密码（至少 8 位）');
+      if (!password) return;
+      await apiSend(`/api/admin/users/${encodeURIComponent(userId)}/password`, 'POST', { password });
+      state.adminUserCreateResult = null;
+      await refreshAdminUsers();
+      await refreshAdminSessions();
+      await refreshAuthIdentity();
+      renderSettings();
+    }
+
+    async function revokeAdminSession(sessionId) {
+      await apiSend(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, 'DELETE');
+      await refreshAdminSessions();
+      await refreshAuthIdentity();
       renderSettings();
     }
 
@@ -2174,6 +2265,7 @@
       el('resetBackupSettingsButton').addEventListener('click', resetBackupSettings);
       el('createAdminTokenButton').addEventListener('click', createAdminToken);
       el('createAdminUserButton').addEventListener('click', createAdminUser);
+      el('refreshAdminSessionsButton').addEventListener('click', refreshAdminSessions);
       el('searchButton').addEventListener('click', performSearch);
       el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
       el('clearSearchButton').addEventListener('click', clearSearch);
@@ -2220,6 +2312,9 @@
     window.refreshAuthIdentity = refreshAuthIdentity;
     window.createAdminUser = createAdminUser;
     window.revokeAdminUser = revokeAdminUser;
+    window.refreshAdminSessions = refreshAdminSessions;
+    window.resetAdminUserPassword = resetAdminUserPassword;
+    window.revokeAdminSession = revokeAdminSession;
 
     bindEvents();
     renderAll();

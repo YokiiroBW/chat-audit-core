@@ -239,11 +239,14 @@ GET  /api/auth/me
 POST /api/auth/logout
 GET  /api/admin/users
 POST /api/admin/users      # body: {"username":"ops","password":"...","role":"operator"}
+POST /api/admin/users/{id}/password  # body: {"password":"new-password"}
 DELETE /api/admin/users/{id}
+GET  /api/admin/sessions
+DELETE /api/admin/sessions/{id}
 ```
 
 生产环境建议仍保留一个静态 `ADMIN_API_TOKEN` 作为 bootstrap/应急入口，再用数据库托管 Token 分配日常只读或运维权限。
-Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建、吊销入口，以及数据库用户创建、列表、禁用、登录、退出和当前角色显示。
+Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建、吊销入口，以及数据库用户创建、列表、禁用、密码重置、会话列表、强制下线、登录、退出和当前角色显示；高风险控件会按当前角色禁用。
 
 ## 操作审计与限流
 
@@ -255,7 +258,7 @@ Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建
 - 离线修复。
 - 导入 JSON。
 - 手动备份。
-- 用户登录/退出、数据库用户创建、Token 创建/轮换/吊销。
+- 用户登录/退出、数据库用户创建/禁用/密码重置、数据库会话强制下线、Token 创建/轮换/吊销。
 
 查询接口：
 

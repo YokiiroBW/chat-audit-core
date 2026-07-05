@@ -96,6 +96,15 @@ class AdminUserService:
         return list(result.scalars().all())
 
     @staticmethod
+    async def list_sessions(db: AsyncSession) -> list[tuple[AdminSession, AdminUser]]:
+        result = await db.execute(
+            select(AdminSession, AdminUser)
+            .join(AdminUser, AdminUser.id == AdminSession.user_id)
+            .order_by(desc(AdminSession.created_at), desc(AdminSession.id))
+        )
+        return [(session, user) for session, user in result.all()]
+
+    @staticmethod
     async def authenticate(db: AsyncSession, *, username: str, password: str) -> AdminUser | None:
         user = await AdminUserService.get_user_by_username(db, username)
         if user is None or user.status != "active":
@@ -157,6 +166,18 @@ class AdminUserService:
         return session
 
     @staticmethod
+    async def revoke_session_by_id(db: AsyncSession, session_id: int) -> AdminSession | None:
+        session = await db.get(AdminSession, session_id)
+        if session is None:
+            return None
+        if session.status != "revoked":
+            session.status = "revoked"
+            session.revoked_at = utc_now()
+            await db.commit()
+            await db.refresh(session)
+        return session
+
+    @staticmethod
     async def revoke_user(db: AsyncSession, user_id: int) -> AdminUser | None:
         user = await db.get(AdminUser, user_id)
         if user is None:
@@ -170,4 +191,18 @@ class AdminUserService:
                 session.revoked_at = utc_now()
             await db.commit()
             await db.refresh(user)
+        return user
+
+    @staticmethod
+    async def reset_password(db: AsyncSession, user_id: int, password: str) -> AdminUser | None:
+        user = await db.get(AdminUser, user_id)
+        if user is None:
+            return None
+        user.password_hash = AdminUserService.hash_password(password)
+        result = await db.execute(select(AdminSession).where(AdminSession.user_id == user_id, AdminSession.status == "active"))
+        for session in result.scalars().all():
+            session.status = "revoked"
+            session.revoked_at = utc_now()
+        await db.commit()
+        await db.refresh(user)
         return user

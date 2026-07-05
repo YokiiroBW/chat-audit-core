@@ -11,7 +11,7 @@
 - 导出/导入包 checksum、系统签名、媒体嵌入。
 - 自动备份状态、手动备份、数据库托管 cron/retention 配置。
 - 审计日志、高风险限流、静态多角色 Token、数据库托管 Token。
-- 数据库用户、登录态、退出、用户禁用、Token 轮换。
+- 数据库用户、登录态、退出、用户禁用、密码重置、会话列表、强制下线、Token 轮换。
 - 轻量迁移注册表和 `/api/system/migrations`。
 
 ## 可立即推进
@@ -45,26 +45,15 @@
 
 阻塞：
 - 需要确认 NAS Docker 构建阶段可从 PyPI 安装 `alembic`，或提供内网 wheel/预构建镜像。
+- 2026-07-05 复查：`requirements.txt` 仍未包含 `alembic`，当前保持不新增运行依赖。
 
 验收：
 - 本地 `alembic upgrade head` 可用。
 - NAS 部署不依赖手工改表。
 
-### T6.2 用户与会话管理增强
-
-状态：待处理
-
-目标：
-- 支持密码重置。
-- 支持会话列表和强制下线。
-- 进一步细化前端按角色隐藏/禁用高风险按钮。
-
-验收：
-- 密码重置、会话吊销、角色 UI 均有测试。
-
 ### T8 交接文档持续更新
 
-状态：待处理
+状态：持续项，本轮已更新
 
 目标：
 - 每次版本推进后更新 `PROJECT_HANDOFF_READ_ME_FIRST.md` 的最新提交、测试数量、NAS 验收和剩余队列。
@@ -81,6 +70,7 @@
 
 阻塞：
 - 需要确认 NAS 构建环境可访问 apt 源，或提供内网预构建镜像。
+- 2026-07-05 复查：内置 FFmpeg 方案仍依赖 `Dockerfile.ffmpeg` 中的 `apt-get install ffmpeg`。
 
 当前可用能力：
 - `Dockerfile.ffmpeg`
@@ -99,6 +89,7 @@
 阻塞：
 - 本机缺少 `C:\Users\Administrator\.ssh\id_ed25519_forgejo`。
 - 需要将对应公钥加入 Forgejo 账号 SSH Key 或仓库 Deploy Key。
+- 2026-07-05 复查：`C:\Users\Administrator\.ssh\id_ed25519_forgejo` 仍不存在，继续使用 HTTPS token 推送。
 
 当前可用能力：
 - HTTPS token 推送可用。

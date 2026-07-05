@@ -121,6 +121,10 @@ class AdminUserCreateRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=128)
 
 
+class AdminUserPasswordResetRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=256)
+
+
 class AdminUserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -131,6 +135,18 @@ class AdminUserResponse(BaseModel):
     status: str
     created_at: datetime | None = None
     last_login_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class AdminSessionResponse(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    role: str
+    token_prefix: str
+    status: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
     revoked_at: datetime | None = None
 
 

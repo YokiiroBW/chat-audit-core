@@ -17,10 +17,10 @@ read_this_first: true
 - 当前分支：`main`
 - 远端：`origin/main`
 - 同步状态：`behind=0 ahead=0`
-- 最新提交主题：`迁移：增加 Alembic 风格版本脚本`
-- 本地全量测试：`132 passed`
-- NAS 部署：已部署最新版本
-- NAS 离线验收：`offline_ready=true`
+- 最新提交主题：`功能：增强用户会话管理`
+- 本地全量测试：`134 passed`
+- NAS 部署：待本轮提交后部署
+- NAS 离线验收：待本轮提交后复验
 
 最近主线提交：
 
@@ -60,6 +60,7 @@ c035c19 功能：增加资产统计仪表盘
 - 高风险接口简单限流：`HIGH_RISK_RATE_LIMIT_PER_MINUTE`
 - 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`，支持 `viewer`、`operator`、`admin`，Web 设置页可创建/列表/吊销/轮换托管 Token
 - 数据库用户与登录态：`admin_users`、`admin_sessions`、`/api/auth/login`、`/api/auth/me`、`/api/auth/logout`，Web 设置页可登录/退出并显示当前角色
+- 用户与会话管理增强：`POST /api/admin/users/{id}/password`、`GET /api/admin/sessions`、`DELETE /api/admin/sessions/{id}`，支持密码重置后吊销旧会话、会话列表、强制下线，Web 高风险控件按角色禁用
 - 轻量迁移注册表与记录：`LIGHTWEIGHT_MIGRATION_REGISTRY`、`schema_migrations`、`GET /api/system/migrations`，以及 `migrations/versions/` Alembic 风格版本脚本
 - 运行时状态：`GET /api/system/runtime`，可检查 FFmpeg 可用性和转码配置
 - 可选 FFmpeg 镜像：`Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`
@@ -119,7 +120,6 @@ git -c "http.extraHeader=Authorization: Basic $credential" push origin main
 
 - 容器内置 FFmpeg：已有可选 FFmpeg Dockerfile/compose 覆盖文件；NAS 默认仍走离线友好镜像，启用前需确认 apt 源或使用预构建镜像。
 - 微信 Hook 专用映射：当前已支持常见字段、数字类型和通用样本回放；后续应根据最终选定客户端追加专属真实样本和部署说明。
-- 用户与会话增强：当前已支持数据库用户、登录态、退出、用户禁用和 Token 轮换；后续可继续做密码重置、会话列表、强制下线和更细粒度角色 UI。
 - 完整 Alembic：当前已有轻量 `schema_migrations` 记录与 Alembic 风格版本脚本；启用完整 CLI 前需确认 NAS/PyPI 依赖安装路径。
 - Forgejo SSH：当前 SSH 检查失败，原因是本机缺少 `C:\Users\Administrator\.ssh\id_ed25519_forgejo`。HTTPS token 推送可用。
 
