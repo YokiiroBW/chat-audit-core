@@ -851,7 +851,7 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
                 db,
                 user_id=room_id,
                 platform="qq",
-                display_name=None,
+                display_name=room.get("display_name"),
                 http_client=client,
                 storage_root=settings.storage_root,
                 public_prefix=settings.public_storage_prefix,
@@ -869,6 +869,7 @@ async def list_messages(
     around_message_id: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[MessageResponse]:
     messages = await QueryService.list_messages(
         db,
@@ -878,7 +879,46 @@ async def list_messages(
         around_message_id=around_message_id,
         limit=limit,
     )
+    if await _hydrate_missing_message_sender_profiles(db, messages=messages, settings=settings):
+        messages = await QueryService.list_messages(
+            db,
+            robot_id=robot_id,
+            room_id=room_id,
+            before_timestamp=before_timestamp,
+            around_message_id=around_message_id,
+            limit=limit,
+        )
     return [MessageResponse.model_validate(message) for message in messages]
+
+
+async def _hydrate_missing_message_sender_profiles(db: AsyncSession, messages: list[Message], settings: Settings) -> bool:
+    missing_senders: dict[str, str | None] = {}
+    for message in messages:
+        sender_id = str(message.sender_id or "")
+        if (
+            message.platform == "qq"
+            and sender_id.isdigit()
+            and not getattr(message, "sender_avatar_path", None)
+            and sender_id not in missing_senders
+        ):
+            missing_senders[sender_id] = getattr(message, "sender_display_name", None) or message.nickname
+
+    if not missing_senders:
+        return False
+
+    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        for sender_id, display_name in list(missing_senders.items())[:20]:
+            await UserProfileService.cache_qq_user_profile(
+                db,
+                user_id=sender_id,
+                platform="qq",
+                display_name=display_name,
+                http_client=client,
+                storage_root=settings.storage_root,
+                public_prefix=settings.public_storage_prefix,
+                max_bytes=settings.media_max_bytes,
+            )
+    return True
 
 
 @router.post("/messages", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)

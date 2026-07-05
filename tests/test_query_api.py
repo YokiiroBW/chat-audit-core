@@ -218,6 +218,121 @@ async def test_messages_api_can_load_context_around_reply_target(db_session):
 
 
 @pytest.mark.asyncio
+async def test_private_room_api_hydrates_friend_avatar_and_preserves_name(db_session, monkeypatch):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "123456789",
+            "message_type": "private",
+            "sender_id": "123456789",
+            "nickname": "Private Friend",
+            "raw_message": "hello private",
+            "timestamp": 1783000000,
+        },
+    )
+
+    async def fake_cache_qq_user_profile(
+        db,
+        *,
+        user_id,
+        platform,
+        display_name,
+        http_client,
+        storage_root,
+        public_prefix,
+        max_bytes,
+    ):
+        await db.merge(
+            UserProfile(
+                user_id=user_id,
+                platform=platform,
+                display_name=display_name,
+                avatar_path="/static/storage/private-friend.jpg",
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", fake_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/rooms", params={"robot_id": "robot-a"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["room_id"] == "123456789"
+    assert payload[0]["message_type"] == "private"
+    assert payload[0]["display_name"] == "Private Friend"
+    assert payload[0]["avatar_path"] == "/static/storage/private-friend.jpg"
+
+
+@pytest.mark.asyncio
+async def test_messages_api_hydrates_missing_numeric_qq_sender_avatar(db_session, monkeypatch):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "123456789",
+            "message_type": "private",
+            "sender_id": "123456789",
+            "nickname": "Private Friend",
+            "raw_message": "hello private",
+            "timestamp": 1783000000,
+        },
+    )
+
+    async def fake_cache_qq_user_profile(
+        db,
+        *,
+        user_id,
+        platform,
+        display_name,
+        http_client,
+        storage_root,
+        public_prefix,
+        max_bytes,
+    ):
+        await db.merge(
+            UserProfile(
+                user_id=user_id,
+                platform=platform,
+                display_name=display_name,
+                avatar_path="/static/storage/private-sender.jpg",
+            )
+        )
+        await db.commit()
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", fake_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/messages",
+                params={"robot_id": "robot-a", "room_id": "123456789"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["sender_display_name"] == "Private Friend"
+    assert payload[0]["sender_avatar_path"] == "/static/storage/private-sender.jpg"
+
+
+@pytest.mark.asyncio
 async def test_bots_api_lists_discovered_bot_profiles(db_session):
     db_session.add_all(
         [

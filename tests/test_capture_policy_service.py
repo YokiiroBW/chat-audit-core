@@ -202,3 +202,27 @@ async def test_capture_targets_include_discovered_rooms_and_policy(db_session):
     assert targets[0]["target_id"] == "955973452"
     assert targets[0]["policy"]["list_mode"] == "whitelist"
     assert targets[0]["policy"]["capture_file"] is True
+
+
+@pytest.mark.asyncio
+async def test_capture_targets_use_private_sender_name_when_profile_missing(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        robot_id="robot-a",
+        platform="qq",
+        msg_data={
+            "room_id": "123456789",
+            "message_type": "private",
+            "sender_id": "123456789",
+            "nickname": "Private Friend",
+            "raw_message": "hello private",
+            "timestamp": 1783000000,
+        },
+    )
+
+    targets = await CapturePolicyService.list_target_settings(db_session, robot_id="robot-a")
+
+    assert len(targets) == 1
+    assert targets[0]["target_type"] == "private"
+    assert targets[0]["target_id"] == "123456789"
+    assert targets[0]["display_name"] == "Private Friend"

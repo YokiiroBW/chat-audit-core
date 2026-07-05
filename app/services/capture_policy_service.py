@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CaptureTargetPolicy, Message, RobotMessage, RoomProfile, UserProfile
@@ -128,11 +128,15 @@ class CapturePolicyService:
 
     @staticmethod
     async def list_known_targets(db: AsyncSession, robot_id: str) -> list[dict]:
+        private_sender_display_name = case(
+            ((Message.message_type == "private") & (Message.sender_id == Message.room_id), Message.nickname),
+            else_=None,
+        )
         result = await db.execute(
             select(
                 Message.room_id.label("target_id"),
                 Message.message_type.label("target_type"),
-                RoomProfile.display_name.label("room_display_name"),
+                func.coalesce(RoomProfile.display_name, private_sender_display_name).label("room_display_name"),
                 RoomProfile.avatar_path.label("room_avatar_path"),
                 UserProfile.display_name.label("user_display_name"),
                 UserProfile.avatar_path.label("user_avatar_path"),

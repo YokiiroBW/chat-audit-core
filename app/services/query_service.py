@@ -1,6 +1,6 @@
 import re
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Adapter, BotProfile, Message, RobotMessage, RoomProfile, UserProfile
@@ -56,12 +56,16 @@ class QueryService:
 
     @staticmethod
     async def list_rooms(db: AsyncSession, robot_id: str) -> list[dict]:
+        private_sender_display_name = case(
+            ((Message.message_type == "private") & (Message.sender_id == Message.room_id), Message.nickname),
+            else_=None,
+        )
         result = await db.execute(
             select(
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
                 func.max(Message.message_type).label("message_type"),
-                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name)).label("display_name"),
+                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
             .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
