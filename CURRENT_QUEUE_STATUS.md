@@ -17,9 +17,11 @@
   - 托盘入口
 - PC 端打包与自启脚本：
   - `scripts/build_wechat_tray.ps1`
+  - `scripts/build_wechat_tray_installer.ps1`
   - `scripts/install_wechat_tray_startup.ps1`
   - `scripts/uninstall_wechat_tray_startup.ps1`
   - `scripts/write_wechat_tray_config.ps1`
+- 单文件安装包输出：`dist\ChatAuditWechatTraySetup.ps1`，安装后程序位于 `%LOCALAPPDATA%\ChatAuditWechatTray\app`。
 - 打包产物版本号和发布包校验：`wechat_tray_adapter/version.py` 与构建 manifest/SHA256。
 - 托盘端最小配置编辑入口：托盘菜单“配置”按需打开 Tkinter 配置窗口。
 - 文档：`WECHAT_TRAY_ADAPTER.md` 与 README 入口。
@@ -30,6 +32,7 @@
 2. Windows 桌面托盘 UI 实机验收：图标、菜单、退出、打开 NAS、立即补发。
 3. 真实微信端到端样本：私聊、群聊、图片、语音、视频、文件、动画表情、卡片。
 4. 真实环境确认后，按实际 `wcferry` API 调整读取循环和媒体下载细节。
+5. 当前本机运行的是新版 `Weixin.exe`，`wcferry 39.5.2.0` 无法读取传统 WeChat 注册表路径；需要安装兼容版微信或确认新版微信适配方案。
 
 ## 需要用户介入
 

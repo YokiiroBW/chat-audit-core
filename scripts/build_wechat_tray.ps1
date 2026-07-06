@@ -12,7 +12,24 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 
 & $Python -m pip install -r .\wechat_tray_adapter\requirements.txt
-& $Python -m PyInstaller --noconsole --clean --name $OutputName .\wechat_tray_adapter\__main__.py
+$WcfDir = (& $Python -c "import inspect, os, wcferry; print(os.path.dirname(inspect.getfile(wcferry)))").Trim()
+$WcfData = "$WcfDir;wcferry"
+& $Python -m PyInstaller `
+    --noconfirm `
+    --noconsole `
+    --clean `
+    --name $OutputName `
+    --add-data $WcfData `
+    --hidden-import wcferry `
+    --hidden-import wcferry.client `
+    --hidden-import wcferry.wxmsg `
+    --hidden-import wcferry.wcf_pb2 `
+    --hidden-import pynng `
+    --hidden-import grpc_tools `
+    .\wechat_tray_adapter\__main__.py
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE"
+}
 
 $ExePath = Join-Path $RepoRoot "dist\$OutputName\$OutputName.exe"
 if (-not (Test-Path -LiteralPath $ExePath)) {

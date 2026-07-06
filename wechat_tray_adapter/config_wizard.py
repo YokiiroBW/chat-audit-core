@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any, Mapping
 
 from wechat_tray_adapter.config import AdapterConfig, default_config_path
@@ -32,11 +35,15 @@ def write_config(path: str | Path, values: Mapping[str, Any]) -> Path:
 
 
 def run_config_wizard(path: str | Path | None = None) -> None:
-    import tkinter as tk
-    from tkinter import messagebox
-
     config_path = Path(path) if path is not None else default_config_path()
     config = AdapterConfig.load(config_path) if config_path.exists() else AdapterConfig.default()
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+    except ImportError:
+        write_config(config_path, config_to_editable_dict(config))
+        open_config_file(config_path)
+        return
 
     root = tk.Tk()
     root.title("Chat Audit 微信采集配置")
@@ -74,3 +81,11 @@ def run_config_wizard(path: str | Path | None = None) -> None:
     tk.Button(button_frame, text="保存", command=save).pack(side="right", padx=4)
     tk.Button(button_frame, text="取消", command=root.destroy).pack(side="right", padx=4)
     root.mainloop()
+
+
+def open_config_file(path: str | Path) -> None:
+    target = Path(path)
+    if sys.platform == "win32":
+        os.startfile(str(target))  # type: ignore[attr-defined]
+        return
+    subprocess.Popen(["xdg-open", str(target)])

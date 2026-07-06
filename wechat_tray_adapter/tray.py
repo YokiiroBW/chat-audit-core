@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import json
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
-from typing import Any, Callable
+from typing import Any
 
 from wechat_tray_adapter.client import NasClient
 from wechat_tray_adapter.config import AdapterConfig
@@ -22,14 +25,6 @@ def configure_logging(config: AdapterConfig) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-
-
-def load_wcf_factory() -> Callable[[], Any]:
-    try:
-        from wcferry import Wcf  # type: ignore
-    except ImportError as exc:
-        raise RuntimeError("wcferry is not installed") from exc
-    return Wcf
 
 
 class WechatTrayApp:
@@ -59,36 +54,52 @@ class WechatTrayApp:
         return self.worker.flush_pending()
 
     def _run_wcf_loop(self) -> None:
-        try:
-            wcf_factory = load_wcf_factory()
-            wcf = wcf_factory()
-            if hasattr(wcf, "enable_receiving_msg"):
-                wcf.enable_receiving_msg()
-            logging.info("WeChatFerry receiving loop started")
-            while not self._stop.is_set():
-                raw = self._receive_message(wcf)
-                if raw is not None:
-                    self.worker.handle_wcf_message(raw)
-                self.worker.flush_pending(limit=20)
-        except Exception:
-            logging.exception("WeChat tray worker stopped")
+        while not self._stop.is_set():
+            process = self._start_bridge_process()
+            logging.info("WeChatFerry bridge started")
+            try:
+                self._consume_bridge(process)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                self.worker.flush_pending(limit=100)
+            if not self._stop.is_set():
+                logging.warning("WeChatFerry bridge exited, retrying in %s seconds", self.config.retry_interval_seconds)
+                time.sleep(self.config.retry_interval_seconds)
 
-    def _receive_message(self, wcf: Any) -> dict[str, Any] | None:
-        if hasattr(wcf, "get_msg"):
-            message = wcf.get_msg()
-        elif hasattr(wcf, "get_message"):
-            message = wcf.get_message()
+    def _start_bridge_process(self) -> subprocess.Popen[str]:
+        if getattr(sys, "frozen", False):
+            command = [sys.executable, "--wcf-bridge"]
         else:
-            time.sleep(self.config.retry_interval_seconds)
-            return None
-        if message is None:
-            time.sleep(0.2)
-            return None
-        if isinstance(message, dict):
-            return message
-        if hasattr(message, "__dict__"):
-            return dict(message.__dict__)
-        return None
+            command = [sys.executable, "-m", "wechat_tray_adapter.wcf_bridge"]
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+
+    def _consume_bridge(self, process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
+            return
+        while not self._stop.is_set():
+            line = process.stdout.readline()
+            if not line:
+                break
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                logging.warning("Invalid bridge payload: %s", line.strip())
+                continue
+            if payload.get("event") == "ready":
+                logging.info("WeChatFerry bridge ready for %s", payload.get("self_wxid"))
+                continue
+            self.worker.handle_wcf_message(payload)
+            self.worker.flush_pending(limit=20)
 
 
 def run_tray(config: AdapterConfig | None = None) -> None:

@@ -5,6 +5,7 @@ from wechat_tray_adapter.config import AdapterConfig
 from wechat_tray_adapter.config_wizard import config_to_editable_dict, write_config
 from wechat_tray_adapter.mapper import build_nas_event, discover_media_path, media_upload_type
 from wechat_tray_adapter.queue import PendingEventQueue
+from wechat_tray_adapter.wcf_bridge import wxmsg_to_dict
 from wechat_tray_adapter.worker import SyncWorker
 
 
@@ -27,6 +28,37 @@ class FakeClient:
             raise NasClientError("offline")
         self.events.append(payload)
         return {"msg_hash": "ok", "skipped": False}
+
+
+class FakeWxMsg:
+    type = 1
+    id = "msg-1"
+    ts = 1783100700
+    sign = "sign"
+    xml = "<msg />"
+    sender = "wxid_sender"
+    roomid = "room@chatroom"
+    content = "hello"
+    thumb = ""
+    extra = ""
+
+    def from_self(self):
+        return False
+
+    def from_group(self):
+        return True
+
+
+def test_wcf_bridge_converts_wxmsg_to_plain_dict():
+    payload = wxmsg_to_dict(FakeWxMsg(), self_wxid="wxid_bot")
+
+    assert payload["self_wxid"] == "wxid_bot"
+    assert payload["type"] == 1
+    assert payload["id"] == "msg-1"
+    assert payload["ts"] == 1783100700
+    assert payload["sender"] == "wxid_sender"
+    assert payload["roomid"] == "room@chatroom"
+    assert payload["from_group"] is True
 
 
 def test_adapter_config_loads_file_and_env_overrides(tmp_path):

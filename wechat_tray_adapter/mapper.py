@@ -73,7 +73,7 @@ def build_nas_event(raw: dict[str, Any], config: AdapterConfig, uploaded_media: 
         "sender": str(sender_id or room_id or ""),
         "type": kind,
         "content": str(content or ""),
-        "time": int(pick(raw, "time", "timestamp", "create_time", "CreateTime") or time.time()),
+        "time": int(pick(raw, "time", "timestamp", "ts", "create_time", "CreateTime") or time.time()),
         "msgid": str(pick(raw, "msg_id", "msgid", "id", "MsgId") or ""),
         "account_name": config.account_name,
     }

@@ -64,6 +64,21 @@ python -m PyInstaller --noconsole --name chat-audit-wechat-tray wechat_tray_adap
 该脚本会安装 `wechat_tray_adapter/requirements.txt` 中的 PC 端可选依赖，并用 PyInstaller 生成无控制台 exe。
 构建完成后会在 `dist\chat-audit-wechat-tray\manifest.json` 写入版本号、exe 文件名、SHA256 和构建时间。
 
+生成单文件安装包：
+
+```powershell
+.\scripts\build_wechat_tray_installer.ps1
+```
+
+输出：
+
+```text
+dist\ChatAuditWechatTraySetup.ps1
+dist\ChatAuditWechatTraySetup.ps1.manifest.json
+```
+
+该单文件自解压安装包会把自包含程序释放到 `%LOCALAPPDATA%\ChatAuditWechatTray\app`，创建 `%LOCALAPPDATA%\ChatAuditWechatTray\config.json` 占位配置，并写入当前用户开机自启。安装包内已经包含 Python 运行时依赖、`pystray`、`Pillow`、`wcferry` 以及 `wcferry` 的 `sdk.dll` / `spy.dll`。
+
 ## 配置与自启脚本
 
 生成配置：
@@ -100,3 +115,5 @@ python -m PyInstaller --noconsole --name chat-audit-wechat-tray wechat_tray_adap
 - 确认托盘图标、退出、打开 NAS、立即补发队列在 Windows 桌面环境表现正常。
 
 这些项目不阻塞 NAS 后端和核心同步逻辑的继续开发；真实环境不可用时，记录为外部阻塞并继续推进其他队列。
+
+当前本机发现：正在运行的是 `F:\Programfiles\Tencent\Weixin\Weixin.exe`，而 `wcferry 39.5.2.0` 探测时提示无法从注册表获取传统 WeChat 安装路径。这通常表示新版微信/安装形态与当前 WeChatFerry 期望不一致，需要后续安装兼容版本微信或校准 WeChatFerry 运行方式后再做端到端验收。

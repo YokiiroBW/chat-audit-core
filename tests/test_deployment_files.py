@@ -101,6 +101,7 @@ def test_dockerignore_excludes_runtime_and_secret_files():
 
 def test_wechat_tray_packaging_scripts_are_present_and_headless():
     build_script = (ROOT / "scripts/build_wechat_tray.ps1").read_text(encoding="utf-8")
+    installer_script = (ROOT / "scripts/build_wechat_tray_installer.ps1").read_text(encoding="utf-8")
     install_script = (ROOT / "scripts/install_wechat_tray_startup.ps1").read_text(encoding="utf-8")
     uninstall_script = (ROOT / "scripts/uninstall_wechat_tray_startup.ps1").read_text(encoding="utf-8")
     config_script = (ROOT / "scripts/write_wechat_tray_config.ps1").read_text(encoding="utf-8")
@@ -108,9 +109,18 @@ def test_wechat_tray_packaging_scripts_are_present_and_headless():
 
     assert "--noconsole" in build_script
     assert "wechat_tray_adapter\\__main__.py" in build_script
+    assert "--add-data $WcfData" in build_script
+    assert "--hidden-import wcferry.client" in build_script
+    assert "--hidden-import pynng" in build_script
     assert "wechat_tray_adapter.version" in build_script
     assert "Get-FileHash -Algorithm SHA256" in build_script
     assert "manifest.json" in build_script
+    assert "payload.zip" in installer_script
+    assert "ChatAuditWechatTraySetup.ps1" in installer_script
+    assert "self_extracting_powershell" in installer_script
+    assert "FromBase64String" in installer_script
+    assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in installer_script
+    assert "replace-with-operator-token" in installer_script
     assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in install_script
     assert "Set-ItemProperty" in install_script
     assert "Remove-ItemProperty" in uninstall_script
