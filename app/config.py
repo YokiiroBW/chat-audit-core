@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     admin_api_tokens: str = ""
 
     database_url: str = "sqlite+aiosqlite:///./data/chat_audit.sqlite3"
+    database_pool_size: int = 20
+    database_max_overflow: int = 10
+    database_pool_timeout_seconds: int = 30
+    database_pool_recycle_seconds: int = 3600
 
     storage_root: Path = Path("./data/storage")
     backup_root: Path = Path("./data/backups")

@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from sqlalchemy import inspect, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.config import get_settings
 from app.models import Adapter, Base, BotProfile, RobotMessage
@@ -51,8 +53,25 @@ LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration
 
 
 def create_async_engine_and_sessionmaker(database_url: str | None = None) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    url = database_url or get_settings().database_url
-    engine = create_async_engine(url, future=True)
+    settings = get_settings()
+    url = database_url or settings.database_url
+    parsed_url = make_url(url)
+    engine_kwargs: dict[str, object] = {"future": True}
+    if parsed_url.get_backend_name() == "sqlite":
+        is_memory_database = parsed_url.database in {None, "", ":memory:"}
+        engine_kwargs["poolclass"] = StaticPool if is_memory_database else NullPool
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        engine_kwargs.update(
+            {
+                "pool_size": settings.database_pool_size,
+                "max_overflow": settings.database_max_overflow,
+                "pool_timeout": settings.database_pool_timeout_seconds,
+                "pool_recycle": settings.database_pool_recycle_seconds,
+                "pool_pre_ping": True,
+            }
+        )
+    engine = create_async_engine(url, **engine_kwargs)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     return engine, sessionmaker
 

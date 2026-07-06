@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import json
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.config import Settings
 from app.database import LIGHTWEIGHT_MIGRATION_REGISTRY, LIGHTWEIGHT_MIGRATIONS, create_async_engine_and_sessionmaker, ensure_schema_compatibility
@@ -13,6 +14,25 @@ def test_lightweight_migration_registry_drives_status_order():
     assert versions == list(LIGHTWEIGHT_MIGRATIONS)
     assert len(versions) == len(set(versions))
     assert all(migration.description == LIGHTWEIGHT_MIGRATIONS[migration.version] for migration in LIGHTWEIGHT_MIGRATION_REGISTRY)
+
+
+def test_create_async_engine_configures_sqlite_pool_classes(tmp_path):
+    memory_engine, _memory_sessionmaker = create_async_engine_and_sessionmaker("sqlite+aiosqlite:///:memory:")
+    file_engine, _file_sessionmaker = create_async_engine_and_sessionmaker(f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}")
+
+    assert isinstance(memory_engine.sync_engine.pool, StaticPool)
+    assert isinstance(file_engine.sync_engine.pool, NullPool)
+
+
+def test_create_async_engine_configures_postgres_pool():
+    engine, _sessionmaker = create_async_engine_and_sessionmaker("postgresql+asyncpg://user:pass@localhost:5432/audit")
+    pool = engine.sync_engine.pool
+
+    assert pool.size() == 20
+    assert pool._max_overflow == 10
+    assert pool._timeout == 30
+    assert pool._recycle == 3600
+    assert pool._pre_ping is True
 
 
 def test_lightweight_migrations_upgrade_legacy_sqlite_schema(tmp_path):
