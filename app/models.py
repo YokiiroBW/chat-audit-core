@@ -97,7 +97,12 @@ class Message(Base):
     timestamp = Column(Integer, nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
-    __table_args__ = (Index("idx_room_timestamp", "room_id", "timestamp"),)
+    __table_args__ = (
+        Index("idx_room_timestamp", "room_id", "timestamp"),
+        Index("idx_platform_room_timestamp", "platform", "room_id", "timestamp"),
+        Index("idx_sender_timestamp", "sender_id", "timestamp"),
+        Index("idx_message_type_timestamp", "message_type", "timestamp"),
+    )
 
 
 class RobotMessage(Base):
@@ -109,7 +114,10 @@ class RobotMessage(Base):
     robot_id = Column(String(64), nullable=False, index=True)
     msg_hash = Column(String(64), nullable=False, index=True)
 
-    __table_args__ = (UniqueConstraint("robot_id", "msg_hash", name="uq_robot_message_view"),)
+    __table_args__ = (
+        UniqueConstraint("robot_id", "msg_hash", name="uq_robot_message_view"),
+        Index("idx_robot_message_robot_msg_hash", "robot_id", "msg_hash"),
+    )
 
 
 class MediaAsset(Base):

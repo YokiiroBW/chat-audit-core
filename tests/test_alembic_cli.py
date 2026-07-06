@@ -32,6 +32,11 @@ def _columns(db_path: Path, table: str) -> set[str]:
         return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _indexes(db_path: Path, table: str) -> set[str]:
+    with sqlite3.connect(db_path) as conn:
+        return {row[1] for row in conn.execute(f"PRAGMA index_list({table})")}
+
+
 def test_alembic_upgrade_head_initializes_current_schema(tmp_path):
     db_path = tmp_path / "alembic.sqlite3"
 
@@ -53,7 +58,23 @@ def test_alembic_upgrade_head_initializes_current_schema(tmp_path):
         "capture_target_policies",
         "alembic_version",
     } <= tables
-    assert version == "20260705_008"
+    assert version == "20260705_009"
+
+
+def test_alembic_upgrade_head_creates_performance_indexes(tmp_path):
+    db_path = tmp_path / "indexes.sqlite3"
+
+    _run_alembic_upgrade(db_path)
+
+    message_indexes = _indexes(db_path, "messages")
+    robot_message_indexes = _indexes(db_path, "robot_messages")
+    assert {
+        "idx_room_timestamp",
+        "idx_platform_room_timestamp",
+        "idx_sender_timestamp",
+        "idx_message_type_timestamp",
+    } <= message_indexes
+    assert "idx_robot_message_robot_msg_hash" in robot_message_indexes
 
 
 def test_alembic_upgrade_head_adds_legacy_compatibility_columns(tmp_path):

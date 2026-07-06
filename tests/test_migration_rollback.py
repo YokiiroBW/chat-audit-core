@@ -14,6 +14,11 @@ async def _columns(engine, table_name: str) -> set[str]:
         return await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns(table_name)})
 
 
+async def _indexes(engine, table_name: str) -> set[str]:
+    async with engine.connect() as conn:
+        return await conn.run_sync(lambda sync_conn: {index["name"] for index in inspect(sync_conn).get_indexes(table_name)})
+
+
 async def _migration_versions(engine) -> set[str]:
     async with engine.connect() as conn:
         result = await conn.execute(text("SELECT version FROM schema_migrations"))
@@ -46,6 +51,34 @@ async def test_lightweight_migration_can_rollback_message_external_message_id(tm
 
     assert "external_message_id" not in await _columns(engine, "messages")
     assert "20260705_002_message_external_message_id" not in await _migration_versions(engine)
+
+
+async def test_lightweight_migration_can_rollback_performance_indexes(tmp_path):
+    engine, _sessionmaker = create_async_engine_and_sessionmaker(f"sqlite+aiosqlite:///{(tmp_path / 'rollback.sqlite3').as_posix()}")
+    await create_all_tables(engine)
+    await ensure_schema_compatibility(engine)
+
+    message_indexes = await _indexes(engine, "messages")
+    robot_message_indexes = await _indexes(engine, "robot_messages")
+    assert {
+        "idx_room_timestamp",
+        "idx_platform_room_timestamp",
+        "idx_sender_timestamp",
+        "idx_message_type_timestamp",
+    } <= message_indexes
+    assert "idx_robot_message_robot_msg_hash" in robot_message_indexes
+    assert "20260705_009_performance_indexes" in await _migration_versions(engine)
+
+    await rollback_lightweight_migration("20260705_009_performance_indexes", engine)
+
+    message_indexes = await _indexes(engine, "messages")
+    robot_message_indexes = await _indexes(engine, "robot_messages")
+    assert "idx_room_timestamp" in message_indexes
+    assert "idx_platform_room_timestamp" not in message_indexes
+    assert "idx_sender_timestamp" not in message_indexes
+    assert "idx_message_type_timestamp" not in message_indexes
+    assert "idx_robot_message_robot_msg_hash" not in robot_message_indexes
+    assert "20260705_009_performance_indexes" not in await _migration_versions(engine)
 
 
 async def test_lightweight_migration_without_rollback_is_rejected(tmp_path):

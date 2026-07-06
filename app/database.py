@@ -40,6 +40,14 @@ async def _add_message_external_message_id(conn) -> None:
         await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_external_message_id ON messages (external_message_id)")
 
 
+async def _add_performance_indexes(conn) -> None:
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_room_timestamp ON messages (room_id, timestamp)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_platform_room_timestamp ON messages (platform, room_id, timestamp)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_sender_timestamp ON messages (sender_id, timestamp)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_message_type_timestamp ON messages (message_type, timestamp)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_robot_message_robot_msg_hash ON robot_messages (robot_id, msg_hash)")
+
+
 async def _drop_column_if_exists(conn, table_name: str, column_name: str) -> None:
     table_columns = await _table_columns(conn, table_name)
     if column_name in table_columns:
@@ -56,6 +64,13 @@ async def _rollback_message_external_message_id(conn) -> None:
     await _drop_column_if_exists(conn, "messages", "external_message_id")
 
 
+async def _rollback_performance_indexes(conn) -> None:
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_robot_message_robot_msg_hash")
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_message_type_timestamp")
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_sender_timestamp")
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_platform_room_timestamp")
+
+
 LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_001_adapter_current_robot_id", "Add adapters.current_robot_id", _add_adapter_current_robot_id, _rollback_adapter_current_robot_id),
     LightweightMigration("20260705_002_message_external_message_id", "Add messages.external_message_id", _add_message_external_message_id, _rollback_message_external_message_id),
@@ -65,6 +80,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_006_system_settings", "Create system_settings table", _noop_migration),
     LightweightMigration("20260705_007_admin_users_sessions", "Create admin_users and admin_sessions tables", _noop_migration),
     LightweightMigration("20260705_008_capture_target_policies", "Create capture_target_policies table", _noop_migration),
+    LightweightMigration("20260705_009_performance_indexes", "Create performance indexes", _add_performance_indexes, _rollback_performance_indexes),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}

@@ -159,6 +159,12 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "applied": True,
             "applied_at": migrations_response.json()[7]["applied_at"],
         },
+        {
+            "version": "20260705_009_performance_indexes",
+            "description": "Create performance indexes",
+            "applied": True,
+            "applied_at": migrations_response.json()[8]["applied_at"],
+        },
     ]
     assert storage_root.exists()
     assert backup_root.exists()
@@ -188,6 +194,7 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "20260705_006_system_settings",
             "20260705_007_admin_users_sessions",
             "20260705_008_capture_target_policies",
+            "20260705_009_performance_indexes",
         ]
 
 
