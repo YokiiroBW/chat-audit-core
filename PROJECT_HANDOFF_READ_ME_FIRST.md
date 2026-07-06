@@ -4,20 +4,9 @@ project: "QQ / 微信多租户社交资产审计系统"
 repo: "chat-audit-core"
 forgejo: "http://192.168.31.210:18085/YokiiroBW/chat-audit-core"
 branch: "main"
-updated_at: "2026-07-05"
+updated_at: "2026-07-06"
 read_this_first: true
 ---
-
-## 2026-07-06 最新状态
-
-- 最新已推送提交：以 `git log -1 --oneline` 为准，本轮所有提交均已按中文信息推送到 Forgejo。
-- 本地全量测试：`164 passed`。
-- 微信托盘安装包：`dist\ChatAuditWechatTraySetup.ps1` 已可生成，安装包内嵌 PyInstaller 自包含程序和 `wcferry` DLL。
-- NAS 验收：部署后 `/health` 200、首页 200、管理 API 未鉴权 401 / 鉴权 200 正常。
-- 新增后端入口：`POST /api/receive_external_msg`、`POST /api/external/media`、`POST /api/wechat/media`。
-- 新增 PC 微信托盘采集器核心骨架：`wechat_tray_adapter/`。
-- 当前队列入口：`CURRENT_QUEUE_STATUS.md`。
-- 当前外部阻塞：真实 Windows 微信 + WeChatFerry 环境验收，需要用户准备已登录官方 PC 微信和兼容 `wcferry`。
 
 # READ ME FIRST：chat-audit-core 项目续作交接说明
 
@@ -26,15 +15,13 @@ read_this_first: true
 ## 当前状态
 
 - 当前分支：`main`
-- 远端：`origin/main`
-- 同步状态：本轮完成后需推送 Forgejo，查看 `git status --short --branch` 确认
-- 最新提交：本轮 FFmpeg 静态镜像修复提交（以 `git log -1 --oneline` 为准）
-- 本地全量测试：`144 passed`
-- 最近一次 NAS 部署验收：FFmpeg 静态镜像方案已在 NAS 启动并完成 smoke test
-- NAS 基础验收：健康检查 200、首页 200、管理鉴权 401/200 正常
-- NAS 迁移状态：`20260705_008_capture_target_policies` 已应用
-- NAS 抓取策略接口：`GET /api/bots/{robot_id}/capture-targets` 正常返回已发现群聊/私聊、名称、头像和策略
-- NAS FFmpeg 状态：`docker-compose.ffmpeg.yml` 已改为离线安装 `vendor/wheels/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl` 内置静态 FFmpeg，NAS 容器内 `/api/system/runtime` 返回 `ffmpeg_available=true`，版本 `7.0.2-static`；WAV 转 MP3 smoke test 已通过。宿主机挂载方案仍保留为兼容路径，但 NAS 宿主机动态库组合曾出现实际转码段错误，不作为推荐路径。
+- 远端：局域网 Forgejo
+- 当前主线：QQ/NapCat 消息备份、离线可用性和审计体验完善
+- 微信路线：已封存，保留已完成代码，不再作为当前开发队列推进
+- 本地最近全量测试：`164 passed`
+- 最新提交：以 `git log -1 --oneline` 为准
+- NAS 基础验收：健康检查、首页和管理鉴权链路此前已通过
+- NAS FFmpeg：推荐使用 `docker-compose.ffmpeg.yml` 内置静态 FFmpeg 路线，`/api/system/runtime` 返回 `ffmpeg_available=true`
 
 ## 已完成能力
 
@@ -42,7 +29,7 @@ read_this_first: true
 - 当前接入机器人：`napcat2`，端口 `26109`，`self_id=1449801200`
 - 适配器与机器人身份档案分离：`Adapter.current_robot_id` + `BotProfile`
 - 全局消息池去重与 `RobotMessage` 主视角隔离
-- CQ 图片、动画表情、语音、视频、文件包/文档、卡片、合并转发、回复预览和本地缓存
+- CQ 文本、图片、动画表情、语音、视频、文件包/文档、卡片、合并转发、回复预览和本地缓存
 - 卡片网页快照、本地媒体索引、头像与群资料缓存
 - 图片弹窗预览、合并消息展开、回复消息预览
 - 全离线验收：`GET /api/offline/audit`
@@ -50,25 +37,50 @@ read_this_first: true
 - 导出/导入 JSON，带媒体文件嵌入、checksum、系统签名
 - 自动备份定时任务、数据库配置覆盖与手动触发：`/api/backup/status`、`/api/backup/settings`、`/api/backup/run`
 - 仪表盘统计：`/api/dashboard`
-- 微信 Hook 通用入口：`POST /api/wechat/events`，带样本回放测试
-- 操作审计：`audit_logs` 与 `GET /api/audit/logs`
+- 审计日志：`audit_logs` 与 `GET /api/audit/logs`
 - 高风险接口限流：`HIGH_RISK_RATE_LIMIT_PER_MINUTE`
 - 多角色管理 Token：静态 `ADMIN_API_TOKENS` + 数据库托管 `admin_tokens`
 - 数据库用户与登录态：`admin_users`、`admin_sessions`、`/api/auth/login`、`/api/auth/me`、`/api/auth/logout`
 - 数据库用户密码重置、会话列表、强制下线
 - 数据库迁移体系：轻量迁移注册表、`schema_migrations`、`GET /api/system/migrations`、Alembic CLI
 - 运行时状态：`GET /api/system/runtime`
-- 可选 FFmpeg 转码：推荐使用内置静态 FFmpeg 覆盖 `Dockerfile.ffmpeg` + `docker-compose.ffmpeg.yml`；宿主机挂载覆盖 `docker-compose.ffmpeg-host.yml` 仅作兼容路径
+- 可选 FFmpeg 转码：内置静态 FFmpeg Docker 覆盖文件为推荐路线
 - 角色抓取策略：
   - `GET /api/bots/{robot_id}/capture-targets`
   - `PUT /api/bots/{robot_id}/capture-policies/{target_type}/{target_id}`
   - `DELETE /api/bots/{robot_id}/capture-policies/{target_type}/{target_id}`
   - 空策略默认记录所有会话
   - 黑名单目标跳过入库和缓存
-  - 白名单存在时仅抓取白名单目标
-  - 内容项分开控制：文字、图片/动画表情、语音、视频、文件包/文档
-  - 文件包/文档仅指 `CQ:file`，zip、安装包、文档等；图片、动画表情、语音不归入文件范围
+  - 白名单存在时只抓取白名单目标
+  - 内容项分开控制：文字、图片、动画表情、语音、视频、文件包/文档
+  - 文件包/文档仅指 `CQ:file`，zip、安装包、文档等；图片、动画表情、语音不归入文件范畴
   - 文件包/文档下载默认关闭
+
+## 微信路线封存记录
+
+已完成但封存：
+
+- 微信 Hook 通用入口：`POST /api/wechat/events`
+- 外部消息兼容入口：`POST /api/receive_external_msg`
+- 媒体上传入口：`POST /api/external/media`、`POST /api/wechat/media`
+- PC 微信托盘采集器骨架：`wechat_tray_adapter/`
+- 微信样本回放测试
+
+封存原因：
+
+- 新版微信 4.x 与当前 `wcferry 39.5.2.0` 不兼容。
+- 已下载并校验 `tom-snow/wechat-windows-versions` 的 `WeChatSetup-3.9.12.51.exe`，SHA256 匹配，腾讯签名有效，安装后 `WeChat.exe` 版本为 `3.9.12.51`。
+- WCF 注入旧版微信时日志显示 `MapImage => 0xC000010A`。
+- 本机开启 HVCI/内存完整性，注入链路受阻。
+- 关闭主力机内存完整性风险较高。
+- 独立采集机或虚拟机会占用同一个微信号的 PC 登录。
+- PadLocal/iPad 协议依赖外部 Token，存在账号风控。
+- 数据库读取无法保证未点开的图片、视频、文件完整落地。
+
+恢复条件：
+
+- 用户明确重新开启微信路线。
+- 或出现稳定、低风险、不占用当前 PC 登录、可后台缓存媒体的方案。
 
 ## NAS 信息
 
@@ -120,12 +132,16 @@ git push ssh://git@192.168.31.210:2222/YokiiroBW/chat-audit-core.git main
 
 ## 当前未完成 / 后续队列
 
-队列文件：`DEVELOPMENT_QUEUE.md`、`TASK_QUEUE.md`
+队列文件：`DEVELOPMENT_QUEUE.md`、`TASK_QUEUE.md`、`CURRENT_QUEUE_STATUS.md`
 
-仍需处理：
+当前 QQ 主线：
 
-- 微信 PC 托盘采集适配器：当前已支持通用微信 Hook 字段、数字类型和样本回放；下一阶段实现 Windows PC 静默托盘采集器，托盘软件内置集成 `wcferry`/WeChatFerry，不要求用户单独启动 WeChatFerry 服务。还需补 NAS 外部消息兼容入口、Multipart 文件上传、WeChatFerry 专属字段映射、断线队列、静默托盘 UI、真实样本和部署说明。
-- 持续更新交接文档：每次版本推进后更新最新提交、测试数量、NAS 状态和剩余队列。
+- QQ 离线完整性验收。
+- QQ 媒体回填与缺失原因细化。
+- QQ 合并转发与卡片消息增强。
+- QQ 回复消息点击跳转。
+- QQ 前端审计体验完善。
+- 生产化回归、NAS 验收、文档更新。
 
 ## 继续推进规则
 

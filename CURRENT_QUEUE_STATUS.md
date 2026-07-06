@@ -2,45 +2,56 @@
 
 更新时间：2026-07-06
 
+## 当前主线
+
+主线已切回 QQ/NapCat 消息备份与审计体验完善。微信路线暂时封存，只保留已完成代码和文档，不继续推进。
+
 ## 已完成并推送
 
-- NAS 外部消息兼容入口：`POST /api/receive_external_msg`。
-- NAS multipart 媒体上传入口：`POST /api/external/media`、`POST /api/wechat/media`。
-- WeChatFerry 字段归一化：`self_wxid`、`roomid`、`sender`、`msgid`、`type`、`content`、`thumb`、`extra`、`uploaded_path`。
-- Windows PC 微信托盘采集器核心骨架：
-  - 配置读取
-  - NAS 客户端
-  - multipart 编码
-  - WeChatFerry 消息映射
-  - SQLite 离线队列
-  - 上传/发送 worker
-  - 托盘入口
-- PC 端打包与自启脚本：
-  - `scripts/build_wechat_tray.ps1`
-  - `scripts/build_wechat_tray_installer.ps1`
-  - `scripts/install_wechat_tray_startup.ps1`
-  - `scripts/uninstall_wechat_tray_startup.ps1`
-  - `scripts/write_wechat_tray_config.ps1`
-- 单文件安装包输出：`dist\ChatAuditWechatTraySetup.ps1`，安装后程序位于 `%LOCALAPPDATA%\ChatAuditWechatTray\app`。
-- 打包产物版本号和发布包校验：`wechat_tray_adapter/version.py` 与构建 manifest/SHA256。
-- 托盘端最小配置编辑入口：托盘菜单“配置”按需打开 Tkinter 配置窗口。
-- 文档：`WECHAT_TRAY_ADAPTER.md` 与 README 入口。
+- QQ/NapCat OneBot 11 反向 WebSocket 入库。
+- 机器人身份档案与适配器连接分离，支持同一适配器切换不同 bot 后自动建档。
+- QQ 主视角隔离，避免不同 bot 的消息串线。
+- CQ 文本、图片、动画表情、语音、视频、文件包/文档、回复、@、卡片、合并转发解析与展示。
+- 本地媒体缓存、媒体回填、离线审计和离线修复。
+- 图片弹窗预览、合并转发展开、回复预览。
+- 头像、群名称、私聊资料、机器人资料缓存。
+- 角色抓取黑白名单与内容项策略。
+- 自动备份、手动备份、导出/导入、校验和系统签名。
+- 审计日志、限流、管理员 Token、数据库用户和会话管理。
+- 数据库迁移体系和 NAS Alembic 验收。
+- FFmpeg 可选转码，推荐使用内置静态 FFmpeg Docker 覆盖文件。
+- Forgejo SSH 推送链路可用。
+- 微信通用入口和 PC 托盘骨架已完成但封存。
 
 ## 继续推进队列
 
-1. 托盘端真实 `wcferry` 版本适配和消息读取 API 校准。
-2. Windows 桌面托盘 UI 实机验收：图标、菜单、退出、打开 NAS、立即补发。
-3. 真实微信端到端样本：私聊、群聊、图片、语音、视频、文件、动画表情、卡片。
-4. 真实环境确认后，按实际 `wcferry` API 调整读取循环和媒体下载细节。
-5. 当前本机运行的是新版 `Weixin.exe`，`wcferry 39.5.2.0` 无法读取传统 WeChat 注册表路径；需要安装兼容版微信或确认新版微信适配方案。
+1. QQ 离线完整性验收：确认断网后文本、图片、动画表情、语音、视频、文件、卡片、合并转发、回复都可查看或给出明确缺失原因。
+2. QQ 媒体回填增强：细分缺失原因，完善批量回填、失败记录和前端状态。
+3. QQ 合并转发与卡片消息增强：尽量自动缓存子消息，卡片保留摘要、预览图、URL 和快照。
+4. QQ 回复消息跳转：点击引用块跳转到原消息，目标消息高亮定位。
+5. QQ 前端审计体验优化：聊天区信息密度、空状态、头像和群名显示稳定性。
+6. 生产化回归：测试、中文提交、推送 Forgejo；涉及部署变化时部署 NAS 并验收。
+
+## 微信路线封存说明
+
+已完成验证：
+
+- `tom-snow/wechat-windows-versions` 的 `WeChatSetup-3.9.12.51.exe` 已下载校验。
+- SHA256 与 Release 记录一致。
+- 安装包签名有效，签名主体为 Tencent Technology (Shenzhen) Company Limited。
+- 旧版微信安装后 `WeChat.exe` 版本为 `3.9.12.51`。
+
+封存原因：
+
+- WCF 注入日志显示 `MapImage => 0xC000010A`。
+- 本机开启 HVCI/内存完整性，注入链路受阻。
+- 关闭主力机内存完整性风险不可忽略。
+- 独立采集机/虚拟机会占用同一微信号 PC 登录。
+- PadLocal/iPad 协议存在账号风控和外部 Token 依赖。
+- 数据库读取无法保证未点开的图片、视频、文件完整落地。
+
+恢复前不再继续微信适配开发。
 
 ## 需要用户介入
 
-- 准备已登录官方 PC 微信的 Windows 桌面环境。
-- 确认该微信版本可被 WeChatFerry / `wcferry` 支持。
-- 提供或现场生成真实消息样本用于验收。
-- 允许在真实 Windows 桌面环境安装 `wcferry`、`pystray`、`Pillow`、`PyInstaller` 等 PC 端依赖。
-
-## 当前阻塞说明
-
-真实微信消息读取和托盘 UI 行为无法在当前 NAS/后端测试环境里完成，需要 Windows 桌面和已登录微信。该阻塞不影响后端、核心映射、离线队列和文档继续推进。
+当前 QQ 主线暂不需要用户介入。后续如需要真实群聊样本、NAS 现场验收或 UI 体验确认，再单独提出。
