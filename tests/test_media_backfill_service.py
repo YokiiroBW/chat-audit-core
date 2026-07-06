@@ -79,7 +79,9 @@ async def test_backfill_historical_media_reports_expired_url_without_overwriting
     assert report.unchanged == 1
     assert report.failed == 1
     assert report.media_failed == 1
+    assert report.reason_summary == {"download_failed_or_expired": 1}
     assert report.failures[0].target == "http://media.local/expired.jpg"
+    assert report.failures[0].label == "媒体下载失败或源地址已过期"
     assert messages[0].local_message == raw
 
 
@@ -310,4 +312,5 @@ async def test_media_backfill_api_supports_dry_run(db_session, tmp_path):
     assert payload["candidates"] == 1
     assert payload["updated"] == 0
     assert payload["unchanged"] == 1
+    assert payload["reason_summary"] == {}
     assert payload["failures"] == []

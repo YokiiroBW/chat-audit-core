@@ -12,6 +12,37 @@ from app.services.media_backfill_service import (
     _find_uncached_media_urls,
 )
 
+OFFLINE_ISSUE_DETAILS = {
+    "message_still_references_remote_media": (
+        "消息仍引用远程媒体地址",
+        "运行媒体回填；如果源端地址已过期，可用占位文件封存缺失原因。",
+    ),
+    "card_page_snapshot_missing": (
+        "卡片网页快照未缓存",
+        "运行媒体回填缓存卡片网页；如果页面不可达，可封存为缺失快照。",
+    ),
+    "forward_payload_not_cached": (
+        "合并转发详情未缓存",
+        "在机器人在线时运行媒体回填，拉取并缓存合并转发子消息。",
+    ),
+    "profile_avatar_not_cached": (
+        "头像未缓存",
+        "运行离线修复，生成占位头像或重新尝试拉取头像。",
+    ),
+    "profile_avatar_not_local": (
+        "头像仍指向非本地地址",
+        "运行离线修复，将头像转成本地缓存路径。",
+    ),
+    "local_path_has_no_media_asset_index": (
+        "本地路径缺少媒体索引",
+        "运行离线修复，为已存在的本地文件补建媒体索引。",
+    ),
+    "media_asset_file_missing": (
+        "媒体索引对应文件丢失",
+        "运行离线修复创建缺失占位文件，或重新回填原始媒体。",
+    ),
+}
+
 
 @dataclass
 class OfflineAuditIssue:
@@ -19,6 +50,17 @@ class OfflineAuditIssue:
     target: str
     reason: str
     msg_hash: str | None = None
+    label: str | None = None
+    action: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.label is not None and self.action is not None:
+            return
+        label, action = OFFLINE_ISSUE_DETAILS.get(self.reason, ("未缓存资产", "检查该条记录并按需运行媒体回填或离线修复。"))
+        if self.label is None:
+            self.label = label
+        if self.action is None:
+            self.action = action
 
 
 @dataclass
@@ -33,10 +75,12 @@ class OfflineAuditReport:
     missing_profile_avatars: int = 0
     missing_media_assets: int = 0
     missing_media_files: int = 0
+    reason_summary: dict[str, int] = field(default_factory=dict)
     issues: list[OfflineAuditIssue] = field(default_factory=list)
 
     def add_issue(self, issue: OfflineAuditIssue, issue_limit: int) -> None:
         self.offline_ready = False
+        self.reason_summary[issue.reason] = self.reason_summary.get(issue.reason, 0) + 1
         if len(self.issues) < issue_limit:
             self.issues.append(issue)
 

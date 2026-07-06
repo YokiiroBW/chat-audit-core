@@ -153,6 +153,13 @@ async def onebot11_reverse_ws(
 
     await websocket.accept()
     adapter_id = websocket.query_params.get("adapter_id") or websocket.headers.get("x-adapter-id")
+    background_tasks: set[asyncio.Task] = set()
+
+    def track_background_task(coro) -> None:
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
     try:
         while True:
             event = await websocket.receive_json()
@@ -186,8 +193,8 @@ async def onebot11_reverse_ws(
                 media_http_client=media_http_client,
             )
             if msg_hash and "[CQ:forward," in normalized.msg_data.get("raw_message", ""):
-                asyncio.create_task(_hydrate_forward_payloads(normalized.robot_id, msg_hash))
-            asyncio.create_task(
+                track_background_task(_hydrate_forward_payloads(normalized.robot_id, msg_hash))
+            track_background_task(
                 _hydrate_user_profile(
                     normalized.platform,
                     normalized.msg_data["sender_id"],
@@ -195,7 +202,12 @@ async def onebot11_reverse_ws(
                 )
             )
             if normalized.msg_data.get("message_type") == "group":
-                asyncio.create_task(_hydrate_group_profile(normalized.robot_id, normalized.platform, normalized.msg_data["room_id"]))
+                track_background_task(_hydrate_group_profile(normalized.robot_id, normalized.platform, normalized.msg_data["room_id"]))
     except WebSocketDisconnect:
-        OneBotRPCService.unregister_connection(websocket)
         return
+    finally:
+        for task in list(background_tasks):
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        OneBotRPCService.unregister_connection(websocket)

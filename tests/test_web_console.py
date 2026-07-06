@@ -61,6 +61,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "jumpToReplyMessage" in html
     assert "around_message_id" in html
     assert "reply-jump-highlight" in html
+    assert "replyJumpMissingId" in html
+    assert "原消息未缓存或已被清理" in html
     assert "reply_preview_text" in html
     assert "external_message_id" in html
     assert "acc.avatar_path" in html
@@ -102,6 +104,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "/api/offline/repair" in html
     assert "profile_avatars" in html
     assert "repaired_profile_avatars" in html
+    assert "reason_summary" in html
+    assert "缺失原因汇总" in html
     assert "exportRobotId" in html
     assert "downloadExportPackage" in html
     assert "/api/export" in html

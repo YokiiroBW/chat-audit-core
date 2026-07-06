@@ -6,6 +6,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
+from app.database import create_all_tables, create_async_engine_and_sessionmaker
 from app.models import Adapter, BotProfile
 from app.services.query_service import QueryService
 
@@ -15,6 +16,15 @@ class StubAsyncClient:
         self.payloads = payloads
         self.status_codes = status_codes or {}
         self.requested_urls: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def aclose(self):
+        return None
 
     async def get(self, url: str):
         self.requested_urls.append(url)
@@ -226,6 +236,64 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
     assert "http://media.local" not in messages[0].local_message
     assert static_response.status_code == 200
     assert static_response.content == media_bytes
+
+
+@pytest.mark.asyncio
+async def test_onebot_forward_hydration_caches_payload_without_opening(tmp_path, monkeypatch):
+    import app.ws as ws_module
+
+    database_path = tmp_path / "forward-hydration.sqlite3"
+    engine, sessionmaker = create_async_engine_and_sessionmaker(f"sqlite+aiosqlite:///{database_path.as_posix()}")
+    await create_all_tables(engine)
+    monkeypatch.setattr(ws_module, "AsyncSessionLocal", sessionmaker)
+
+    async def fake_call_action(robot_id: str, action: str, params: dict):
+        assert robot_id == "123456"
+        assert action == "get_forward_msg"
+        assert params == {"id": "forward-auto"}
+        return {
+            "status": "ok",
+            "data": {
+                "messages": [
+                    {
+                        "sender": {"nickname": "Forward Sender"},
+                        "raw_message": "[CQ:image,file=f.jpg,url=http://media.local/forward.jpg]",
+                    }
+                ]
+            },
+        }
+
+    monkeypatch.setattr(ws_module.OneBotRPCService, "call_action", fake_call_action)
+
+    try:
+        async with sessionmaker() as session:
+            await register_adapter(session)
+            msg_hash = await ws_module.MessageService.process_incoming_message(
+                session,
+                "123456",
+                "qq",
+                {
+                    "room_id": "998877",
+                    "message_type": "group",
+                    "sender_id": "445566",
+                    "nickname": "Alice",
+                    "raw_message": "[CQ:forward,id=forward-auto]",
+                    "timestamp": 1783000450,
+                },
+            )
+
+        stub_client = StubAsyncClient({"http://media.local/forward.jpg": b"forward image"})
+        monkeypatch.setattr(ws_module.httpx, "AsyncClient", lambda *args, **kwargs: stub_client)
+
+        await ws_module._hydrate_forward_payloads("123456", msg_hash)
+
+        async with sessionmaker() as session:
+            messages = await QueryService.list_messages(session, robot_id="123456", room_id="998877")
+    finally:
+        await engine.dispose()
+
+    assert stub_client.requested_urls == ["http://media.local/forward.jpg"]
+    assert "local=/static/storage/" in messages[0].local_message
 
 
 @pytest.mark.asyncio

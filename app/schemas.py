@@ -284,6 +284,8 @@ class MediaBackfillFailureResponse(BaseModel):
     kind: str
     target: str
     reason: str
+    label: str | None = None
+    action: str | None = None
 
 
 class MediaBackfillResponse(BaseModel):
@@ -294,6 +296,7 @@ class MediaBackfillResponse(BaseModel):
     failed: int
     media_failed: int
     forward_failed: int
+    reason_summary: dict[str, int] = Field(default_factory=dict)
     failures: list[MediaBackfillFailureResponse]
 
 
@@ -302,6 +305,8 @@ class OfflineAuditIssueResponse(BaseModel):
     target: str
     reason: str
     msg_hash: str | None = None
+    label: str | None = None
+    action: str | None = None
 
 
 class OfflineAuditResponse(BaseModel):
@@ -315,6 +320,7 @@ class OfflineAuditResponse(BaseModel):
     missing_profile_avatars: int
     missing_media_assets: int
     missing_media_files: int
+    reason_summary: dict[str, int] = Field(default_factory=dict)
     issues: list[OfflineAuditIssueResponse]
 
 

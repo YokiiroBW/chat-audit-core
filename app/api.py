@@ -1215,6 +1215,7 @@ async def backfill_media(
         failed=report.failed,
         media_failed=report.media_failed,
         forward_failed=report.forward_failed,
+        reason_summary=report.reason_summary,
         failures=[failure.__dict__ for failure in report.failures],
     )
 
@@ -1248,6 +1249,7 @@ async def audit_offline_readiness(
         missing_profile_avatars=report.missing_profile_avatars,
         missing_media_assets=report.missing_media_assets,
         missing_media_files=report.missing_media_files,
+        reason_summary=report.reason_summary,
         issues=[issue.__dict__ for issue in report.issues],
     )
 

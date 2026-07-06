@@ -21,6 +21,25 @@ from app.services.media_service import (
 
 ForwardPayloadLoader = Callable[[str, str], Awaitable[dict[str, Any]]]
 
+BACKFILL_FAILURE_DETAILS = {
+    "download_failed_or_expired": (
+        "媒体下载失败或源地址已过期",
+        "确认机器人可访问源消息；如果无法恢复，可使用 finalize_unavailable 生成占位缓存。",
+    ),
+    "snapshot_failed_or_unavailable": (
+        "卡片网页快照下载失败",
+        "确认网页仍可访问；如果不可恢复，可使用 finalize_unavailable 生成缺失快照。",
+    ),
+    "forward_loader_unavailable": (
+        "缺少合并转发拉取通道",
+        "需要机器人在线并提供 get_forward_msg 能力后重新回填。",
+    ),
+    "forward_payload_unavailable": (
+        "合并转发详情拉取失败",
+        "确认对应机器人在线、消息仍可拉取；无法恢复时可生成缺失占位。",
+    ),
+}
+
 
 @dataclass
 class MediaBackfillFailure:
@@ -28,6 +47,17 @@ class MediaBackfillFailure:
     kind: str
     target: str
     reason: str
+    label: str | None = None
+    action: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.label is not None and self.action is not None:
+            return
+        label, action = BACKFILL_FAILURE_DETAILS.get(self.reason, ("回填失败", "检查源消息、网络和抓取策略后重试。"))
+        if self.label is None:
+            self.label = label
+        if self.action is None:
+            self.action = action
 
 
 @dataclass
@@ -39,10 +69,12 @@ class MediaBackfillReport:
     failed: int = 0
     media_failed: int = 0
     forward_failed: int = 0
+    reason_summary: dict[str, int] = field(default_factory=dict)
     failures: list[MediaBackfillFailure] = field(default_factory=list)
 
     def add_failure(self, failure: MediaBackfillFailure, failure_limit: int) -> None:
         self.failed += 1
+        self.reason_summary[failure.reason] = self.reason_summary.get(failure.reason, 0) + 1
         if failure.kind == "forward":
             self.forward_failed += 1
         else:

@@ -325,9 +325,10 @@
       align-items: center;
       justify-content: flex-start;
       color: var(--muted);
-      padding: 16px 24px;
+      padding: 10px 24px;
       border-bottom: 1px solid var(--line);
       background: #f8fafc;
+      font-size: 12px;
     }
     .chat-scroll {
       flex: 1;
@@ -744,7 +745,7 @@
           <button id="openExportButton" class="btn primary">高级过滤导出</button>
         </div>
       </header>
-      <div id="chatEmpty" class="chat-empty">从左侧选择一个机器人账号和会话，开始审计聊天资产。</div>
+      <div id="chatEmpty" class="chat-empty">请选择机器人账号和会话</div>
       <div id="chatWindow" class="chat-scroll" hidden></div>
     </main>
   </div>
@@ -843,6 +844,7 @@
       loadingRooms: false,
       loadingHistory: false,
       highlightedMessageId: '',
+      replyJumpMissingId: '',
       settingsMode: false,
       editingAdapterId: null,
       importValidationReport: null,
@@ -1683,9 +1685,10 @@
       const preview = document.createElement('div');
       preview.className = 'reply-preview';
       const backendPreview = replyPreviewText(params.id);
-      preview.textContent = backendPreview || (source
+      const isMissing = params.id && String(state.replyJumpMissingId || '') === String(params.id);
+      preview.textContent = isMissing ? '原消息未缓存或已被清理' : (backendPreview || (source
         ? `${source.nickname || source.sender_id}: ${plainMessagePreview(source.local_message || source.raw_message)}`
-        : '原消息暂未加载');
+        : '原消息暂未加载'));
       card.appendChild(preview);
       container.appendChild(card);
     };
@@ -2281,14 +2284,19 @@
     async function jumpToReplyMessage(replyId) {
       if (!replyId || !state.currentRobot || !state.currentRoom) return;
       if (findReplyMessage(replyId)) {
+        state.replyJumpMissingId = '';
         scrollToExternalMessage(replyId);
         return;
       }
       const around = await loadMessages(null, replyId);
       if (around.length > 0) {
         state.messageList = mergeMessages([...state.messageList, ...around]);
+        state.replyJumpMissingId = '';
         renderChat();
         scrollToExternalMessage(replyId);
+      } else {
+        state.replyJumpMissingId = String(replyId);
+        renderChat();
       }
     }
 
@@ -2478,10 +2486,23 @@
         row.append(label, valueNode);
         box.appendChild(row);
       }
+      if (report.reason_summary && Object.keys(report.reason_summary).length) {
+        const summary = document.createElement('div');
+        const label = document.createElement('strong');
+        label.textContent = '缺失原因汇总：';
+        const valueNode = document.createElement('span');
+        valueNode.textContent = Object.entries(report.reason_summary)
+          .map(([reason, count]) => `${reason} ${count}`)
+          .join(' / ');
+        summary.append(label, valueNode);
+        box.appendChild(summary);
+      }
       (report.issues || []).slice(0, 20).forEach((issue) => {
         const row = document.createElement('div');
         row.className = 'bad';
-        row.textContent = `${issue.kind}: ${issue.target} (${issue.reason})`;
+        const title = issue.label || issue.reason;
+        const action = issue.action ? `；${issue.action}` : '';
+        row.textContent = `${issue.kind}: ${title} - ${issue.target}${action}`;
         box.appendChild(row);
       });
     };

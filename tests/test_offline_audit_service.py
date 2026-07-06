@@ -409,7 +409,10 @@ async def test_offline_audit_api_returns_report(db_session, tmp_path):
     assert payload["profile_avatars_checked"] == 2
     assert payload["missing_profile_avatars"] == 0
     assert payload["uncached_forwards"] == 1
+    assert payload["reason_summary"] == {"forward_payload_not_cached": 1}
     assert payload["issues"][0]["kind"] == "forward"
+    assert payload["issues"][0]["label"] == "合并转发详情未缓存"
+    assert "运行媒体回填" in payload["issues"][0]["action"]
 
 
 @pytest.mark.asyncio
