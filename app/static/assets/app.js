@@ -757,6 +757,22 @@
       applyRoleUi();
     };
 
+    const mountAdapterEditorPortal = () => {
+      ['adapterEditorBackdrop', 'adapterEditor'].forEach((id) => {
+        const node = el(id);
+        if (node.parentElement !== document.body) {
+          document.body.appendChild(node);
+        }
+      });
+    };
+
+    const resetAdapterEditorScroll = () => {
+      requestAnimationFrame(() => {
+        const editor = el('adapterEditor');
+        if (!editor.hidden) editor.scrollTop = 0;
+      });
+    };
+
     const renderAuthStatus = () => {
       const identity = state.authIdentity;
       el('authActor').textContent = identity ? `${identity.actor} · ${identity.role}` : (state.adminApiToken ? 'Token 已设置' : '未登录');
@@ -2172,6 +2188,7 @@
       el('adapterEnabledSwitch').checked = false;
       fillAdapterQuickConfig('');
       renderSettings();
+      resetAdapterEditorScroll();
     };
 
     const editAdapter = (adapter) => {
@@ -2184,6 +2201,7 @@
       el('adapterEnabledSwitch').checked = adapter.status === 'green';
       fillAdapterQuickConfig(adapter.config_json || '');
       renderSettings();
+      resetAdapterEditorScroll();
     };
 
     const saveAdapter = async () => {
@@ -2883,6 +2901,7 @@
     };
 
     const bindEvents = () => {
+      mountAdapterEditorPortal();
       [
         ['loginButton', loginWithPassword],
         ['logoutButton', logoutAuth],
