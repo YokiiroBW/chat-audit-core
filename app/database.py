@@ -50,6 +50,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}
+VALID_TABLE_NAMES = frozenset(Base.metadata.tables)
 
 
 def create_async_engine_and_sessionmaker(database_url: str | None = None) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
@@ -95,6 +96,8 @@ async def ensure_schema_compatibility(target_engine: AsyncEngine | None = None) 
 
 
 async def _table_columns(conn, table_name: str) -> set[str]:
+    if table_name not in VALID_TABLE_NAMES:
+        raise ValueError(f"Invalid table name: {table_name}")
     return await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns(table_name)})
 
 

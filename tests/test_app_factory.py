@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.pool import NullPool, StaticPool
 
 from app.config import Settings
-from app.database import LIGHTWEIGHT_MIGRATION_REGISTRY, LIGHTWEIGHT_MIGRATIONS, create_async_engine_and_sessionmaker, ensure_schema_compatibility
+from app.database import LIGHTWEIGHT_MIGRATION_REGISTRY, LIGHTWEIGHT_MIGRATIONS, _table_columns, create_all_tables, create_async_engine_and_sessionmaker, ensure_schema_compatibility
 from app.main import create_app
 
 
@@ -33,6 +33,27 @@ def test_create_async_engine_configures_postgres_pool():
     assert pool._timeout == 30
     assert pool._recycle == 3600
     assert pool._pre_ping is True
+
+
+def test_table_columns_rejects_invalid_table_name():
+    engine, _sessionmaker = create_async_engine_and_sessionmaker("sqlite+aiosqlite:///:memory:")
+
+    async def inspect_columns():
+        await create_all_tables(engine)
+        async with engine.begin() as conn:
+            message_columns = await _table_columns(conn, "messages")
+            import pytest
+
+            with pytest.raises(ValueError, match="Invalid table name"):
+                await _table_columns(conn, "messages; drop table messages")
+        await engine.dispose()
+        return message_columns
+
+    import anyio
+
+    columns = anyio.run(inspect_columns)
+
+    assert "msg_hash" in columns
 
 
 def test_lightweight_migrations_upgrade_legacy_sqlite_schema(tmp_path):
