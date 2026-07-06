@@ -61,6 +61,10 @@ class BlockingOneBotWebSocket(FakeOneBotWebSocket):
         super().__init__(events, query_params, headers)
         self.blocker = asyncio.Event()
 
+    async def close(self, code=None):
+        await super().close(code)
+        self.blocker.set()
+
     async def receive_json(self):
         if self.events:
             return self.events.pop(0)
@@ -175,6 +179,27 @@ async def test_onebot_websocket_registers_rpc_connection_from_meta_event(db_sess
             await task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_heartbeat_closes_unresponsive_connection(db_session, monkeypatch):
+    from app.config import get_settings
+    from app.services.onebot_rpc_service import OneBotRPCService
+    from app.ws import onebot11_reverse_ws
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "onebot_heartbeat_interval_seconds", 0.01)
+    monkeypatch.setattr(settings, "onebot_heartbeat_timeout_seconds", 0.01)
+    OneBotRPCService._connections.clear()
+    OneBotRPCService._pending.clear()
+    websocket = BlockingOneBotWebSocket([{"post_type": "meta_event", "self_id": "123456"}])
+
+    await onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token="")
+
+    assert websocket.closed == 4001
+    assert websocket.sent_json
+    assert websocket.sent_json[0]["action"] == "get_status"
+    assert "123456" not in OneBotRPCService._connections
 
 
 @pytest.mark.asyncio

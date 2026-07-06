@@ -59,6 +59,49 @@ def _extract_robot_id(event: dict[str, Any]) -> str | None:
     return str(self_id)
 
 
+async def _onebot_heartbeat_loop(
+    websocket: WebSocket,
+    *,
+    adapter_id: str | None,
+    get_connection: Any,
+    interval_seconds: float,
+    timeout_seconds: float,
+) -> None:
+    if interval_seconds <= 0 or timeout_seconds <= 0:
+        return
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        robot_id, connection_id = get_connection()
+        if not robot_id or not connection_id:
+            continue
+
+        try:
+            await OneBotRPCService.call_action(
+                robot_id,
+                "get_status",
+                {},
+                timeout_seconds=timeout_seconds,
+                connection_id=connection_id,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "OneBot WebSocket heartbeat timeout",
+                extra={"adapter_id": adapter_id, "robot_id": robot_id, "connection_id": connection_id},
+            )
+            await websocket.close(code=4001)
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "OneBot WebSocket heartbeat failed",
+                extra={"adapter_id": adapter_id, "robot_id": robot_id, "connection_id": connection_id, "error": str(exc)},
+            )
+            await websocket.close(code=4001)
+            return
+
+
 async def _hydrate_forward_payloads(robot_id: str, connection_id: str, msg_hash: str) -> None:
     """后台任务：拉取合并转发详情并缓存。"""
     settings = get_settings()
@@ -211,6 +254,7 @@ async def onebot11_reverse_ws(
 
     await websocket.accept()
     metrics_registry.websocket_connected()
+    settings = get_settings()
     adapter_id = websocket.query_params.get("adapter_id") or websocket.headers.get("x-adapter-id")
     background_tasks: set[asyncio.Task] = set()
     connection_id: str | None = None
@@ -222,6 +266,15 @@ async def onebot11_reverse_ws(
         task.add_done_callback(background_tasks.discard)
 
     try:
+        track_background_task(
+            _onebot_heartbeat_loop(
+                websocket,
+                adapter_id=adapter_id,
+                get_connection=lambda: (current_robot_id, connection_id),
+                interval_seconds=settings.onebot_heartbeat_interval_seconds,
+                timeout_seconds=settings.onebot_heartbeat_timeout_seconds,
+            )
+        )
         while True:
             event = await websocket.receive_json()
 

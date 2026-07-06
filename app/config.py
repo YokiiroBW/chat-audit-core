@@ -28,6 +28,8 @@ class Settings(BaseSettings):
 
     onebot_ws_path: str = "/onebot/v11/ws"
     onebot_access_token: str = ""
+    onebot_heartbeat_interval_seconds: float = 30
+    onebot_heartbeat_timeout_seconds: float = 10
 
     media_download_timeout_seconds: int = 30
     media_max_bytes: int = 104857600
