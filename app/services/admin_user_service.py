@@ -1,9 +1,11 @@
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 from dataclasses import dataclass
 
+import bcrypt
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +15,7 @@ from app.time_utils import utc_now
 
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 210_000
+BCRYPT_ROUNDS = 12
 
 
 @dataclass(frozen=True)
@@ -31,19 +34,36 @@ class AdminUserService:
 
     @staticmethod
     def hash_password(password: str) -> str:
-        salt = secrets.token_bytes(16)
-        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_HASH_ITERATIONS)
-        return "$".join(
-            [
-                PASSWORD_HASH_ALGORITHM,
-                str(PASSWORD_HASH_ITERATIONS),
-                base64.urlsafe_b64encode(salt).decode("ascii"),
-                base64.urlsafe_b64encode(digest).decode("ascii"),
-            ]
-        )
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("utf-8")
 
     @staticmethod
     def verify_password(password: str, password_hash: str) -> bool:
+        if AdminUserService._is_bcrypt_hash(password_hash):
+            try:
+                return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+            except ValueError:
+                return False
+        if AdminUserService._verify_legacy_sha256_password(password, password_hash):
+            return True
+        return AdminUserService._verify_pbkdf2_password(password, password_hash)
+
+    @staticmethod
+    def password_hash_needs_upgrade(password_hash: str) -> bool:
+        return not AdminUserService._is_bcrypt_hash(password_hash)
+
+    @staticmethod
+    def _is_bcrypt_hash(password_hash: str) -> bool:
+        return password_hash.startswith(("$2a$", "$2b$", "$2y$"))
+
+    @staticmethod
+    def _verify_legacy_sha256_password(password: str, password_hash: str) -> bool:
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", password_hash or ""):
+            return False
+        expected = hashlib.sha256(password.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(expected, password_hash.lower())
+
+    @staticmethod
+    def _verify_pbkdf2_password(password: str, password_hash: str) -> bool:
         try:
             algorithm, iterations_raw, salt_raw, expected_raw = password_hash.split("$", 3)
             if algorithm != PASSWORD_HASH_ALGORITHM:
@@ -111,6 +131,8 @@ class AdminUserService:
             return None
         if not AdminUserService.verify_password(password, user.password_hash):
             return None
+        if AdminUserService.password_hash_needs_upgrade(user.password_hash):
+            user.password_hash = AdminUserService.hash_password(password)
         user.last_login_at = utc_now()
         await db.commit()
         await db.refresh(user)

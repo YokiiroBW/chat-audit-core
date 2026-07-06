@@ -1,9 +1,27 @@
+import base64
+import hashlib
+
 from httpx import ASGITransport, AsyncClient
 import pytest
 
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
+from app.models import AdminUser
+from app.services.admin_user_service import PASSWORD_HASH_ITERATIONS, AdminUserService
+
+
+def _legacy_pbkdf2_hash(password: str) -> str:
+    salt = b"legacy-pbkdf2-salt"
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_HASH_ITERATIONS)
+    return "$".join(
+        [
+            "pbkdf2_sha256",
+            str(PASSWORD_HASH_ITERATIONS),
+            base64.urlsafe_b64encode(salt).decode("ascii"),
+            base64.urlsafe_b64encode(digest).decode("ascii"),
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -52,6 +70,64 @@ async def test_database_user_login_logout_and_role_authorization(db_session, tmp
     assert after_revoke_login.status_code == 401
     assert logs.status_code == 200
     assert {record["status"] for record in logs.json()} >= {"success", "failed"}
+
+
+@pytest.mark.asyncio
+async def test_admin_password_hash_uses_bcrypt_for_new_users(db_session):
+    user = await AdminUserService.create_user(
+        db_session,
+        username="bcrypt-user",
+        password="strong-password-1",
+        role="viewer",
+    )
+
+    assert user.password_hash.startswith("$2")
+    assert AdminUserService.verify_password("strong-password-1", user.password_hash) is True
+    assert AdminUserService.hash_password("strong-password-1") != AdminUserService.hash_password("strong-password-1")
+
+
+@pytest.mark.asyncio
+async def test_admin_login_upgrades_pbkdf2_password_hash(db_session):
+    user = AdminUser(
+        username="legacy-pbkdf2",
+        role="viewer",
+        password_hash=_legacy_pbkdf2_hash("strong-password-1"),
+        status="active",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    authenticated = await AdminUserService.authenticate(
+        db_session,
+        username="legacy-pbkdf2",
+        password="strong-password-1",
+    )
+
+    assert authenticated is not None
+    assert authenticated.password_hash.startswith("$2")
+    assert AdminUserService.verify_password("strong-password-1", authenticated.password_hash) is True
+
+
+@pytest.mark.asyncio
+async def test_admin_login_upgrades_legacy_sha256_password_hash(db_session):
+    user = AdminUser(
+        username="legacy-sha256",
+        role="viewer",
+        password_hash=hashlib.sha256("strong-password-1".encode("utf-8")).hexdigest(),
+        status="active",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    authenticated = await AdminUserService.authenticate(
+        db_session,
+        username="legacy-sha256",
+        password="strong-password-1",
+    )
+
+    assert authenticated is not None
+    assert authenticated.password_hash.startswith("$2")
+    assert AdminUserService.verify_password("strong-password-1", authenticated.password_hash) is True
 
 
 @pytest.mark.asyncio
