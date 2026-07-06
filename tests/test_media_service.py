@@ -10,13 +10,14 @@ from app.services.message_service import MessageService
 
 
 class StubAsyncClient:
-    def __init__(self, payloads: dict[str, bytes]):
+    def __init__(self, payloads: dict[str, bytes], headers: dict[str, dict[str, str]] | None = None):
         self.payloads = payloads
+        self.headers = headers or {}
         self.requested_urls: list[str] = []
 
     async def get(self, url: str):
         self.requested_urls.append(url)
-        return httpx.Response(200, content=self.payloads[url])
+        return httpx.Response(200, content=self.payloads[url], headers=self.headers.get(url, {}))
 
 
 def test_parse_cq_media_segments_extracts_supported_media():
@@ -125,6 +126,76 @@ async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_pat
     assert rewritten == raw
     assert assets == []
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_rewrite_cq_media_rejects_disallowed_content_type(db_session, tmp_path):
+    client = StubAsyncClient(
+        {"http://media.local/not-image.jpg": b"<html>not an image</html>"},
+        {"http://media.local/not-image.jpg": {"content-type": "text/html; charset=utf-8"}},
+    )
+    raw = "[CQ:image,file=not-image.jpg,url=http://media.local/not-image.jpg]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert rewritten == raw
+    assert assets == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_rewrite_cq_media_accepts_allowed_content_type(db_session, tmp_path):
+    client = StubAsyncClient(
+        {"http://media.local/a.jpg": b"jpeg image bytes"},
+        {"http://media.local/a.jpg": {"content-type": "image/jpeg"}},
+    )
+    raw = "[CQ:image,file=a.jpg,url=http://media.local/a.jpg]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert rewritten.startswith("/static/storage/")
+    assert len(assets) == 1
+    assert assets[0].file_type == "image"
+
+
+@pytest.mark.asyncio
+async def test_download_url_to_local_path_accepts_card_page_html(db_session, tmp_path):
+    client = StubAsyncClient(
+        {"https://example.com/page": b"<html><title>snapshot</title></html>"},
+        {"https://example.com/page": {"content-type": "text/html; charset=utf-8"}},
+    )
+
+    local_path = await MediaService.download_url_to_local_path(
+        db_session,
+        "https://example.com/page",
+        media_type="card_page",
+        file_name="card.html",
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert local_path is not None
+    assert local_path.endswith(".html")
+    assert assets[0].file_type == "card_page"
 
 
 @pytest.mark.asyncio

@@ -113,6 +113,77 @@ _MEDIA_EXTENSIONS = {
     "webp",
     "svg",
 }
+_ALLOWED_DOWNLOAD_CONTENT_TYPES = {
+    "image": {
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    },
+    "voice": {
+        "application/octet-stream",
+        "audio/aac",
+        "audio/amr",
+        "audio/m4a",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/silk",
+        "audio/wav",
+        "audio/webm",
+        "audio/x-m4a",
+        "audio/x-wav",
+    },
+    "video": {
+        "video/mp4",
+        "video/quicktime",
+        "video/webm",
+        "video/x-matroska",
+        "video/x-msvideo",
+    },
+    "file": {
+        "application/gzip",
+        "application/java-archive",
+        "application/msword",
+        "application/octet-stream",
+        "application/pdf",
+        "application/vnd.android.package-archive",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/x-7z-compressed",
+        "application/x-msdownload",
+        "application/x-rar-compressed",
+        "application/x-tar",
+        "application/zip",
+        "text/csv",
+        "text/plain",
+    },
+    "card_page": {
+        "application/xhtml+xml",
+        "text/html",
+        "text/plain",
+    },
+    "json": {
+        "application/json",
+        "text/json",
+    },
+}
+
+
+def _normalize_content_type(content_type: str | None) -> str:
+    return (content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _is_allowed_download_content_type(media_type: str, content_type: str | None) -> bool:
+    normalized = _normalize_content_type(content_type)
+    if not normalized:
+        return True
+    allowed = _ALLOWED_DOWNLOAD_CONTENT_TYPES.get(media_type, _ALLOWED_DOWNLOAD_CONTENT_TYPES["file"])
+    return normalized in allowed
 
 
 def _parse_cq_params(params: str) -> dict[str, str]:
@@ -445,6 +516,8 @@ class MediaService:
             except (httpx.HTTPError, KeyError):
                 return None
             if response.status_code >= 400:
+                return None
+            if not _is_allowed_download_content_type(media_type, response.headers.get("content-type")):
                 return None
             content_length = response.headers.get("content-length")
             if content_length is not None and content_length.isdigit() and int(content_length) > media_max_bytes:
