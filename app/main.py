@@ -90,6 +90,11 @@ def create_app(
         StaticFiles(directory=active_settings.storage_root, check_dir=False),
         name="storage",
     )
+    app.mount(
+        "/assets",
+        StaticFiles(directory=static_dir / "assets", check_dir=False),
+        name="assets",
+    )
     app.include_router(public_api_router, prefix="/api")
     app.include_router(api_router, prefix="/api")
     app.include_router(ws_router)

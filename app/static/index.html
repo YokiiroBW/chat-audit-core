@@ -4,607 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>社交资产多租户审计控制台</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f3f4f6;
-      --panel: #ffffff;
-      --line: #e5e7eb;
-      --muted: #64748b;
-      --text: #1f2937;
-      --ink: #0f172a;
-      --accent: #059669;
-      --accent-soft: #d1fae5;
-      --danger: #dc2626;
-      --warn: #d97706;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      height: 100vh;
-      overflow: hidden;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-      font-size: 14px;
-    }
-    button, input, select, textarea { font: inherit; }
-    button {
-      cursor: pointer;
-      border: 0;
-      background: transparent;
-      color: inherit;
-    }
-    button:disabled { cursor: not-allowed; opacity: .5; }
-    input, select, textarea {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 7px 9px;
-      color: var(--text);
-      background: #fff;
-      outline: none;
-    }
-    input:focus, select:focus, textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(5, 150, 105, .14);
-    }
-    textarea { resize: vertical; min-height: 80px; }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
-    .app { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
-    .rail {
-      width: 84px;
-      flex: 0 0 84px;
-      background: #0f172a;
-      color: #e5e7eb;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      align-items: center;
-      padding: 22px 10px;
-    }
-    .brand { font-weight: 800; font-size: 12px; letter-spacing: .08em; margin-bottom: 22px; }
-    .account-stack { display: flex; flex-direction: column; gap: 14px; align-items: center; width: 100%; }
-    .avatar-button {
-      position: relative;
-      width: 52px;
-      height: 52px;
-      border-radius: 999px;
-      padding: 2px;
-      opacity: .72;
-    }
-    .avatar-button.active { opacity: 1; outline: 2px solid #34d399; }
-    .avatar, .room-avatar {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      background: #e5e7eb;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #475569;
-      font-size: 12px;
-      font-weight: 800;
-      overflow: hidden;
-      user-select: none;
-    }
-    .avatar img, .room-avatar img {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
-    .avatar { border-radius: 999px; }
-    .room-avatar { border-radius: 10px; }
-    .status-dot {
-      position: absolute;
-      right: 1px;
-      bottom: 1px;
-      width: 12px;
-      height: 12px;
-      border-radius: 999px;
-      border: 2px solid #0f172a;
-      background: #94a3b8;
-    }
-    .status-green { background: #34d399; }
-    .status-red { background: #f87171; }
-    .status-gray { background: #94a3b8; }
-    .rail-footer {
-      width: 100%;
-      color: #94a3b8;
-      text-align: center;
-      font-size: 12px;
-      display: grid;
-      gap: 10px;
-    }
-    .rail-footer button:hover { color: #fff; }
-    .sidebar {
-      width: 390px;
-      flex: 0 0 390px;
-      background: var(--panel);
-      border-right: 1px solid var(--line);
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-    }
-    .side-head, .settings, .search-box {
-      padding: 16px;
-      border-bottom: 1px solid var(--line);
-    }
-    .side-head h1 {
-      margin: 0 0 6px;
-      font-size: 15px;
-      line-height: 1.2;
-      font-weight: 700;
-    }
-    .hint { color: var(--muted); font-size: 12px; }
-    .dashboard-strip {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 6px;
-      margin-top: 12px;
-    }
-    .dashboard-stat {
-      min-width: 0;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 7px 6px;
-      background: #f8fafc;
-    }
-    .dashboard-stat strong {
-      display: block;
-      color: var(--ink);
-      font-size: 14px;
-      line-height: 1.1;
-    }
-    .dashboard-stat span {
-      display: block;
-      margin-top: 3px;
-      color: var(--muted);
-      font-size: 11px;
-    }
-    .search-row { display: flex; gap: 8px; margin-top: 12px; }
-    .search-row input { flex: 1; }
-    .rooms, .search-results, .adapter-list, .chat-scroll { overflow: auto; }
-    .rooms { flex: 1; }
-    .settings { display: none; background: #fff; }
-    .settings.open { display: block; }
-    .settings-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 10px;
-      font-weight: 700;
-    }
-    .form-grid { display: grid; gap: 8px; }
-    .button-row { display: flex; gap: 8px; }
-    .btn {
-      min-height: 34px;
-      border-radius: 6px;
-      border: 1px solid var(--line);
-      background: #fff;
-      padding: 7px 12px;
-      white-space: nowrap;
-    }
-    .btn:hover { background: #f8fafc; }
-    .btn.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    .btn.primary:hover { background: #047857; }
-    .btn.link {
-      border: 0;
-      padding: 0;
-      min-height: auto;
-      color: var(--accent);
-      background: transparent;
-    }
-    .btn.danger { color: var(--danger); }
-    .adapter-list {
-      margin-top: 10px;
-      max-height: 180px;
-      display: grid;
-      gap: 6px;
-    }
-    .capture-policy-list {
-      margin-top: 10px;
-      max-height: 260px;
-      display: grid;
-      gap: 8px;
-      overflow: auto;
-    }
-    .capture-policy-item {
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 9px;
-      display: grid;
-      gap: 8px;
-      background: #fff;
-    }
-    .capture-policy-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      align-items: center;
-      min-width: 0;
-    }
-    .capture-policy-grid {
-      display: grid;
-      grid-template-columns: minmax(96px, 132px) repeat(5, minmax(0, 1fr)) auto;
-      gap: 8px;
-      align-items: center;
-    }
-    .capture-check {
-      display: inline-flex;
-      gap: 4px;
-      align-items: center;
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-    }
-    .capture-check input { width: auto; }
-    .adapter-item, .room-item, .result-item {
-      width: 100%;
-      text-align: left;
-      border-top: 1px solid var(--line);
-      padding: 12px 16px;
-      background: #fff;
-    }
-    .adapter-item {
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 7px 8px;
-      font-size: 12px;
-    }
-    .room-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .room-item:hover, .result-item:hover { background: #f8fafc; }
-    .room-item.active { background: #f1f5f9; }
-    .room-thumb { width: 42px; height: 42px; flex: 0 0 42px; }
-    .truncate {
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .room-meta, .result-meta {
-      display: flex;
-      justify-content: space-between;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 4px;
-    }
-    .empty, .loading {
-      color: var(--muted);
-      padding: 18px 16px;
-    }
-    .search-box { display: none; background: #f8fafc; max-height: 45%; overflow: hidden; }
-    .search-box.open { display: flex; flex-direction: column; }
-    .search-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .main {
-      min-width: 0;
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      background: #f8fafc;
-    }
-    .topbar {
-      height: 58px;
-      flex: 0 0 58px;
-      background: #fff;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 0 24px;
-    }
-    .top-actions { display: flex; gap: 8px; align-items: center; }
-    .chat-empty {
-      flex: 0 0 auto;
-      display: flex;
-      align-items: center;
-      justify-content: flex-start;
-      color: var(--muted);
-      padding: 10px 24px;
-      border-bottom: 1px solid var(--line);
-      background: #f8fafc;
-      font-size: 12px;
-    }
-    .chat-scroll {
-      flex: 1;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-    .message {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      width: 100%;
-    }
-    .message.mine {
-      flex-direction: row-reverse;
-    }
-    .message.reply-jump-highlight .bubble {
-      outline: 2px solid #f59e0b;
-      box-shadow: 0 0 0 4px rgba(245, 158, 11, .18), 0 1px 2px rgba(15, 23, 42, .08);
-    }
-    .message-avatar { width: 40px; height: 40px; flex: 0 0 40px; }
-    .message-body {
-      max-width: 68%;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      min-width: 0;
-    }
-    .message.mine .message-body { align-items: flex-end; }
-    .message-meta {
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 5px;
-    }
-    .bubble {
-      background: #fff;
-      border-radius: 8px;
-      border-top-left-radius: 2px;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, .08);
-      padding: 10px 12px;
-      line-height: 1.6;
-      word-break: break-word;
-      white-space: pre-wrap;
-    }
-    .message.mine .bubble {
-      background: var(--accent);
-      color: #fff;
-      border-top-left-radius: 8px;
-      border-top-right-radius: 2px;
-    }
-    .media-image-button {
-      border: 0;
-      padding: 0;
-      background: transparent;
-      display: block;
-      cursor: zoom-in;
-    }
-    .media-img { max-width: min(340px, 100%); border-radius: 6px; display: block; }
-    .media-video { max-width: min(420px, 100%); border-radius: 6px; display: block; }
-    .media-file {
-      display: inline-flex;
-      align-items: center;
-      min-height: 30px;
-      padding: 4px 10px;
-      border-radius: 6px;
-      background: #e2e8f0;
-      color: #0f172a;
-      text-decoration: none;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .media-missing {
-      display: inline-flex;
-      align-items: center;
-      min-height: 30px;
-      padding: 4px 10px;
-      border-radius: 6px;
-      background: #fee2e2;
-      color: #991b1b;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .json-card {
-      display: grid;
-      grid-template-columns: 72px minmax(0, 1fr);
-      gap: 10px;
-      align-items: center;
-      max-width: 360px;
-      white-space: normal;
-      color: inherit;
-      text-decoration: none;
-    }
-    .json-card[href] {
-      cursor: pointer;
-    }
-    .json-card[href]:hover .json-card-title {
-      text-decoration: underline;
-    }
-    .json-card-img {
-      width: 72px;
-      height: 72px;
-      object-fit: cover;
-      border-radius: 6px;
-      background: #e2e8f0;
-    }
-    .json-card-body { min-width: 0; }
-    .json-card-title {
-      display: block;
-      color: inherit;
-      font-weight: 700;
-      text-decoration: none;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .json-card-desc {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.4;
-      margin-top: 4px;
-    }
-    .cq-parts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
-    .cq-text { white-space: pre-wrap; }
-    .reply-card {
-      width: 100%;
-      border-left: 3px solid #94a3b8;
-      border-top: 0;
-      border-right: 0;
-      border-bottom: 0;
-      background: #f1f5f9;
-      color: #475569;
-      border-radius: 6px;
-      padding: 6px 8px;
-      font-size: 12px;
-      line-height: 1.45;
-      text-align: left;
-      cursor: pointer;
-    }
-    .reply-card:hover { background: #e2e8f0; }
-    .reply-card strong {
-      display: block;
-      color: #334155;
-      margin-bottom: 2px;
-    }
-    .reply-card .reply-preview {
-      color: #64748b;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .cq-chip {
-      display: inline-flex;
-      align-items: center;
-      min-height: 24px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: #e2e8f0;
-      color: #334155;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .forward-card {
-      width: min(360px, 100%);
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      padding: 10px;
-      background: #fff;
-      color: #0f172a;
-    }
-    .forward-card button { width: 100%; justify-content: flex-start; }
-    .forward-detail {
-      margin-top: 8px;
-      display: grid;
-      gap: 6px;
-      max-height: 360px;
-      overflow: auto;
-    }
-    .forward-message {
-      border-top: 1px solid #e2e8f0;
-      padding-top: 6px;
-      font-size: 13px;
-    }
-    .forward-meta { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
-    .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(15, 23, 42, .46);
-      padding: 24px;
-      z-index: 20;
-    }
-    .modal-backdrop.open { display: flex; }
-    .modal {
-      width: min(680px, 100%);
-      max-height: min(760px, 92vh);
-      background: #fff;
-      border-radius: 8px;
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 24px 80px rgba(15, 23, 42, .25);
-    }
-    .modal-header, .modal-footer {
-      padding: 16px 18px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-    }
-    .modal-footer {
-      border-top: 1px solid var(--line);
-      border-bottom: 0;
-      justify-content: flex-end;
-    }
-    .modal-body {
-      padding: 18px;
-      overflow: auto;
-      display: grid;
-      gap: 12px;
-    }
-    .image-preview-backdrop {
-      z-index: 30;
-      background: rgba(15, 23, 42, .78);
-    }
-    .image-preview {
-      position: relative;
-      width: min(960px, 100%);
-      max-height: 92vh;
-      display: grid;
-      gap: 10px;
-      justify-items: center;
-    }
-    .image-preview img {
-      max-width: 100%;
-      max-height: 82vh;
-      border-radius: 8px;
-      object-fit: contain;
-      background: #0f172a;
-      box-shadow: 0 24px 80px rgba(15, 23, 42, .35);
-    }
-    .image-preview-close {
-      justify-self: end;
-      background: #fff;
-    }
-    .image-preview-caption {
-      max-width: 100%;
-      color: #e2e8f0;
-      font-size: 12px;
-      text-align: center;
-      word-break: break-all;
-    }
-    .report {
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #f8fafc;
-      padding: 12px;
-      font-size: 12px;
-      display: grid;
-      gap: 5px;
-    }
-    .ok { color: var(--accent); }
-    .bad { color: var(--danger); }
-    .grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
-    @media (max-width: 860px) {
-      .rail { width: 72px; flex-basis: 72px; }
-      .sidebar { width: 320px; flex-basis: 320px; }
-      .topbar { padding: 0 14px; }
-      .top-actions { gap: 6px; }
-      .btn { padding: 7px 9px; }
-      .message-body { max-width: 82%; }
-    }
-  </style>
+  <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
   <div class="app">
@@ -614,111 +14,371 @@
         <div id="accountList" class="account-stack"></div>
       </div>
       <div class="rail-footer">
-        <button id="loginButton">登录</button>
-        <button id="logoutButton">退出</button>
-        <button id="settingsToggle">账号设置</button>
-        <div id="authActor" class="truncate">未登录</div>
-        <div><span id="accountCount">0</span> 账号</div>
+        <div class="account-count-chip"><span id="accountCount">0</span> 账号</div>
       </div>
     </aside>
 
-    <section class="sidebar">
-      <div class="side-head">
-        <h1>多租户社交资产审计</h1>
-        <div class="hint">状态枚举：green/red/gray</div>
-        <div id="dashboardSummary" class="dashboard-strip"></div>
-        <div class="search-row">
-          <input id="searchInput" placeholder="全局搜索当前机器人视角消息..." />
-          <button id="searchButton" class="btn primary">搜索</button>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-title">
+          <strong id="roomTitle">请选择会话</strong>
+          <span id="robotView" class="hint"></span>
         </div>
-      </div>
+        <div class="topbar-config">
+          <strong>配置栏</strong>
+          <span id="topbarConfigText" class="truncate">选择账号后查看会话与聊天记录</span>
+        </div>
+        <div class="top-actions">
+          <div class="day-night-toggle" id="themeToggleButton" aria-label="日夜模式">
+            <button id="dayModeButton" type="button" aria-label="白天模式" title="白天模式">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v2"></path>
+                <path d="M12 20v2"></path>
+                <path d="m4.93 4.93 1.41 1.41"></path>
+                <path d="m17.66 17.66 1.41 1.41"></path>
+                <path d="M2 12h2"></path>
+                <path d="M20 12h2"></path>
+                <path d="m6.34 17.66-1.41 1.41"></path>
+                <path d="m19.07 4.93-1.41 1.41"></path>
+              </svg>
+            </button>
+            <button id="nightModeButton" type="button" aria-label="夜间模式" title="夜间模式">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20.99 13.64A9 9 0 1 1 10.36 3.01 7 7 0 0 0 20.99 13.64Z"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="palette-card" title="调色盘">
+            <button id="paletteToggleButton" class="icon-button" type="button" aria-label="调色盘" title="调色盘">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="13.5" cy="6.5" r=".5"></circle>
+                <circle cx="17.5" cy="10.5" r=".5"></circle>
+                <circle cx="8.5" cy="7.5" r=".5"></circle>
+                <circle cx="6.5" cy="12.5" r=".5"></circle>
+                <path d="M12 22a10 10 0 1 1 10-10 4 4 0 0 1-4 4h-1.5a2.5 2.5 0 0 0 0 5H12Z"></path>
+              </svg>
+            </button>
+            <div class="palette-panel">
+              <input id="primaryColorInput" class="palette-swatch" type="color" aria-label="主色调" title="主色调" />
+              <input id="secondaryColorInput" class="palette-swatch" type="color" aria-label="复色调" title="复色调" />
+              <input id="contrastColorInput" class="palette-swatch" type="color" aria-label="映衬色" title="映衬色" />
+            </div>
+          </div>
+          <div id="topLogCard" class="top-log-card">
+            <button id="openLogButton" class="top-log-toggle icon-button" type="button" aria-label="操作记录" title="操作记录">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path>
+                <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+                <path d="M10 9H8"></path>
+                <path d="M16 13H8"></path>
+                <path d="M16 17H8"></path>
+              </svg>
+              <span id="topLogSummary" class="sr-only">暂无记录</span>
+            </button>
+            <div id="topLogPanel" class="top-log-panel">
+              <div id="activityLogList" class="log-list"></div>
+            </div>
+          </div>
+          <button id="settingsToggle" class="settings-button icon-button" type="button" aria-label="设置页面" title="设置页面">
+            <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
+              <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.1 2.1 0 0 1-2.97 2.97l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21a2.1 2.1 0 0 1-4.2 0v-.08a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.05.05a2.1 2.1 0 0 1-2.97-2.97l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H3a2.1 2.1 0 0 1 0-4.2h.08A1.8 1.8 0 0 0 4.73 8.6a1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.1 2.1 0 0 1 7.29 3.6l.05.05a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 10.41 2.4V2a2.1 2.1 0 0 1 4.2 0v.08a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.05-.05a2.1 2.1 0 0 1 2.97 2.97l-.05.05a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.09H22a2.1 2.1 0 0 1 0 4.2h-.08A1.8 1.8 0 0 0 19.4 15Z"></path>
+            </svg>
+          </button>
+          <div id="topAccountAvatar" class="avatar top-account"></div>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="sidebar">
+          <div class="side-head">
+            <h1>聊天界面</h1>
+            <div class="hint">当前账号下的会话、搜索和抓取配置 · green/red/gray</div>
+            <div id="dashboardSummary" class="dashboard-strip"></div>
+            <div class="search-row">
+              <input id="searchInput" placeholder="搜索当前机器人视角消息..." />
+              <button id="searchButton" class="btn primary">搜索</button>
+            </div>
+            <div class="toolbar-secondary">
+              <button id="refreshButton" class="btn">刷新</button>
+              <button id="openOfflineAuditButton" class="btn">离线验收</button>
+              <button id="openImportButton" class="btn">导入 JSON</button>
+              <button id="openExportButton" class="btn primary">高级过滤导出</button>
+            </div>
+          </div>
 
       <div id="settingsPanel" class="settings">
-        <div class="settings-title">
-          <span>登录状态</span>
-          <button id="refreshAuthButton" class="btn link">刷新</button>
-        </div>
-        <div id="authStatusReport" class="report"></div>
-        <div class="settings-title">
-          <span>角色抓取策略</span>
-          <button id="refreshCapturePoliciesButton" class="btn link">刷新策略</button>
-        </div>
-        <div class="hint">空策略默认记录所有会话；文件下载默认关闭。白名单存在时仅抓取白名单目标。</div>
-        <div id="capturePolicyList" class="capture-policy-list"></div>
-        <div class="settings-title">
-          <span>账号设置</span>
-          <button id="newAdapterButton" class="btn link">新增账号</button>
-        </div>
-        <div class="form-grid">
-          <input id="adapterId" placeholder="机器人账号 / self_id" />
-          <select id="adapterPlatform">
-            <option value="qq">qq</option>
-            <option value="wechat">wechat</option>
-          </select>
-          <select id="adapterStatus">
-            <option value="gray">gray</option>
-            <option value="green">green</option>
-            <option value="red">red</option>
-          </select>
-          <textarea id="adapterConfig" placeholder='配置 JSON，例如 {"token":"..."}'></textarea>
+        <div class="settings-page-head">
+          <div>
+            <strong>设置页面</strong>
+            <div id="authActor" class="hint truncate">未登录</div>
+          </div>
           <div class="button-row">
-            <button id="saveAdapterButton" class="btn primary">添加账号</button>
-            <button id="clearAdapterButton" class="btn">清空</button>
+            <button id="loginButton" class="btn primary">登录</button>
+            <button id="logoutButton" class="btn">退出</button>
+            <button id="closeSettingsButton" class="btn">关闭</button>
           </div>
         </div>
-        <div class="settings-title">
-          <span>自动备份</span>
-          <button id="runBackupButton" class="btn link">立即备份</button>
+        <div class="settings-stack">
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>登录状态</h3>
+                <p>当前管理身份、权限和接口令牌状态。</p>
+              </div>
+              <button id="refreshAuthButton" class="btn link">刷新</button>
+            </div>
+            <div id="authStatusReport" class="report"></div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>角色抓取策略</h3>
+                <p>空策略默认记录所有会话；文件下载默认关闭。白名单存在时仅抓取白名单目标。</p>
+              </div>
+              <button id="refreshCapturePoliciesButton" class="btn link">刷新策略</button>
+            </div>
+            <div id="capturePolicyList" class="capture-policy-list"></div>
+          </section>
+
+          <section id="adapterOverview" class="settings-section-card adapter-console" aria-label="账号设置">
+            <span class="sr-only">账号设置 green red gray</span>
+            <div class="adapter-hero">
+              <div class="adapter-hero-icon" aria-hidden="true">
+                <svg viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M32 9v8"></path>
+                  <path d="M18 22h28a9 9 0 0 1 9 9v13a9 9 0 0 1-9 9H18a9 9 0 0 1-9-9V31a9 9 0 0 1 9-9Z"></path>
+                  <path d="M9 37H4"></path>
+                  <path d="M60 37h-5"></path>
+                  <circle cx="24" cy="37" r="4" fill="currentColor" stroke="none"></circle>
+                  <circle cx="40" cy="37" r="4" fill="currentColor" stroke="none"></circle>
+                </svg>
+              </div>
+              <div>
+                <h2>适配器</h2>
+                <p>管理平台适配器实例，连接到不同的消息平台。</p>
+              </div>
+              <button id="newAdapterButton" class="btn primary">新增适配器</button>
+            </div>
+            <div id="adapterList" class="adapter-card-list"></div>
+          </section>
+
+          <div id="adapterEditorBackdrop" class="adapter-editor-backdrop" hidden></div>
+          <section id="adapterEditor" class="settings-section-card adapter-editor" hidden>
+            <div class="adapter-editor-head">
+              <h2 id="adapterEditorTitle">编辑适配器</h2>
+              <button id="clearAdapterButton" class="btn">取消</button>
+            </div>
+            <div class="adapter-step">
+              <div class="step-number">1</div>
+              <div>
+                <h3>选择适配器类型</h3>
+                <p>选择这个适配器要连接的消息平台。连接成功后会自动读取账号身份并建立对应档案。</p>
+                <div class="platform-fieldset">
+                  <label for="adapterPlatform">适配器类型</label>
+                  <select id="adapterPlatform">
+                    <option value="qq">qq</option>
+                    <option value="wechat">wechat</option>
+                  </select>
+                </div>
+                <div class="adapter-form-rows">
+                  <div class="adapter-form-row">
+                    <div>
+                      <strong>适配器标识</strong>
+                      <span>用于区分不同连接实例，建议填写 BOT 的 self_id 或端口备注；编辑已有适配器时不可修改。</span>
+                    </div>
+                    <input id="adapterId" placeholder="适配器标识 / self_id" />
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <strong>启用</strong>
+                      <span>未启用的适配器不会作为在线抓取入口。</span>
+                    </div>
+                    <label class="switch-control">
+                      <input id="adapterEnabledSwitch" type="checkbox" />
+                      <span class="switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <strong>反向 WebSocket 主机</strong>
+                      <span>适配器接收反向连接时使用的监听主机。</span>
+                    </div>
+                    <input id="adapterWsHost" placeholder="0.0.0.0" />
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <strong>反向 WebSocket 端口</strong>
+                      <span>对应 NapCat / OneBot 反向 WebSocket 端口。</span>
+                    </div>
+                    <input id="adapterWsPort" inputmode="numeric" placeholder="26109" />
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <strong>反向 WebSocket Token</strong>
+                      <span>未设置则不启用 Token 验证。</span>
+                    </div>
+                    <input id="adapterWsToken" placeholder="token" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="adapter-step">
+              <div class="step-number">2</div>
+              <div>
+                <h3>黑白名单与抓取配置</h3>
+                <p>配置此适配器下不同会话的抓取范围和抓取项目；高级参数仍会存入适配器 config_json。</p>
+                <div class="adapter-config-box">
+                  <textarea id="adapterConfig" placeholder='高级 JSON，例如 {"token":"..."}'></textarea>
+                  <div class="adapter-config-table">
+                    <div class="adapter-config-table-row">
+                      <strong>黑白名单（目标类型:会话 ID）</strong>
+                      <strong>抓取规则</strong>
+                      <strong>操作</strong>
+                    </div>
+                    <div class="adapter-config-table-row">
+                      <span>默认规则：全部会话</span>
+                      <span>default</span>
+                      <span>-</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="adapter-editor-actions">
+                  <button id="saveAdapterButton" class="btn primary">添加适配器</button>
+                </div>
+              </div>
+            </div>
+            <select id="adapterStatus" class="sr-only" aria-hidden="true" tabindex="-1">
+              <option value="gray">gray</option>
+              <option value="green">green</option>
+              <option value="red">red</option>
+            </select>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>自动备份</h3>
+                <p>固定设置备份频率、执行时间和本地保留数量；高级 cron 仍可手动填写。</p>
+              </div>
+              <div class="settings-card-actions">
+                <button id="runBackupButton" class="btn">立即备份</button>
+                <button id="saveBackupSettingsButton" class="btn primary">保存配置</button>
+                <button id="resetBackupSettingsButton" class="btn">恢复 .env</button>
+              </div>
+            </div>
+            <div class="backup-plan">
+              <div class="backup-options">
+                <div class="backup-presets" role="radiogroup" aria-label="备份频率">
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="off" />
+                    <strong>关闭</strong>
+                    <span>不自动备份</span>
+                  </label>
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="daily" />
+                    <strong>每天</strong>
+                    <span>按固定时间执行</span>
+                  </label>
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="weekly" />
+                    <strong>每周</strong>
+                    <span>指定星期执行</span>
+                  </label>
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="custom" />
+                    <strong>自定义</strong>
+                    <span>手写 cron</span>
+                  </label>
+                </div>
+                <div class="backup-time-grid">
+                  <label class="settings-field-card">执行时间
+                    <input id="backupTimeInput" type="time" step="60" />
+                    <span>每日或每周的触发时间。</span>
+                  </label>
+                  <label class="settings-field-card">星期
+                    <select id="backupWeekdayInput">
+                      <option value="1">周一</option>
+                      <option value="2">周二</option>
+                      <option value="3">周三</option>
+                      <option value="4">周四</option>
+                      <option value="5">周五</option>
+                      <option value="6">周六</option>
+                      <option value="0">周日</option>
+                    </select>
+                    <span>仅每周备份使用。</span>
+                  </label>
+                  <label class="settings-field-card">保留数量
+                    <input id="backupKeepLatestInput" type="number" min="0" max="365" step="1" />
+                    <span>0 表示不自动清理旧备份。</span>
+                  </label>
+                </div>
+                <label id="backupCronCustomField" class="settings-field-card">高级 cron
+                  <input id="backupCronInput" placeholder="0 3 * * * / off" />
+                  <span>自定义模式下生效；固定模式会自动生成。</span>
+                </label>
+              </div>
+              <div class="backup-status-card">
+                <div id="backupStatusReport" class="report"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>管理令牌</h3>
+                <p>创建和查看可访问控制台接口的管理令牌。</p>
+              </div>
+              <button id="createAdminTokenButton" class="btn link">创建令牌</button>
+            </div>
+            <div class="settings-mini-grid">
+              <input id="adminTokenName" placeholder="令牌名称" />
+              <select id="adminTokenRole">
+                <option value="viewer">viewer</option>
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            <div id="adminTokenCreateReport" class="report" hidden></div>
+            <div id="adminTokenList" class="adapter-list"></div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>数据库用户</h3>
+                <p>维护本地登录用户和权限角色。</p>
+              </div>
+              <button id="createAdminUserButton" class="btn link">创建用户</button>
+            </div>
+            <div class="settings-mini-grid">
+              <input id="adminUsername" placeholder="username" />
+              <input id="adminPassword" type="password" placeholder="password" />
+              <input id="adminDisplayName" placeholder="display name" />
+              <select id="adminUserRole">
+                <option value="viewer">viewer</option>
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            <div id="adminUserCreateReport" class="report" hidden></div>
+            <div id="adminUserList" class="adapter-list"></div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>登录会话</h3>
+                <p>查看和强制下线当前管理登录会话。</p>
+              </div>
+              <button id="refreshAdminSessionsButton" class="btn link">刷新会话</button>
+            </div>
+            <div id="adminSessionList" class="adapter-list"></div>
+          </section>
         </div>
-        <div class="form-grid">
-          <label class="label">cron
-            <input id="backupCronInput" placeholder="0 3 * * * / off" />
-          </label>
-          <label class="label">keep_latest
-            <input id="backupKeepLatestInput" type="number" min="0" max="365" step="1" />
-          </label>
-          <div class="button-row">
-            <button id="saveBackupSettingsButton" class="btn primary">保存备份配置</button>
-            <button id="resetBackupSettingsButton" class="btn">恢复 .env</button>
-          </div>
-        </div>
-        <div id="backupStatusReport" class="report"></div>
-        <div class="settings-title">
-          <span>管理令牌</span>
-          <button id="createAdminTokenButton" class="btn link">创建令牌</button>
-        </div>
-        <div class="form-grid">
-          <input id="adminTokenName" placeholder="令牌名称" />
-          <select id="adminTokenRole">
-            <option value="viewer">viewer</option>
-            <option value="operator">operator</option>
-            <option value="admin">admin</option>
-          </select>
-        </div>
-        <div id="adminTokenCreateReport" class="report" hidden></div>
-        <div id="adminTokenList" class="adapter-list"></div>
-        <div class="settings-title">
-          <span>数据库用户</span>
-          <button id="createAdminUserButton" class="btn link">创建用户</button>
-        </div>
-        <div class="form-grid">
-          <input id="adminUsername" placeholder="username" />
-          <input id="adminPassword" type="password" placeholder="password" />
-          <input id="adminDisplayName" placeholder="display name" />
-          <select id="adminUserRole">
-            <option value="viewer">viewer</option>
-            <option value="operator">operator</option>
-            <option value="admin">admin</option>
-          </select>
-        </div>
-        <div id="adminUserCreateReport" class="report" hidden></div>
-        <div id="adminUserList" class="adapter-list"></div>
-        <div class="settings-title">
-          <span>登录会话</span>
-          <button id="refreshAdminSessionsButton" class="btn link">刷新会话</button>
-        </div>
-        <div id="adminSessionList" class="adapter-list"></div>
-        <div id="adapterList" class="adapter-list"></div>
       </div>
 
       <div id="searchPanel" class="search-box">
@@ -729,25 +389,24 @@
         <div id="searchResults" class="search-results"></div>
       </div>
 
-      <div id="roomList" class="rooms"></div>
-    </section>
+          <div id="roomList" class="rooms"></div>
+        </section>
 
-    <main class="main">
-      <header class="topbar">
-        <div>
-          <strong id="roomTitle">请选择会话</strong>
-          <span id="robotView" class="hint"></span>
-        </div>
-        <div class="top-actions">
-          <button id="refreshButton" class="btn">刷新</button>
-          <button id="openOfflineAuditButton" class="btn">离线验收</button>
-          <button id="openImportButton" class="btn">导入 JSON</button>
-          <button id="openExportButton" class="btn primary">高级过滤导出</button>
-        </div>
-      </header>
-      <div id="chatEmpty" class="chat-empty">请选择机器人账号和会话</div>
-      <div id="chatWindow" class="chat-scroll" hidden></div>
-    </main>
+        <main class="main">
+          <div id="chatEmpty" class="chat-empty">请选择机器人账号和会话</div>
+          <div id="chatWindow" class="chat-scroll" hidden></div>
+          <div id="selectionToolbar" class="selection-toolbar" aria-live="polite">
+            <div id="selectionCount" class="selection-count">已选 0 条</div>
+            <div class="selection-actions">
+              <button id="selectAllVisibleButton" class="btn link" type="button">全选当前页</button>
+              <button id="exportSelectedButton" class="btn link" type="button">导出选定记录</button>
+              <button id="renderSelectedImageButton" class="btn primary" type="button">渲染为图片</button>
+              <button id="cancelSelectionButton" class="btn" type="button">取消</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
   </div>
 
   <div id="importModal" class="modal-backdrop">
@@ -757,7 +416,7 @@
         <button class="btn" data-close-modal="importModal">关闭</button>
       </div>
       <div class="modal-body">
-        <textarea id="importPackageText" placeholder="粘贴 /api/export 导出的 JSON 包" style="min-height: 230px;"></textarea>
+        <textarea id="importPackageText" class="import-package-textarea" placeholder="粘贴 /api/export 导出的 JSON 包"></textarea>
         <div id="importValidationReport" class="report" hidden></div>
       </div>
       <div class="modal-footer">
@@ -815,1788 +474,6 @@
     </div>
   </div>
 
-  <script>
-    const state = {
-      accountList: [],
-      adapterList: [],
-      dashboard: null,
-      backupStatus: null,
-      backupRunResult: null,
-      backupSettingsSaving: false,
-      captureTargetList: [],
-      capturePolicyError: '',
-      adminTokenList: [],
-      adminTokenCreateResult: null,
-      adminTokenError: '',
-      adminUserList: [],
-      adminUserCreateResult: null,
-      adminUserError: '',
-      adminSessionList: [],
-      adminSessionError: '',
-      authIdentity: null,
-      authError: '',
-      currentRobot: null,
-      roomList: [],
-      currentRoom: null,
-      messageList: [],
-      searchResults: [],
-      searchMode: false,
-      loadingRooms: false,
-      loadingHistory: false,
-      highlightedMessageId: '',
-      replyJumpMissingId: '',
-      settingsMode: false,
-      editingAdapterId: null,
-      importValidationReport: null,
-      offlineAuditReport: null,
-      offlineRepairReport: null,
-      adminApiToken: localStorage.getItem('chatAuditAdminApiToken') || '',
-    };
-
-    const el = (id) => document.getElementById(id);
-    const text = (value) => value === null || value === undefined ? '' : String(value);
-    const currentRole = () => state.authIdentity ? state.authIdentity.role : (state.adminApiToken ? 'admin' : 'viewer');
-    const roleRank = (role) => ({ viewer: 1, operator: 2, admin: 3 })[role] || 1;
-    const canRole = (role) => roleRank(currentRole()) >= roleRank(role);
-
-    const promptForAdminApiToken = () => {
-      const token = window.prompt('请输入管理 API Token');
-      if (token && token.trim()) {
-        state.adminApiToken = token.trim();
-        localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
-        return true;
-      }
-      return false;
-    };
-
-    const authHeaders = (headers = {}) => {
-      if (!state.adminApiToken) return headers;
-      return { ...headers, Authorization: `Bearer ${state.adminApiToken}` };
-    };
-
-    const responseErrorMessage = async (response, url) => {
-      let detail = '';
-      try {
-        const payload = await response.clone().json();
-        detail = payload && (payload.detail || payload.message || payload.error || JSON.stringify(payload));
-      } catch {
-        try {
-          detail = await response.text();
-        } catch {
-          detail = '';
-        }
-      }
-      return detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}: ${url}`;
-    };
-
-    const requestJson = async (url, options = {}) => {
-      const withAuth = {
-        ...options,
-        headers: authHeaders(options.headers || {}),
-      };
-      let response = await fetch(url, withAuth);
-      if (response.status === 401 && promptForAdminApiToken()) {
-        response = await fetch(url, { ...options, headers: authHeaders(options.headers || {}) });
-      }
-      if (!response.ok) throw new Error(await responseErrorMessage(response, url));
-      if (response.status === 204) return null;
-      return await response.json();
-    };
-
-    const apiGet = (url) => requestJson(url);
-    const apiSend = (url, method, body = null) => requestJson(url, {
-      method,
-      headers: body !== null ? { 'Content-Type': 'application/json' } : {},
-      body: body !== null ? JSON.stringify(body) : null,
-    });
-
-    const statusDotClass = (status) => `status-dot status-${['green', 'red', 'gray'].includes(status) ? status : 'gray'}`;
-    const formatTs = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '-';
-    const avatarText = (id) => {
-      const value = text(id).trim();
-      return value ? value.slice(-2).toUpperCase() : '--';
-    };
-    const renderAvatar = (container, id, type = 'user', src = '') => {
-      clearNode(container);
-      container.textContent = avatarText(id);
-      const url = src || '';
-      if (!url) return;
-      const img = document.createElement('img');
-      img.alt = '';
-      img.loading = 'lazy';
-      img.decoding = 'async';
-      img.referrerPolicy = 'no-referrer';
-      img.addEventListener('error', () => img.remove(), { once: true });
-      img.src = url;
-      container.appendChild(img);
-    };
-    const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
-    const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(value);
-    const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
-    const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
-    const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
-    const isRemoteUrl = (value) => /^https?:\/\//i.test(String(value || ''));
-    const fileName = (value) => text(value).split('/').pop() || 'media';
-    const decodeHtmlEntities = (value) => {
-      const textarea = document.createElement('textarea');
-      textarea.innerHTML = value;
-      return textarea.value;
-    };
-
-    const clearNode = (node) => {
-      while (node.firstChild) node.removeChild(node.firstChild);
-    };
-
-    const button = (label, className, onClick) => {
-      const node = document.createElement('button');
-      node.className = className;
-      node.type = 'button';
-      node.textContent = label;
-      node.addEventListener('click', onClick);
-      return node;
-    };
-
-    const renderAccounts = () => {
-      const container = el('accountList');
-      clearNode(container);
-      state.accountList.forEach((acc) => {
-        const node = document.createElement('button');
-        node.className = `avatar-button${state.currentRobot && state.currentRobot.id === acc.id ? ' active' : ''}`;
-        node.title = `${acc.display_name || acc.id} · ${acc.platform} · ${acc.status}`;
-        node.type = 'button';
-        node.addEventListener('click', () => switchAccount(acc));
-
-        const avatar = document.createElement('div');
-        avatar.className = 'avatar';
-        renderAvatar(avatar, acc.id, 'bot', acc.avatar_path);
-        node.appendChild(avatar);
-
-        const dot = document.createElement('span');
-        dot.className = statusDotClass(acc.status);
-        node.appendChild(dot);
-        container.appendChild(node);
-      });
-      el('accountCount').textContent = state.accountList.length;
-    };
-
-    const renderAdapters = () => {
-      const container = el('adapterList');
-      clearNode(container);
-      state.adapterList.forEach((acc) => {
-        const row = document.createElement('div');
-        row.className = 'adapter-item';
-        const binding = acc.current_robot_id ? ` -> ${acc.current_robot_id}` : '';
-        const edit = button(`${acc.id}${binding} · ${acc.platform} · ${acc.status}`, 'btn link truncate', () => editAdapter(acc));
-        const remove = button('删除', 'btn link danger', () => deleteAdapter(acc.id));
-        edit.disabled = !canRole('operator');
-        remove.disabled = !canRole('admin');
-        row.append(edit, remove);
-        container.appendChild(row);
-      });
-    };
-
-    const renderDashboard = () => {
-      const container = el('dashboardSummary');
-      clearNode(container);
-      const dashboard = state.dashboard || {};
-      [
-        ['messages', dashboard.messages || 0],
-        ['rooms', dashboard.rooms || 0],
-        ['media', dashboard.media_assets || 0],
-        ['backups', dashboard.backups || 0],
-      ].forEach(([label, value]) => {
-        const item = document.createElement('div');
-        item.className = 'dashboard-stat';
-        const number = document.createElement('strong');
-        number.textContent = value;
-        const caption = document.createElement('span');
-        caption.textContent = label;
-        item.append(number, caption);
-        container.appendChild(item);
-      });
-    };
-
-    const renderRooms = () => {
-      const container = el('roomList');
-      clearNode(container);
-      if (state.loadingRooms) {
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'loading', textContent: '正在加载会话...' }));
-        return;
-      }
-      if (state.roomList.length === 0) {
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '暂无可见会话' }));
-        return;
-      }
-      state.roomList.forEach((room) => {
-        const row = document.createElement('button');
-        row.className = `room-item${state.currentRoom && state.currentRoom.room_id === room.room_id ? ' active' : ''}`;
-        row.type = 'button';
-        row.addEventListener('click', () => selectRoom(room));
-
-        const thumb = document.createElement('div');
-        thumb.className = 'room-thumb';
-        const avatar = document.createElement('div');
-        avatar.className = 'room-avatar';
-        renderAvatar(avatar, room.room_id, 'group', room.avatar_path);
-        thumb.appendChild(avatar);
-
-        const body = document.createElement('div');
-        body.style.minWidth = '0';
-        body.style.flex = '1';
-        const name = document.createElement('div');
-        name.className = 'truncate';
-        name.textContent = roomDisplayName(room);
-        const meta = document.createElement('div');
-        meta.className = 'hint truncate';
-        meta.textContent = `最近存盘: ${formatTs(room.last_timestamp)}`;
-        body.append(name, meta);
-        row.append(thumb, body);
-        container.appendChild(row);
-      });
-    };
-
-    const renderSearchResults = () => {
-      const panel = el('searchPanel');
-      panel.classList.toggle('open', state.searchMode);
-      el('searchResultCount').textContent = state.searchResults.length;
-      const container = el('searchResults');
-      clearNode(container);
-      if (!state.searchMode) return;
-      if (state.searchResults.length === 0) {
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '没有匹配消息' }));
-        return;
-      }
-      state.searchResults.forEach((result) => {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'result-item';
-        item.addEventListener('click', () => selectSearchResult(result));
-        const meta = document.createElement('div');
-        meta.className = 'result-meta';
-        meta.innerHTML = `<span></span><span></span>`;
-        meta.children[0].textContent = `${result.room_id} · ${result.nickname || result.sender_id}`;
-        meta.children[1].textContent = formatTs(result.timestamp);
-        const body = document.createElement('div');
-        body.className = 'truncate';
-        body.textContent = result.local_message;
-        item.append(meta, body);
-        container.appendChild(item);
-      });
-    };
-
-    const plainMessagePreview = (value) => {
-      const raw = text(value)
-        .replace(/\[CQ:reply,[^\]]+\]/g, '')
-        .replace(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g, '@$1')
-        .replace(/\[CQ:image,[^\]]+\]/g, '[图片]')
-        .replace(/\[CQ:record,[^\]]+\]/g, '[语音]')
-        .replace(/\[CQ:video,[^\]]+\]/g, '[视频]')
-        .replace(/\[CQ:forward,[^\]]+\]/g, '[合并转发]')
-        .replace(/\[CQ:json,[^\]]+\]/g, '[卡片]')
-        .replace(/\/static\/storage\/[a-f0-9]{32}\.[a-z0-9]+/ig, '[媒体]');
-      const compact = raw.replace(/\s+/g, ' ').trim();
-      return compact || '[消息]';
-    };
-
-    const findReplyMessage = (replyId) => {
-      if (!replyId) return null;
-      return state.messageList.find((msg) => String(msg.external_message_id || '') === String(replyId)) || null;
-    };
-
-    const replyPreviewText = (replyId) => {
-      if (!replyId) return '';
-      const owner = state.messageList.find((msg) => String(msg.reply_to_message_id || '') === String(replyId) && msg.reply_preview_text);
-      return owner ? owner.reply_preview_text : '';
-    };
-
-    const roomDisplayName = (room) => {
-      if (!room) return '请选择会话';
-      return room.display_name ? `${room.display_name}（${room.room_id}）` : room.room_id;
-    };
-
-    const renderSettings = () => {
-      el('settingsPanel').classList.toggle('open', state.settingsMode);
-      el('adapterId').disabled = Boolean(state.editingAdapterId);
-      el('saveAdapterButton').textContent = state.editingAdapterId ? '保存修改' : '添加账号';
-      renderAuthStatus();
-      renderCapturePolicies();
-      renderBackupStatus();
-      renderAdminTokens();
-      renderAdminUsers();
-      renderAdminSessions();
-      renderAdapters();
-      applyRoleUi();
-    };
-
-    const renderAuthStatus = () => {
-      const identity = state.authIdentity;
-      el('authActor').textContent = identity ? `${identity.actor} · ${identity.role}` : (state.adminApiToken ? 'Token 已设置' : '未登录');
-      el('logoutButton').disabled = !state.adminApiToken;
-      const box = el('authStatusReport');
-      clearNode(box);
-      const rows = [
-        ['actor', identity ? identity.actor : '-'],
-        ['role', identity ? identity.role : '-'],
-        ['username', identity && identity.username ? identity.username : '-'],
-      ];
-      if (state.authError) rows.push(['error', state.authError, 'bad']);
-      rows.forEach(([name, value, className]) => {
-        const row = document.createElement('div');
-        const label = document.createElement('strong');
-        label.textContent = `${name}: `;
-        const valueNode = document.createElement('span');
-        if (className) valueNode.className = className;
-        valueNode.textContent = value;
-        row.append(label, valueNode);
-        box.appendChild(row);
-      });
-    };
-
-    const capturePolicyValue = (target, key) => {
-      const policy = target.policy || {};
-      if (key === 'list_mode') return policy.list_mode || 'none';
-      if (Object.prototype.hasOwnProperty.call(policy, key)) return Boolean(policy[key]);
-      return key === 'capture_file' ? false : true;
-    };
-
-    const targetDisplayName = (target) => {
-      const name = target.display_name || target.target_id;
-      return target.display_name ? `${name} (${target.target_id})` : target.target_id;
-    };
-
-    const renderCapturePolicies = () => {
-      const container = el('capturePolicyList');
-      clearNode(container);
-      if (!state.currentRobot) {
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '先选择一个机器人角色档案' }));
-        return;
-      }
-      if (state.capturePolicyError) {
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'bad', textContent: state.capturePolicyError }));
-        return;
-      }
-      if (!state.captureTargetList.length) {
-        container.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '暂无已发现群聊或私聊；收到消息后会自动出现在这里' }));
-        return;
-      }
-      state.captureTargetList.forEach((target) => {
-        const row = document.createElement('div');
-        row.className = 'capture-policy-item';
-        const head = document.createElement('div');
-        head.className = 'capture-policy-head';
-        const title = document.createElement('strong');
-        title.className = 'truncate';
-        title.textContent = `${target.target_type === 'group' ? '群聊' : '私聊'} · ${targetDisplayName(target)}`;
-        const meta = document.createElement('span');
-        meta.className = 'hint';
-        meta.textContent = target.policy ? '已设置' : '默认';
-        head.append(title, meta);
-
-        const grid = document.createElement('div');
-        grid.className = 'capture-policy-grid';
-        const mode = document.createElement('select');
-        mode.dataset.field = 'list_mode';
-        [
-          ['none', '默认'],
-          ['blacklist', '黑名单'],
-          ['whitelist', '白名单'],
-        ].forEach(([value, label]) => {
-          const option = document.createElement('option');
-          option.value = value;
-          option.textContent = label;
-          mode.appendChild(option);
-        });
-        mode.value = capturePolicyValue(target, 'list_mode');
-        grid.appendChild(mode);
-
-        [
-          ['capture_text', '文字'],
-          ['capture_image', '图片'],
-          ['capture_voice', '语音'],
-          ['capture_video', '视频'],
-          ['capture_file', '文件包/文档'],
-        ].forEach(([field, label]) => {
-          const wrap = document.createElement('label');
-          wrap.className = 'capture-check';
-          const input = document.createElement('input');
-          input.type = 'checkbox';
-          input.dataset.field = field;
-          input.checked = capturePolicyValue(target, field);
-          wrap.append(input, document.createTextNode(label));
-          grid.appendChild(wrap);
-        });
-
-        const actions = document.createElement('div');
-        actions.className = 'button-row';
-        const save = button('保存', 'btn primary', () => saveCapturePolicy(target, row));
-        const reset = button('恢复默认', 'btn', () => resetCapturePolicy(target));
-        save.disabled = !canRole('operator');
-        reset.disabled = !target.policy || !canRole('operator');
-        actions.append(save, reset);
-        grid.appendChild(actions);
-
-        row.append(head, grid);
-        container.appendChild(row);
-      });
-    };
-
-    const renderBackupStatus = () => {
-      const box = el('backupStatusReport');
-      clearNode(box);
-      const status = state.backupStatus;
-      if (!status) {
-        box.textContent = '备份状态未加载';
-        return;
-      }
-      el('backupCronInput').value = status.cron || '';
-      el('backupKeepLatestInput').value = status.keep_latest === null || status.keep_latest === undefined ? '' : status.keep_latest;
-      el('saveBackupSettingsButton').disabled = state.backupSettingsSaving;
-      el('resetBackupSettingsButton').disabled = state.backupSettingsSaving;
-      const rows = [
-        ['enabled', status.enabled ? '开启' : '关闭', status.enabled ? 'ok' : undefined],
-        ['cron', status.cron || '-'],
-        ['keep_latest', status.keep_latest],
-        ['source', status.config_source || '-'],
-        ['cron_source', status.cron_source || '-'],
-        ['keep_latest_source', status.keep_latest_source || '-'],
-        ['backups', status.backups],
-        ['latest', status.latest_backup || '-'],
-      ];
-      if (state.backupRunResult) {
-        rows.push(['manual', state.backupRunResult.filename || '-', 'ok']);
-      }
-      rows.forEach(([name, value, className]) => {
-        const row = document.createElement('div');
-        const label = document.createElement('strong');
-        label.textContent = `${name}：`;
-        const valueNode = document.createElement('span');
-        if (className) valueNode.className = className;
-        valueNode.textContent = value;
-        row.append(label, valueNode);
-        box.appendChild(row);
-      });
-    };
-
-    const renderAdminTokens = () => {
-      const report = el('adminTokenCreateReport');
-      clearNode(report);
-      report.hidden = !state.adminTokenCreateResult && !state.adminTokenError;
-      if (state.adminTokenCreateResult) {
-        const title = document.createElement('strong');
-        title.textContent = '新令牌：';
-        const token = document.createElement('span');
-        token.textContent = state.adminTokenCreateResult.token;
-        report.append(title, token);
-      } else if (state.adminTokenError) {
-        const error = document.createElement('span');
-        error.className = 'bad';
-        error.textContent = state.adminTokenError;
-        report.appendChild(error);
-      }
-
-      const container = el('adminTokenList');
-      clearNode(container);
-      if (!state.adminTokenList.length) {
-        const empty = document.createElement('div');
-        empty.className = 'hint';
-        empty.textContent = '暂无数据库托管令牌';
-        container.appendChild(empty);
-        return;
-      }
-      state.adminTokenList.forEach((token) => {
-        const row = document.createElement('div');
-        row.className = 'adapter-item';
-        const label = document.createElement('span');
-        label.className = 'truncate';
-        label.textContent = `${token.name} · ${token.role} · ${token.status} · ${token.token_prefix}`;
-        const revoke = button('吊销', 'btn link danger', () => revokeAdminToken(token.id));
-        revoke.disabled = token.status === 'revoked' || !canRole('admin');
-        row.append(label, revoke);
-        container.appendChild(row);
-      });
-    };
-
-    const renderAdminUsers = () => {
-      const report = el('adminUserCreateReport');
-      clearNode(report);
-      report.hidden = !state.adminUserCreateResult && !state.adminUserError;
-      if (state.adminUserCreateResult) {
-        const ok = document.createElement('span');
-        ok.className = 'ok';
-        ok.textContent = `${state.adminUserCreateResult.username} · ${state.adminUserCreateResult.role}`;
-        report.appendChild(ok);
-      } else if (state.adminUserError) {
-        const error = document.createElement('span');
-        error.className = 'bad';
-        error.textContent = state.adminUserError;
-        report.appendChild(error);
-      }
-
-      const container = el('adminUserList');
-      clearNode(container);
-      if (!state.adminUserList.length) {
-        const empty = document.createElement('div');
-        empty.className = 'hint';
-        empty.textContent = '暂无数据库用户';
-        container.appendChild(empty);
-        return;
-      }
-      state.adminUserList.forEach((user) => {
-        const row = document.createElement('div');
-        row.className = 'adapter-item';
-        const label = document.createElement('span');
-        label.className = 'truncate';
-        label.textContent = `${user.username} · ${user.role} · ${user.status}`;
-        const reset = button('重置密码', 'btn link', () => resetAdminUserPassword(user.id));
-        const revoke = button('禁用', 'btn link danger', () => revokeAdminUser(user.id));
-        reset.disabled = user.status === 'revoked' || !canRole('admin');
-        revoke.disabled = user.status === 'revoked' || !canRole('admin');
-        row.append(label, reset, revoke);
-        container.appendChild(row);
-      });
-    };
-
-    const renderAdminSessions = () => {
-      const container = el('adminSessionList');
-      clearNode(container);
-      if (state.adminSessionError) {
-        const error = document.createElement('div');
-        error.className = 'bad';
-        error.textContent = state.adminSessionError;
-        container.appendChild(error);
-        return;
-      }
-      if (!state.adminSessionList.length) {
-        const empty = document.createElement('div');
-        empty.className = 'hint';
-        empty.textContent = '暂无登录会话';
-        container.appendChild(empty);
-        return;
-      }
-      state.adminSessionList.forEach((session) => {
-        const row = document.createElement('div');
-        row.className = 'adapter-item';
-        const label = document.createElement('span');
-        label.className = 'truncate';
-        label.textContent = `${session.username} · ${session.role} · ${session.status} · ${session.token_prefix}`;
-        const revoke = button('强制下线', 'btn link danger', () => revokeAdminSession(session.id));
-        revoke.disabled = session.status === 'revoked' || !canRole('admin');
-        row.append(label, revoke);
-        container.appendChild(row);
-      });
-    };
-
-    const applyRoleUi = () => {
-      const isAdmin = canRole('admin');
-      const isOperator = canRole('operator');
-      el('createAdminTokenButton').disabled = !isAdmin;
-      el('createAdminUserButton').disabled = !isAdmin;
-      el('refreshAdminSessionsButton').disabled = !isAdmin;
-      el('refreshCapturePoliciesButton').disabled = !state.currentRobot;
-      el('saveAdapterButton').disabled = !isOperator;
-      el('runBackupButton').disabled = !isOperator;
-      el('saveBackupSettingsButton').disabled = el('saveBackupSettingsButton').disabled || !isOperator;
-      el('resetBackupSettingsButton').disabled = el('resetBackupSettingsButton').disabled || !isOperator;
-      el('repairOfflineAuditButton').disabled = !isOperator;
-      el('openImportButton').disabled = !isAdmin;
-    };
-
-    const renderChat = () => {
-      el('roomTitle').textContent = roomDisplayName(state.currentRoom);
-      el('robotView').textContent = state.currentRobot ? ` 视角: ${state.currentRobot.display_name || state.currentRobot.id}` : '';
-      el('refreshButton').disabled = !state.currentRoom;
-      el('openExportButton').disabled = !state.currentRobot;
-      el('chatEmpty').hidden = Boolean(state.currentRoom);
-      el('chatWindow').hidden = !state.currentRoom;
-      const chat = el('chatWindow');
-      clearNode(chat);
-      if (!state.currentRoom) return;
-      if (state.loadingHistory) {
-        const loading = document.createElement('div');
-        loading.className = 'hint';
-        loading.style.textAlign = 'center';
-        loading.textContent = '正在加载更早记录...';
-        chat.appendChild(loading);
-      }
-      if (state.messageList.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.style.textAlign = 'center';
-        empty.textContent = '暂无消息';
-        chat.appendChild(empty);
-        return;
-      }
-      state.messageList.forEach((msg) => {
-        const mine = state.currentRobot && msg.sender_id === state.currentRobot.id;
-        const row = document.createElement('div');
-        row.className = `message${mine ? ' mine' : ''}`;
-        if (msg.external_message_id) row.dataset.externalMessageId = String(msg.external_message_id);
-        row.dataset.msgHash = msg.msg_hash || '';
-        if (state.highlightedMessageId && String(msg.external_message_id || '') === String(state.highlightedMessageId)) {
-          row.className += ' reply-jump-highlight';
-        }
-        const avatar = document.createElement('div');
-        avatar.className = 'avatar message-avatar';
-        renderAvatar(avatar, msg.sender_id, 'user', msg.sender_avatar_path);
-        const body = document.createElement('div');
-        body.className = 'message-body';
-        const meta = document.createElement('div');
-        meta.className = 'message-meta';
-        meta.textContent = `${msg.nickname || msg.sender_id} · ${formatTs(msg.timestamp)}`;
-        const bubble = document.createElement('div');
-        bubble.className = 'bubble';
-        renderMessageContent(bubble, msg.local_message);
-        body.append(meta, bubble);
-        row.append(avatar, body);
-        chat.appendChild(row);
-      });
-    };
-
-    const renderMessageContent = (container, value) => {
-      clearNode(container);
-      if (renderCQParts(container, value)) return;
-      const cqImage = parseCQSegment(value, 'image');
-      if (cqImage && cqImage.url) {
-        renderImageLink(container, cqImage.url, cqImage.file || '媒体图片');
-        return;
-      }
-      const cqJson = parseCQSegment(value, 'json');
-      if (cqJson && cqJson.data) {
-        renderCQJsonCard(container, cqJson.data);
-        return;
-      }
-      if (renderLocalMediaParts(container, value)) return;
-      if (!isMedia(value)) {
-        container.textContent = value;
-        return;
-      }
-      if (isImg(value)) {
-        renderImageLink(container, value, '媒体图片');
-        return;
-        const img = document.createElement('img');
-        img.className = 'media-img';
-        img.src = value;
-        img.alt = '媒体图片';
-        container.appendChild(img);
-        return;
-      }
-      if (isVideo(value)) {
-        const video = document.createElement('video');
-        video.className = 'media-video';
-        video.src = value;
-        video.controls = true;
-        container.appendChild(video);
-        return;
-      }
-      if (isVoice(value)) {
-        const audio = document.createElement('audio');
-        audio.src = value;
-        audio.controls = true;
-        container.appendChild(audio);
-        return;
-      }
-      renderFileLink(container, value, fileName(value));
-    };
-
-    const parseCQParams = (paramsText) => {
-      const params = {};
-      paramsText.split(',').forEach((item) => {
-        const index = item.indexOf('=');
-        if (index <= 0) return;
-        const key = item.slice(0, index);
-        const raw = item.slice(index + 1);
-        try {
-          params[key] = decodeURIComponent(decodeHtmlEntities(raw));
-        } catch {
-          params[key] = decodeHtmlEntities(raw);
-        }
-      });
-      return params;
-    };
-
-    const renderLocalMediaParts = (container, value) => {
-      if (typeof value !== 'string' || !value.includes('/static/storage/')) return false;
-      const pattern = /\/static\/storage\/[a-f0-9]{32}\.[a-z0-9]+/ig;
-      let cursor = 0;
-      let matched = false;
-      const wrapper = document.createElement('div');
-      wrapper.className = 'cq-parts';
-      let match = null;
-      while ((match = pattern.exec(value)) !== null) {
-        matched = true;
-        const before = value.slice(cursor, match.index);
-        if (before.trim()) {
-          const span = document.createElement('span');
-          span.className = 'cq-text';
-          span.textContent = before;
-          wrapper.appendChild(span);
-        }
-        renderLocalMediaAsset(wrapper, match[0]);
-        cursor = pattern.lastIndex;
-      }
-      const tail = value.slice(cursor);
-      if (tail.trim()) {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = tail;
-        wrapper.appendChild(span);
-      }
-      if (!matched) return false;
-      container.appendChild(wrapper);
-      return true;
-    };
-
-    const renderLocalMediaAsset = (container, path) => {
-      if (!isLocalPath(path)) {
-        renderMissingMediaChip(container, path);
-        return;
-      }
-      if (isImg(path)) {
-        renderImageLink(container, path, '媒体图片');
-      } else if (isVideo(path)) {
-        const video = document.createElement('video');
-        video.className = 'media-video';
-        video.src = path;
-        video.controls = true;
-        container.appendChild(video);
-      } else if (isVoice(path)) {
-        const audio = document.createElement('audio');
-        audio.src = path;
-        audio.controls = true;
-        container.appendChild(audio);
-      } else {
-        renderFileLink(container, path, fileName(path));
-      }
-    };
-
-    const renderCQParts = (container, value) => {
-      if (typeof value !== 'string' || !value.includes('[CQ:')) return false;
-      const pattern = /\[CQ:(\w+),([\s\S]*?)\]/g;
-      let cursor = 0;
-      let matched = false;
-      const wrapper = document.createElement('div');
-      wrapper.className = 'cq-parts';
-
-      const appendText = (textValue) => {
-        if (!textValue) return;
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = textValue;
-        wrapper.appendChild(span);
-      };
-
-      let match = null;
-      while ((match = pattern.exec(value)) !== null) {
-        matched = true;
-        appendText(value.slice(cursor, match.index));
-        const kind = match[1];
-        const params = parseCQParams(match[2]);
-        if (kind === 'image' && params.url) {
-          renderImageLink(wrapper, params.url, params.summary || params.file || '媒体图片');
-        } else if (kind === 'record' && (params.url || params.file)) {
-          renderLocalMediaAsset(wrapper, params.url || params.file);
-        } else if (kind === 'video' && (params.url || params.file)) {
-          renderLocalMediaAsset(wrapper, params.url || params.file);
-        } else if (kind === 'file' && (params.url || params.file)) {
-          renderFileLink(wrapper, params.url || params.file, params.name || params.file || '文件');
-        } else if (kind === 'json' && params.data) {
-          renderCQJsonCard(wrapper, params.data);
-        } else if (kind === 'at') {
-          renderCQChip(wrapper, `@${params.qq || 'unknown'}`);
-        } else if (kind === 'reply') {
-          renderReplyCard(wrapper, params);
-          cursor = pattern.lastIndex;
-          continue;
-        } else if (kind === 'forward') {
-          renderForwardCard(wrapper, params);
-        } else {
-          renderCQChip(wrapper, `[${kind}]`);
-        }
-        cursor = pattern.lastIndex;
-      }
-      appendText(value.slice(cursor));
-      if (!matched) return false;
-      container.appendChild(wrapper);
-      return true;
-    };
-
-    const renderImageLink = (container, src, alt) => {
-      const cleanSrc = decodeHtmlEntities(String(src || ''));
-      if (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc)) {
-        renderMissingMediaChip(container, cleanSrc);
-        return;
-      }
-      const preview = document.createElement('button');
-      preview.className = 'media-image-button';
-      preview.type = 'button';
-      preview.title = '预览图片';
-      preview.addEventListener('click', () => openImagePreview(cleanSrc, alt));
-      const img = document.createElement('img');
-      img.className = 'media-img';
-      img.src = cleanSrc;
-      img.referrerPolicy = 'no-referrer';
-      img.alt = alt;
-      preview.appendChild(img);
-      container.appendChild(preview);
-    };
-
-    const renderFileLink = (container, src, label) => {
-      const cleanSrc = decodeHtmlEntities(String(src || ''));
-      if (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc)) {
-        renderMissingMediaChip(container, cleanSrc);
-        return;
-      }
-      const link = document.createElement('a');
-      link.className = 'media-file';
-      link.href = cleanSrc;
-      link.target = isLocalPath(cleanSrc) ? '_self' : '_blank';
-      link.rel = 'noreferrer';
-      link.textContent = label || fileName(cleanSrc);
-      container.appendChild(link);
-    };
-
-    const renderMissingMediaChip = (container, src) => {
-      const chip = document.createElement('span');
-      chip.className = 'media-missing';
-      chip.title = decodeHtmlEntities(String(src || ''));
-      chip.textContent = '媒体未缓存';
-      container.appendChild(chip);
-    };
-
-    const renderCQChip = (container, label) => {
-      const chip = document.createElement('span');
-      chip.className = 'cq-chip';
-      chip.textContent = label;
-      container.appendChild(chip);
-    };
-
-    const renderReplyCard = (container, params) => {
-      const card = document.createElement('button');
-      card.className = 'reply-card';
-      card.type = 'button';
-      if (params.id) {
-        card.title = '跳转到被回复的消息';
-        card.addEventListener('click', () => jumpToReplyMessage(params.id));
-      }
-      const title = document.createElement('strong');
-      title.textContent = params.id ? `回复 #${params.id}` : '回复消息';
-      card.appendChild(title);
-      const source = findReplyMessage(params.id);
-      const preview = document.createElement('div');
-      preview.className = 'reply-preview';
-      const backendPreview = replyPreviewText(params.id);
-      const isMissing = params.id && String(state.replyJumpMissingId || '') === String(params.id);
-      preview.textContent = isMissing ? '原消息未缓存或已被清理' : (backendPreview || (source
-        ? `${source.nickname || source.sender_id}: ${plainMessagePreview(source.local_message || source.raw_message)}`
-        : '原消息暂未加载'));
-      card.appendChild(preview);
-      container.appendChild(card);
-    };
-
-    const renderForwardCard = (container, params) => {
-      const card = document.createElement('div');
-      card.className = 'forward-card';
-      const action = button(`合并转发消息 ${params.id || ''}`, 'btn link', async () => {
-        await toggleForwardDetail(params.id, detail, params.local);
-      });
-      const detail = document.createElement('div');
-      detail.className = 'forward-detail';
-      detail.hidden = true;
-      card.append(action, detail);
-      container.appendChild(card);
-    };
-
-    const toggleForwardDetail = async (forwardId, detail, localPath = '') => {
-      if ((!forwardId && !localPath) || !state.currentRobot) return;
-      if (detail.dataset.loaded === 'true') {
-        detail.hidden = !detail.hidden;
-        return;
-      }
-      detail.hidden = false;
-      detail.textContent = '正在加载合并消息...';
-      try {
-        const payload = localPath
-          ? await apiGet(localPath)
-          : await apiGet(`/api/forward?robot_id=${encodeURIComponent(state.currentRobot.id)}&forward_id=${encodeURIComponent(forwardId)}`);
-        renderForwardPayload(detail, payload);
-        detail.dataset.loaded = 'true';
-      } catch (error) {
-        detail.textContent = `加载失败：${error.message}`;
-      }
-    };
-
-    const renderForwardPayload = (container, payload) => {
-      clearNode(container);
-      const data = payload && payload.data ? payload.data : payload;
-      const messages = Array.isArray(data) ? data : (data && (data.messages || data.message)) || [];
-      if (!Array.isArray(messages) || messages.length === 0) {
-        container.textContent = '没有可显示的合并消息内容';
-        return;
-      }
-      messages.forEach((item) => {
-        const row = document.createElement('div');
-        row.className = 'forward-message';
-        const meta = document.createElement('div');
-        meta.className = 'forward-meta';
-        const sender = item.sender && (item.sender.nickname || item.sender.card || item.sender.user_id);
-        meta.textContent = sender ? String(sender) : 'forward';
-        const body = document.createElement('div');
-        const content = item.raw_message || item.message || item.content || '';
-        renderOneBotContent(body, content);
-        row.append(meta, body);
-        container.appendChild(row);
-      });
-    };
-
-    const renderOneBotContent = (container, content) => {
-      clearNode(container);
-      if (Array.isArray(content)) {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'cq-parts';
-        content.forEach((segment) => renderOneBotSegment(wrapper, segment));
-        container.appendChild(wrapper);
-        return;
-      }
-      if (content && typeof content === 'object') {
-        renderOneBotSegment(container, content);
-        return;
-      }
-      renderMessageContent(container, String(content || ''));
-    };
-
-    const renderOneBotSegment = (container, segment) => {
-      if (!segment || typeof segment !== 'object') {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = String(segment || '');
-        container.appendChild(span);
-        return;
-      }
-      const type = segment.type || segment.kind || '';
-      const data = segment.data || segment;
-      if (type === 'text') {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = data.text || '';
-        container.appendChild(span);
-      } else if (type === 'image') {
-        const src = data.url || data.path || data.file;
-        if (src) {
-          renderImageLink(container, src, data.summary || data.file || '媒体图片');
-        } else {
-          renderCQChip(container, '[图片]');
-        }
-      } else if (type === 'record') {
-        const src = data.url || data.path || data.file;
-        if (src) {
-          renderLocalMediaAsset(container, src);
-        } else {
-          renderCQChip(container, '[语音]');
-        }
-      } else if (type === 'video') {
-        const src = data.url || data.path || data.file;
-        if (src) {
-          renderLocalMediaAsset(container, src);
-        } else {
-          renderCQChip(container, '[视频]');
-        }
-      } else if (type === 'file') {
-        const src = data.url || data.path || data.file;
-        if (src) {
-          renderFileLink(container, src, data.name || data.file || '文件');
-        } else {
-          renderCQChip(container, '[文件]');
-        }
-      } else if (type === 'at') {
-        renderCQChip(container, `@${data.qq || 'unknown'}`);
-      } else if (type === 'reply') {
-        renderReplyCard(container, data);
-      } else if (type === 'json') {
-        renderCQJsonCard(container, data.data || '{}');
-      } else if (type === 'forward') {
-        renderForwardCard(container, data);
-      } else if (data.text) {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = data.text;
-        container.appendChild(span);
-      } else if (data.url || data.file) {
-        renderImageLink(container, data.url || data.file, data.summary || data.file || '媒体');
-      } else {
-        renderCQChip(container, `[${type || '消息'}]`);
-      }
-    };
-
-    const parseCQSegment = (value, kind) => {
-      if (typeof value !== 'string') return null;
-      const match = value.trim().match(new RegExp(`^\\[CQ:${kind},([\\s\\S]*)\\]$`));
-      if (!match) return null;
-      return parseCQParams(match[1]);
-    };
-
-    const normalizeCardUrl = (url) => {
-      if (!url) return '';
-      if (url.startsWith('/')) return url;
-      if (url.startsWith('http')) return url;
-      if (url.startsWith('//')) return `https:${url}`;
-      return `https://${url}`;
-    };
-
-    const renderCQJsonCard = (container, data) => {
-      let payload = null;
-      try {
-        payload = JSON.parse(data);
-      } catch {
-        container.textContent = data;
-        return;
-      }
-      const detail = payload.meta && (payload.meta.detail_1 || Object.values(payload.meta)[0]);
-      const title = detail && detail.title ? detail.title : payload.prompt || payload.app || 'JSON 卡片';
-      const desc = detail && detail.desc ? detail.desc : payload.prompt || '';
-      const url = detail && (detail.qqdocurl || detail.url);
-      const localPage = detail && detail.local_page;
-      const preview = detail && (detail.preview || detail.icon);
-
-      const cleanUrl = normalizeCardUrl(localPage || url || '');
-      const originalUrl = normalizeCardUrl(url || '');
-      const card = document.createElement(cleanUrl ? 'a' : 'div');
-      card.className = 'json-card';
-      if (cleanUrl) {
-        card.href = cleanUrl;
-        card.target = '_blank';
-        card.rel = 'noreferrer';
-        if (localPage && originalUrl) card.dataset.originalUrl = originalUrl;
-        card.title = localPage && originalUrl ? `打开本地快照：${originalUrl}` : '打开卡片网页';
-      }
-      if (preview) {
-        const previewSrc = normalizeCardUrl(preview);
-        if (isLocalPath(previewSrc) || !isRemoteUrl(previewSrc)) {
-          const img = document.createElement('img');
-          img.className = 'json-card-img';
-          img.src = previewSrc;
-          img.alt = title;
-          card.appendChild(img);
-        } else {
-          const missing = document.createElement('span');
-          missing.className = 'media-missing';
-          missing.textContent = '预览未缓存';
-          missing.title = previewSrc;
-          card.appendChild(missing);
-        }
-      }
-      const body = document.createElement('div');
-      body.className = 'json-card-body';
-      const heading = document.createElement('div');
-      heading.className = 'json-card-title';
-      heading.textContent = title;
-      const summary = document.createElement('div');
-      summary.className = 'json-card-desc';
-      summary.textContent = desc;
-      body.append(heading, summary);
-      card.appendChild(body);
-      container.appendChild(card);
-    };
-
-    const renderAll = () => {
-      renderDashboard();
-      renderAccounts();
-      renderSettings();
-      renderSearchResults();
-      renderRooms();
-      renderChat();
-    };
-
-    const loadAdapters = async () => {
-      const [dashboard, backupStatus, bots, adapters] = await Promise.all([apiGet('/api/dashboard'), apiGet('/api/backup/status'), apiGet('/api/bots'), apiGet('/api/adapters')]);
-      state.dashboard = dashboard;
-      state.backupStatus = backupStatus;
-      state.accountList = bots;
-      state.adapterList = adapters;
-      await refreshAuthIdentity();
-      await refreshAdminTokens();
-      await refreshAdminUsers();
-      await refreshAdminSessions();
-      if (state.accountList.length > 0 && !state.currentRobot) {
-        await switchAccount(state.accountList[0]);
-      } else {
-        renderAll();
-      }
-    };
-
-    async function switchAccount(acc) {
-      state.currentRobot = acc;
-      state.currentRoom = null;
-      state.messageList = [];
-      clearSearch();
-      state.loadingRooms = true;
-      renderAll();
-      try {
-        const [rooms, captureTargets] = await Promise.all([
-          apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`),
-          apiGet(`/api/bots/${encodeURIComponent(acc.id)}/capture-targets`),
-        ]);
-        state.roomList = rooms;
-        state.captureTargetList = captureTargets;
-        state.capturePolicyError = '';
-      } catch (error) {
-        state.capturePolicyError = error.message || String(error);
-        throw error;
-      } finally {
-        state.loadingRooms = false;
-        renderAll();
-      }
-    }
-
-    const resetAdapterForm = () => {
-      state.editingAdapterId = null;
-      el('adapterId').value = '';
-      el('adapterPlatform').value = 'qq';
-      el('adapterStatus').value = 'gray';
-      el('adapterConfig').value = '';
-      renderSettings();
-    };
-
-    const editAdapter = (adapter) => {
-      state.editingAdapterId = adapter.id;
-      el('adapterId').value = adapter.id;
-      el('adapterPlatform').value = adapter.platform;
-      el('adapterStatus').value = adapter.status;
-      el('adapterConfig').value = adapter.config_json || '';
-      renderSettings();
-    };
-
-    const saveAdapter = async () => {
-      const payload = {
-        platform: el('adapterPlatform').value,
-        status: el('adapterStatus').value,
-        config_json: el('adapterConfig').value ? el('adapterConfig').value : null,
-      };
-      if (!el('adapterId').value || !payload.platform) return;
-      if (state.editingAdapterId) {
-        await apiSend(`/api/adapters/${encodeURIComponent(state.editingAdapterId)}`, 'PATCH', payload);
-      } else {
-        await apiSend('/api/adapters', 'POST', { id: el('adapterId').value, ...payload });
-      }
-      resetAdapterForm();
-      await loadAdapters();
-    };
-
-    const deleteAdapter = async (adapterId) => {
-      await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
-      await loadAdapters();
-    };
-
-    async function runManualBackup() {
-      state.backupRunResult = await apiSend('/api/backup/run', 'POST');
-      state.backupStatus = await apiGet('/api/backup/status');
-      state.dashboard = await apiGet('/api/dashboard');
-      renderAll();
-    }
-
-    async function saveBackupSettings() {
-      state.backupSettingsSaving = true;
-      renderSettings();
-      try {
-        const payload = {
-          cron: el('backupCronInput').value.trim(),
-          keep_latest: Number(el('backupKeepLatestInput').value),
-        };
-        state.backupStatus = await apiSend('/api/backup/settings', 'PATCH', payload);
-      } finally {
-        state.backupSettingsSaving = false;
-        renderSettings();
-      }
-    }
-
-    async function resetBackupSettings() {
-      state.backupSettingsSaving = true;
-      renderSettings();
-      try {
-        state.backupStatus = await apiSend('/api/backup/settings', 'PATCH', { reset_to_env: true });
-      } finally {
-        state.backupSettingsSaving = false;
-        renderSettings();
-      }
-    }
-
-    async function refreshAdminTokens() {
-      try {
-        state.adminTokenList = await apiGet('/api/admin/tokens');
-        state.adminTokenError = '';
-      } catch (error) {
-        state.adminTokenList = [];
-        state.adminTokenError = error.message || String(error);
-      }
-    }
-
-    async function refreshAdminUsers() {
-      try {
-        state.adminUserList = await apiGet('/api/admin/users');
-        state.adminUserError = '';
-      } catch (error) {
-        state.adminUserList = [];
-        state.adminUserError = error.message || String(error);
-      }
-    }
-
-    async function refreshAdminSessions() {
-      try {
-        state.adminSessionList = await apiGet('/api/admin/sessions');
-        state.adminSessionError = '';
-      } catch (error) {
-        state.adminSessionList = [];
-        state.adminSessionError = error.message || String(error);
-      }
-      renderSettings();
-    }
-
-    async function refreshAuthIdentity() {
-      if (!state.adminApiToken) {
-        state.authIdentity = null;
-        state.authError = '';
-        renderSettings();
-        return;
-      }
-      try {
-        state.authIdentity = await apiGet('/api/auth/me');
-        state.authError = '';
-      } catch (error) {
-        state.authIdentity = null;
-        state.authError = error.message || String(error);
-      }
-      renderSettings();
-    }
-
-    async function refreshCapturePolicies() {
-      if (!state.currentRobot) {
-        state.captureTargetList = [];
-        state.capturePolicyError = '';
-        renderSettings();
-        return;
-      }
-      try {
-        state.captureTargetList = await apiGet(`/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-targets`);
-        state.capturePolicyError = '';
-      } catch (error) {
-        state.captureTargetList = [];
-        state.capturePolicyError = error.message || String(error);
-      }
-      renderSettings();
-    }
-
-    async function saveCapturePolicy(target, row) {
-      const payload = {
-        list_mode: row.querySelector('[data-field="list_mode"]').value,
-        capture_text: row.querySelector('[data-field="capture_text"]').checked,
-        capture_image: row.querySelector('[data-field="capture_image"]').checked,
-        capture_voice: row.querySelector('[data-field="capture_voice"]').checked,
-        capture_video: row.querySelector('[data-field="capture_video"]').checked,
-        capture_file: row.querySelector('[data-field="capture_file"]').checked,
-      };
-      await apiSend(
-        `/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-policies/${encodeURIComponent(target.target_type)}/${encodeURIComponent(target.target_id)}`,
-        'PUT',
-        payload,
-      );
-      await refreshCapturePolicies();
-    }
-
-    async function resetCapturePolicy(target) {
-      await apiSend(
-        `/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-policies/${encodeURIComponent(target.target_type)}/${encodeURIComponent(target.target_id)}`,
-        'DELETE',
-      );
-      await refreshCapturePolicies();
-    }
-
-    async function loginWithPassword() {
-      const username = window.prompt('username');
-      if (!username) return;
-      const password = window.prompt('password');
-      if (!password) return;
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!response.ok) {
-        state.authError = await responseErrorMessage(response, '/api/auth/login');
-        renderSettings();
-        return;
-      }
-      const payload = await response.json();
-      state.adminApiToken = payload.token;
-      localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
-      state.authIdentity = { ...payload.user, actor: `db-user:${payload.user.username}` };
-      state.authError = '';
-      await loadAdapters();
-    }
-
-    async function logoutAuth() {
-      if (state.adminApiToken) {
-        try {
-          await apiSend('/api/auth/logout', 'POST');
-        } catch {
-          // Logging out should still clear local state if the remote session is already gone.
-        }
-      }
-      state.adminApiToken = '';
-      localStorage.removeItem('chatAuditAdminApiToken');
-      state.authIdentity = null;
-      state.authError = '';
-      renderAll();
-    }
-
-    async function createAdminToken() {
-      const name = el('adminTokenName').value.trim();
-      const role = el('adminTokenRole').value;
-      if (!name) return;
-      state.adminTokenCreateResult = await apiSend('/api/admin/tokens', 'POST', { name, role });
-      el('adminTokenName').value = '';
-      await refreshAdminTokens();
-      renderSettings();
-    }
-
-    async function createAdminUser() {
-      const payload = {
-        username: el('adminUsername').value.trim(),
-        password: el('adminPassword').value,
-        display_name: el('adminDisplayName').value.trim() || null,
-        role: el('adminUserRole').value,
-      };
-      if (!payload.username || !payload.password) return;
-      try {
-        state.adminUserCreateResult = await apiSend('/api/admin/users', 'POST', payload);
-        state.adminUserError = '';
-        el('adminUsername').value = '';
-        el('adminPassword').value = '';
-        el('adminDisplayName').value = '';
-        await refreshAdminUsers();
-      } catch (error) {
-        state.adminUserCreateResult = null;
-        state.adminUserError = error.message || String(error);
-      }
-      renderSettings();
-    }
-
-    async function revokeAdminUser(userId) {
-      await apiSend(`/api/admin/users/${encodeURIComponent(userId)}`, 'DELETE');
-      state.adminUserCreateResult = null;
-      await refreshAdminUsers();
-      await refreshAdminSessions();
-      renderSettings();
-    }
-
-    async function resetAdminUserPassword(userId) {
-      const password = window.prompt('请输入新密码（至少 8 位）');
-      if (!password) return;
-      await apiSend(`/api/admin/users/${encodeURIComponent(userId)}/password`, 'POST', { password });
-      state.adminUserCreateResult = null;
-      await refreshAdminUsers();
-      await refreshAdminSessions();
-      await refreshAuthIdentity();
-      renderSettings();
-    }
-
-    async function revokeAdminSession(sessionId) {
-      await apiSend(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, 'DELETE');
-      await refreshAdminSessions();
-      await refreshAuthIdentity();
-      renderSettings();
-    }
-
-    async function revokeAdminToken(tokenId) {
-      await apiSend(`/api/admin/tokens/${encodeURIComponent(tokenId)}`, 'DELETE');
-      state.adminTokenCreateResult = null;
-      await refreshAdminTokens();
-      renderSettings();
-    }
-
-    async function selectRoom(room) {
-      state.currentRoom = room;
-      state.messageList = [];
-      renderAll();
-      await reloadCurrentRoom();
-    }
-
-    async function selectSearchResult(result) {
-      let room = state.roomList.find((item) => item.room_id === result.room_id);
-      if (!room) {
-        room = { room_id: result.room_id, last_timestamp: result.timestamp };
-        state.roomList = [room, ...state.roomList];
-      }
-      state.currentRoom = room;
-      state.messageList = [result];
-      renderAll();
-      scrollChatToBottom();
-    }
-
-    async function performSearch() {
-      const keyword = el('searchInput').value.trim();
-      if (!state.currentRobot || !keyword) return;
-      state.searchMode = true;
-      state.searchResults = await apiGet(`/api/search?robot_id=${encodeURIComponent(state.currentRobot.id)}&keyword=${encodeURIComponent(keyword)}&limit=50`);
-      renderAll();
-    }
-
-    function clearSearch() {
-      state.searchMode = false;
-      state.searchResults = [];
-      renderAll();
-    }
-
-    const loadMessages = async (beforeTimestamp = null, aroundMessageId = '') => {
-      if (!state.currentRobot || !state.currentRoom) return [];
-      let url = `/api/messages?robot_id=${encodeURIComponent(state.currentRobot.id)}&room_id=${encodeURIComponent(state.currentRoom.room_id)}&limit=50`;
-      if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
-      if (aroundMessageId) url += `&around_message_id=${encodeURIComponent(aroundMessageId)}`;
-      return await apiGet(url);
-    };
-
-    const mergeMessages = (messages) => {
-      const byKey = new Map();
-      messages.forEach((msg) => {
-        const key = msg.msg_hash || msg.external_message_id || `${msg.timestamp}:${msg.sender_id}:${msg.raw_message}`;
-        byKey.set(key, msg);
-      });
-      return Array.from(byKey.values()).sort((a, b) => (a.timestamp - b.timestamp) || String(a.msg_hash || '').localeCompare(String(b.msg_hash || '')));
-    };
-
-    const scrollToExternalMessage = (externalMessageId) => {
-      const chat = el('chatWindow');
-      const row = Array.from(chat.querySelectorAll('.message')).find((item) => String(item.dataset.externalMessageId || '') === String(externalMessageId));
-      if (!row) return false;
-      state.highlightedMessageId = String(externalMessageId);
-      renderChat();
-      requestAnimationFrame(() => {
-        const highlighted = Array.from(chat.querySelectorAll('.message')).find((item) => String(item.dataset.externalMessageId || '') === String(externalMessageId));
-        if (highlighted) highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        window.setTimeout(() => {
-          if (state.highlightedMessageId === String(externalMessageId)) {
-            state.highlightedMessageId = '';
-            renderChat();
-          }
-        }, 1600);
-      });
-      return true;
-    };
-
-    async function jumpToReplyMessage(replyId) {
-      if (!replyId || !state.currentRobot || !state.currentRoom) return;
-      if (findReplyMessage(replyId)) {
-        state.replyJumpMissingId = '';
-        scrollToExternalMessage(replyId);
-        return;
-      }
-      const around = await loadMessages(null, replyId);
-      if (around.length > 0) {
-        state.messageList = mergeMessages([...state.messageList, ...around]);
-        state.replyJumpMissingId = '';
-        renderChat();
-        scrollToExternalMessage(replyId);
-      } else {
-        state.replyJumpMissingId = String(replyId);
-        renderChat();
-      }
-    }
-
-    async function reloadCurrentRoom() {
-      if (!state.currentRoom) return;
-      state.messageList = await loadMessages();
-      renderAll();
-      scrollChatToBottom();
-    }
-
-    const scrollChatToBottom = () => {
-      const chat = el('chatWindow');
-      chat.scrollTop = chat.scrollHeight;
-    };
-
-    async function handleWindowScroll() {
-      const chat = el('chatWindow');
-      if (!chat || chat.scrollTop !== 0 || state.loadingHistory || state.messageList.length === 0) return;
-      state.loadingHistory = true;
-      const oldScrollHeight = chat.scrollHeight;
-      const cursorTimestamp = state.messageList[0].timestamp;
-      renderChat();
-      try {
-        const older = await loadMessages(cursorTimestamp);
-        if (older.length > 0) {
-          state.messageList = [...older, ...state.messageList];
-          renderChat();
-          chat.scrollTop = chat.scrollHeight - oldScrollHeight;
-        }
-      } finally {
-        state.loadingHistory = false;
-        renderChat();
-      }
-    }
-
-    const openExportDialog = () => {
-      el('exportRobotId').value = state.currentRobot ? state.currentRobot.id : '';
-      el('exportRoomId').value = state.currentRoom ? state.currentRoom.room_id : '';
-      el('exportStartTimestamp').value = '';
-      el('exportEndTimestamp').value = '';
-      openModal('exportModal');
-    };
-
-    async function downloadExportPackage() {
-      if (!el('exportRobotId').value.trim()) return;
-      const params = new URLSearchParams();
-      [
-        ['robot_id', el('exportRobotId').value],
-        ['room_id', el('exportRoomId').value],
-        ['start_timestamp', el('exportStartTimestamp').value],
-        ['end_timestamp', el('exportEndTimestamp').value],
-      ].forEach(([key, value]) => {
-        if (text(value).trim()) params.append(key, text(value).trim());
-      });
-      const packageJson = await requestJson(`/api/export?${params.toString()}`);
-      const blob = new Blob([JSON.stringify(packageJson, null, 2)], { type: 'application/json;charset=utf-8' });
-      const link = document.createElement('a');
-      const objectUrl = URL.createObjectURL(blob);
-      link.href = objectUrl;
-      link.download = `chat-audit-export-${Date.now()}.json`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(objectUrl);
-      closeModal('exportModal');
-    }
-
-    const openImportDialog = () => {
-      el('importPackageText').value = '';
-      state.importValidationReport = null;
-      renderImportReport();
-      openModal('importModal');
-    };
-
-    const parseImportPackage = () => JSON.parse(el('importPackageText').value);
-
-    async function validateImportPackage() {
-      if (!el('importPackageText').value.trim()) return;
-      state.importValidationReport = await apiSend('/api/import/validate', 'POST', parseImportPackage());
-      renderImportReport();
-    }
-
-    async function submitImportPackage() {
-      if (!state.importValidationReport || !state.importValidationReport.valid) return;
-      await apiSend('/api/import', 'POST', parseImportPackage());
-      closeModal('importModal');
-      if (state.currentRobot) await switchAccount(state.currentRobot);
-    }
-
-    const renderImportReport = () => {
-      const box = el('importValidationReport');
-      clearNode(box);
-      const report = state.importValidationReport;
-      box.hidden = !report;
-      if (!report) return;
-      const rows = [
-        ['校验结果', report.valid ? '通过' : '失败', report.valid ? 'ok' : 'bad'],
-        ['schema', report.schema || '-'],
-        ['checksum', report.checksum_valid === null ? '未提供' : (report.checksum_valid ? '通过' : '失败')],
-        ['signature', report.signature_valid === null ? '未提供' : (report.signature_valid ? '通过' : '失败'), report.signature_valid === false ? 'bad' : undefined],
-        ['source', report.source ? `${report.source.system || '-'} / ${report.source.instance_id || '-'}` : '-'],
-        ['counts', `messages=${report.counts.messages} / robot_messages=${report.counts.robot_messages} / media_assets=${report.counts.media_assets} / media_files=${report.counts.media_files || 0}`],
-      ];
-      if (report.diff && report.diff.messages) {
-        rows.push(['diff.messages 新增/更新/不变', `${report.diff.messages.new} / ${report.diff.messages.update} / ${report.diff.messages.unchanged}`]);
-      }
-      if (report.diff && report.diff.robot_messages) {
-        rows.push(['diff.robot_messages 新增/已存在', `${report.diff.robot_messages.new} / ${report.diff.robot_messages.existing}`]);
-      }
-      if (report.diff && report.diff.media_assets) {
-        rows.push(['diff.media_assets 新增/更新/不变', `${report.diff.media_assets.new} / ${report.diff.media_assets.update} / ${report.diff.media_assets.unchanged}`]);
-      }
-      if (report.media_files) {
-        rows.push(['媒体文件 media_files checked/missing/mismatch', `${report.media_files.checked} / ${report.media_files.missing} / ${report.media_files.mismatch}`]);
-      }
-      if (report.errors && report.errors.length) rows.push(['errors', report.errors.join('; '), 'bad']);
-      rows.forEach(([name, value, className]) => {
-        const row = document.createElement('div');
-        const label = document.createElement('strong');
-        label.textContent = `${name}：`;
-        const valueNode = document.createElement('span');
-        if (className) valueNode.className = className;
-        valueNode.textContent = value;
-        row.append(label, valueNode);
-        box.appendChild(row);
-      });
-    };
-
-    const openOfflineAuditDialog = async () => {
-      state.offlineAuditReport = null;
-      state.offlineRepairReport = null;
-      renderOfflineAuditReport();
-      openModal('offlineAuditModal');
-      await runOfflineAudit();
-    };
-
-    async function runOfflineAudit() {
-      const params = new URLSearchParams({ limit: '50000' });
-      if (state.currentRobot) params.append('robot_id', state.currentRobot.id);
-      if (state.currentRoom) params.append('room_id', state.currentRoom.room_id);
-      state.offlineAuditReport = await apiGet(`/api/offline/audit?${params.toString()}`);
-      renderOfflineAuditReport();
-    }
-
-    async function repairOfflineAudit() {
-      const params = new URLSearchParams({ limit: '50000' });
-      state.offlineRepairReport = await apiSend(`/api/offline/repair?${params.toString()}`, 'POST');
-      await runOfflineAudit();
-    }
-
-    const renderOfflineAuditReport = () => {
-      const box = el('offlineAuditReport');
-      clearNode(box);
-      const report = state.offlineAuditReport;
-      if (!report) {
-        box.textContent = '正在验收本地缓存...';
-        return;
-      }
-      const rows = [
-        ['验收结果', report.offline_ready ? '通过' : '存在未缓存项', report.offline_ready ? 'ok' : 'bad'],
-        ['messages', report.messages_scanned],
-        ['media_assets', report.media_assets_checked],
-        ['profile_avatars', `${report.profile_avatars_checked} / ${report.missing_profile_avatars}`],
-        ['remote_media_urls', report.remote_media_urls],
-        ['uncached_card_pages', report.uncached_card_pages],
-        ['uncached_forwards', report.uncached_forwards],
-        ['missing_media_assets', report.missing_media_assets],
-        ['missing_media_files', report.missing_media_files],
-      ];
-      rows.forEach(([name, value, className]) => {
-        const row = document.createElement('div');
-        const label = document.createElement('strong');
-        label.textContent = `${name}：`;
-        const valueNode = document.createElement('span');
-        if (className) valueNode.className = className;
-        valueNode.textContent = value;
-        row.append(label, valueNode);
-        box.appendChild(row);
-      });
-      if (state.offlineRepairReport) {
-        const repaired = state.offlineRepairReport;
-        const row = document.createElement('div');
-        const label = document.createElement('strong');
-        label.textContent = 'repair: ';
-        const valueNode = document.createElement('span');
-        valueNode.textContent = `assets ${repaired.repaired_media_assets}, files ${repaired.repaired_media_files}, sizes ${repaired.repaired_file_sizes}, profile avatars ${repaired.repaired_profile_avatars}`;
-        row.append(label, valueNode);
-        box.appendChild(row);
-      }
-      if (report.reason_summary && Object.keys(report.reason_summary).length) {
-        const summary = document.createElement('div');
-        const label = document.createElement('strong');
-        label.textContent = '缺失原因汇总：';
-        const valueNode = document.createElement('span');
-        valueNode.textContent = Object.entries(report.reason_summary)
-          .map(([reason, count]) => `${reason} ${count}`)
-          .join(' / ');
-        summary.append(label, valueNode);
-        box.appendChild(summary);
-      }
-      (report.issues || []).slice(0, 20).forEach((issue) => {
-        const row = document.createElement('div');
-        row.className = 'bad';
-        const title = issue.label || issue.reason;
-        const action = issue.action ? `；${issue.action}` : '';
-        row.textContent = `${issue.kind}: ${title} - ${issue.target}${action}`;
-        box.appendChild(row);
-      });
-    };
-
-    const openModal = (id) => el(id).classList.add('open');
-    const closeModal = (id) => {
-      el(id).classList.remove('open');
-      if (id === 'imagePreviewModal') {
-        el('imagePreviewImg').removeAttribute('src');
-        el('imagePreviewCaption').textContent = '';
-      }
-    };
-
-    const openImagePreview = (src, alt) => {
-      el('imagePreviewImg').src = src;
-      el('imagePreviewImg').alt = alt || '';
-      el('imagePreviewCaption').textContent = alt || src;
-      openModal('imagePreviewModal');
-    };
-
-    const bindEvents = () => {
-      el('loginButton').addEventListener('click', loginWithPassword);
-      el('logoutButton').addEventListener('click', logoutAuth);
-      el('refreshAuthButton').addEventListener('click', refreshAuthIdentity);
-      el('refreshCapturePoliciesButton').addEventListener('click', refreshCapturePolicies);
-      el('settingsToggle').addEventListener('click', () => { state.settingsMode = !state.settingsMode; renderSettings(); });
-      el('newAdapterButton').addEventListener('click', resetAdapterForm);
-      el('clearAdapterButton').addEventListener('click', resetAdapterForm);
-      el('saveAdapterButton').addEventListener('click', saveAdapter);
-      el('runBackupButton').addEventListener('click', runManualBackup);
-      el('saveBackupSettingsButton').addEventListener('click', saveBackupSettings);
-      el('resetBackupSettingsButton').addEventListener('click', resetBackupSettings);
-      el('createAdminTokenButton').addEventListener('click', createAdminToken);
-      el('createAdminUserButton').addEventListener('click', createAdminUser);
-      el('refreshAdminSessionsButton').addEventListener('click', refreshAdminSessions);
-      el('searchButton').addEventListener('click', performSearch);
-      el('searchInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') performSearch(); });
-      el('clearSearchButton').addEventListener('click', clearSearch);
-      el('refreshButton').addEventListener('click', reloadCurrentRoom);
-      el('chatWindow').addEventListener('scroll', handleWindowScroll);
-      el('openOfflineAuditButton').addEventListener('click', openOfflineAuditDialog);
-      el('runOfflineAuditButton').addEventListener('click', runOfflineAudit);
-      el('repairOfflineAuditButton').addEventListener('click', repairOfflineAudit);
-      el('openExportButton').addEventListener('click', openExportDialog);
-      el('downloadExportButton').addEventListener('click', downloadExportPackage);
-      el('openImportButton').addEventListener('click', openImportDialog);
-      el('validateImportButton').addEventListener('click', validateImportPackage);
-      el('submitImportButton').addEventListener('click', submitImportPackage);
-      document.querySelectorAll('[data-close-modal]').forEach((node) => {
-        node.addEventListener('click', () => closeModal(node.dataset.closeModal));
-      });
-      document.querySelectorAll('.modal-backdrop').forEach((node) => {
-        node.addEventListener('click', (event) => {
-          if (event.target === node) closeModal(node.id);
-        });
-      });
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          document.querySelectorAll('.modal-backdrop.open').forEach((node) => closeModal(node.id));
-        }
-      });
-    };
-
-    window.performSearch = performSearch;
-    window.selectSearchResult = selectSearchResult;
-    window.openExportDialog = openExportDialog;
-    window.downloadExportPackage = downloadExportPackage;
-    window.openOfflineAuditDialog = openOfflineAuditDialog;
-    window.runOfflineAudit = runOfflineAudit;
-    window.repairOfflineAudit = repairOfflineAudit;
-    window.openImportDialog = openImportDialog;
-    window.validateImportPackage = validateImportPackage;
-    window.submitImportPackage = submitImportPackage;
-    window.runManualBackup = runManualBackup;
-    window.saveBackupSettings = saveBackupSettings;
-    window.resetBackupSettings = resetBackupSettings;
-    window.loginWithPassword = loginWithPassword;
-    window.logoutAuth = logoutAuth;
-    window.refreshAuthIdentity = refreshAuthIdentity;
-    window.refreshCapturePolicies = refreshCapturePolicies;
-    window.saveCapturePolicy = saveCapturePolicy;
-    window.resetCapturePolicy = resetCapturePolicy;
-    window.createAdminUser = createAdminUser;
-    window.revokeAdminUser = revokeAdminUser;
-    window.refreshAdminSessions = refreshAdminSessions;
-    window.resetAdminUserPassword = resetAdminUserPassword;
-    window.revokeAdminSession = revokeAdminSession;
-
-    bindEvents();
-    renderAll();
-    loadAdapters().catch((error) => {
-      console.error(error);
-      el('roomList').appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '控制台加载失败，请检查 API 或管理 Token。' }));
-    });
-  </script>
+  <script src="/assets/app.js" defer></script>
 </body>
 </html>
