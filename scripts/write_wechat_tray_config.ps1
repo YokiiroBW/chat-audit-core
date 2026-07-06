@@ -1,5 +1,5 @@
 param(
-    [string]$NasUrl = "http://192.168.31.210:8000",
+    [string]$NasUrl = "http://127.0.0.1:8000",
     [Parameter(Mandatory = $true)]
     [string]$Token,
     [Parameter(Mandatory = $true)]

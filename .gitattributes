@@ -1,0 +1,13 @@
+# Keep generated release archives focused on deployable application files.
+.forgejo/** export-ignore
+.forgejo/ export-ignore
+.gitattributes export-ignore
+tests/** export-ignore
+tests/ export-ignore
+AUDIT_P1_FIXED.md export-ignore
+AUDIT_P2_FIXED.md export-ignore
+CURRENT_QUEUE_STATUS.md export-ignore
+DEVELOPMENT_QUEUE.md export-ignore
+PROJECT_HANDOFF_READ_ME_FIRST.md export-ignore
+TASK_QUEUE.md export-ignore
+"QQ & 微信多租户社交资产审计系统 —— 全栈工程落地蓝图 (V4 架构).md" export-ignore

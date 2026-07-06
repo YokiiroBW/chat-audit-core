@@ -1,378 +1,253 @@
-# QQ & 微信多租户社交资产审计系统
+# QQ社交资产审计平台
 
-本仓库用于落地 `QQ & 微信多租户社交资产审计系统 —— 全栈工程落地蓝图 (V4 架构).md`。
+QQ社交资产审计平台是一套面向 QQ / NapCat / OneBot 11 的本地化聊天资产备份与审计系统。它会把机器人账号可见的群聊、私聊、媒体、合并转发、卡片链接和会话资料沉淀到自己的数据库与本地文件存储中，方便长期留存、检索、导出、离线查看和审计。
 
-## 当前蓝图核心
+项目优先保证三件事：
 
-- 主视角隔离：同一条群消息可被多个机器人账号看到，但查询时按 `robot_id` 做视角切片。
-- 全局消息池去重：以 `msg_hash = MD5(platform + room_id + sender_id + raw_message)` 写入全局消息池。
-- 内容寻址媒体存储：媒体文件以内容 MD5 命名并复用，避免重复落盘。
-- 游标滚动加载：聊天历史使用 `before_timestamp + limit` 向上滚动加载，不做传统页码分页。
-- 第一阶段优先打通 QQ/NapCat OneBot 11 反向 WebSocket 存储管道，微信作为第二阶段兼容扩展。
+- **不串线**：适配器和机器人身份分离，同一个适配器切换到不同 QQ 账号时会自动识别并绑定对应身份档案。
+- **可离线**：图片、语音、视频、文件、头像、群名称、卡片快照、合并转发内容等资产尽量缓存到本地，历史记录在断网后仍可查看。
+- **可审计**：提供多账号视角、消息检索、黑白名单抓取策略、导出导入、自动备份、离线缺失检查和修复入口。
 
-开发贡献见 `CONTRIBUTING.md`，架构说明见 `ARCHITECTURE.md`，灾难恢复见 `DISASTER_RECOVERY.md`。
+## 当前能力
 
-## 已落地能力
+- QQ / NapCat / OneBot 11 反向 WebSocket 接入。
+- 多适配器、多机器人账号、多会话统一管理。
+- 群聊和私聊消息入库，按机器人账号视角隔离查看。
+- 文本、链接、图片、动画表情、语音、视频、普通文件、卡片消息、回复消息、戳一戳、合并转发消息解析与展示。
+- 合并转发消息缓存与弹层预览，支持嵌套合并转发读取。
+- 图片弹层预览，支持滚轮缩放、拖拽移动和双击复位。
+- B 站、小程序等卡片优先解析真实网页链接，前端自动识别蓝链。
+- 本地媒体缓存，内容哈希去重，避免重复落盘。
+- 头像、群名称、群号、私聊档案本地缓存。
+- 黑名单 / 白名单抓取策略，按群或个人配置文本、图片、语音、文件等抓取范围。
+- 高级导出、导入预校验、导入恢复、自动备份和备份签名校验。
+- 离线资产审计与自动修复，检查缺失头像、媒体、卡片和转发缓存。
+- Web 控制台，支持浅色 / 深色主题、调色盘、操作记录、适配器管理和账号设置。
+- 管理 API Token、数据库用户、角色权限、CSRF 防护、审计日志和基础 Prometheus 指标。
 
-- FastAPI 应用工厂与启动初始化。
-- SQLAlchemy Async V4 数据模型。
-- 全局消息池去重与 `robot_id` 主视角绑定。
-- `/api/adapters`、`/api/rooms`、`/api/messages` 主视角查询 API。
-- `/onebot/v11/ws` NapCat / OneBot 11 反向 WebSocket 入库。
-- CQ 图片、语音、视频解析、下载、内容 MD5 去重落盘。
-- `/static/storage` 本地媒体静态访问。
-- Dockerfile + Docker Compose 部署基座。
+微信 PC 采集器相关代码仍保留在 `wechat_tray_adapter/`，当前属于可选实验方向。稳定版主线以 QQ / NapCat 消息备份与审计为核心。
 
 ## 技术栈
 
-- 后端：FastAPI + SQLAlchemy 2.x Async + Pydantic Settings
-- 数据库：PostgreSQL（部署默认），SQLite（本地快速测试）
-- 媒体：HTTPX 下载 + FFmpeg 运行时预装
-- 部署：Dockerfile + Docker Compose，挂载 `data/storage` 与 `data/backups`
+- 后端：FastAPI、SQLAlchemy Async、Pydantic Settings
+- 数据库：PostgreSQL 16，开发环境可使用 SQLite
+- 前端：原生 HTML / CSS / JavaScript，无外部 CDN
+- 媒体：HTTPX 下载、内容 MD5 去重、可选 FFmpeg 转码
+- 部署：Docker Compose，支持内置静态 FFmpeg 镜像
+- 自动化：pytest、Alembic 迁移、Forgejo Actions CI
 
-## 本地开发启动
+## 快速部署
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+1. 复制环境变量模板：
+
+```bash
+cp .env.example .env
+```
+
+2. 修改 `.env` 中的生产配置：
+
+```text
+APP_ENV=production
+APP_SECRET_KEY=请替换为长随机字符串
+ADMIN_API_TOKEN=请替换为管理后台 token
+ONEBOT_ACCESS_TOKEN=请替换为 OneBot 连接 token
+POSTGRES_PASSWORD=请替换为数据库密码
+SYSTEM_INSTANCE_ID=你的实例名称
+```
+
+3. 启动服务：
+
+```bash
+docker compose up -d --build
+```
+
+4. 打开控制台：
+
+```text
+http://服务器IP:8000/
 ```
 
 健康检查：
 
 ```text
-http://127.0.0.1:8000/health
+http://服务器IP:8000/health
 ```
 
 接口文档：
 
 ```text
-http://127.0.0.1:8000/docs
+http://服务器IP:8000/docs
 ```
 
-## Docker 部署
+## FFmpeg 可选方案
 
-当前 Windows 环境 Docker CLI 可用，但未安装 `docker compose` 子命令；如果目标机器有 Docker Compose v2，可直接运行：
+默认镜像不强制依赖系统 FFmpeg。需要语音 / 视频转码时推荐使用内置静态 FFmpeg 构建：
 
-```powershell
-docker compose up -d --build
-```
-
-如果目标机器使用旧版独立命令：
-
-```powershell
-docker-compose up -d --build
-```
-
-部署后访问：
-
-```text
-http://宿主机IP:8000/health
-http://宿主机IP:8000/docs
-```
-
-NapCat 反向 WebSocket 配置为：
-
-```text
-ws://宿主机IP:8000/onebot/v11/ws
-```
-
-持久化目录：
-
-```text
-data/storage  # 内容寻址媒体池
-data/backups  # 后续自动备份归档
-```
-
-## 测试
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests -q
-```
-
-## 媒体转码
-
-默认情况下，系统会下载并缓存 QQ/NapCat 提供的原始媒体文件，保证原始记录可追溯。
-
-如需提高语音、视频在浏览器里的播放兼容性，可启用 FFmpeg 转码：
-
-```text
-MEDIA_TRANSCODE_ENABLED=true
-MEDIA_TRANSCODE_VOICE_EXT=mp3
-MEDIA_TRANSCODE_VIDEO_EXT=mp4
-FFMPEG_BIN=ffmpeg
-FFMPEG_LIBRARY_PATH=
-```
-
-说明：
-
-- 语音会尝试转为 MP3，视频会尝试转为 MP4。
-- 转码失败或 FFmpeg 不可用时，会自动回退保存原始文件。
-- 默认 Docker 镜像保持离线友好，不在构建期安装 FFmpeg；需要转码时可以选择内置静态 FFmpeg 镜像，或挂载宿主机已有 FFmpeg。
-
-宿主机/NAS 已经有 FFmpeg 时，可直接挂载可执行文件到容器：
-
-```powershell
-$env:FFMPEG_HOST_BIN='/usr/bin/ffmpeg'
-$env:FFMPEG_HOST_LIB64='/lib64'
-$env:FFMPEG_HOST_USR_LIB='/usr/lib'
-docker compose -f docker-compose.yml -f docker-compose.ffmpeg-host.yml up -d
-```
-
-`docker-compose.ffmpeg-host.yml` 会把宿主机 FFmpeg 二进制挂载到 `/opt/host-bin/ffmpeg`，并把宿主机库目录挂载到 `/opt/host-lib64` 与 `/opt/host-usr-lib`。应用只会在调用 FFmpeg 子进程时注入 `FFMPEG_LIBRARY_PATH`，不会把宿主机库路径设为整个 Python 服务的全局 `LD_LIBRARY_PATH`。
-
-推荐方式是构建内置静态 FFmpeg 镜像。`Dockerfile.ffmpeg` 会从 `vendor/wheels/` 离线安装 `imageio-ffmpeg`，并把 wheel 内置的静态二进制链接到 `/usr/local/bin/ffmpeg`，不依赖 apt 源：
-
-```powershell
+```bash
 docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build
 ```
 
-宿主机挂载路径主要用于本机已有兼容 FFmpeg 的环境。若宿主机二进制依赖动态库，需要同时设置 `FFMPEG_HOST_LIB64`、`FFMPEG_HOST_USR_LIB` 和 `FFMPEG_LIBRARY_PATH`；实际转码仍建议优先使用内置静态镜像。
+如果宿主机已经有兼容的 FFmpeg，也可以使用挂载方案：
 
-运行时状态查询：
+```bash
+FFMPEG_HOST_BIN=/usr/bin/ffmpeg \
+FFMPEG_HOST_LIB64=/lib64 \
+FFMPEG_HOST_USR_LIB=/usr/lib \
+docker compose -f docker-compose.yml -f docker-compose.ffmpeg-host.yml up -d
+```
+
+运行后可通过以下接口确认 FFmpeg 状态：
 
 ```text
 GET /api/system/runtime
 ```
 
-该接口会返回 `media_transcode_enabled`、`ffmpeg_bin`、`ffmpeg_available`、`ffmpeg_version` 等字段，用于确认容器内 FFmpeg 是否可用。
+## NapCat 接入
 
-## 微信 Hook 接入
-
-系统提供通用微信事件接收入口：
+平台提供 OneBot 11 反向 WebSocket 入口：
 
 ```text
-POST /api/wechat/events
+ws://服务器IP:8000/onebot/v11/ws?adapter_id=napcat1&access_token=你的ONEBOT_ACCESS_TOKEN
 ```
 
-该接口复用管理 API 鉴权，支持常见 Hook 字段名，例如：
-
-- 机器人账号：`robot_id`、`self_id`、`wxid`、`account_id`、`CurrentWxid`
-- 会话：`room_id`、`talker`、`conversation_id`、`from_wxid`、`FromUserName`、`ToUserName`
-- 发送者：`sender_id`、`sender_wxid`、`from_user`、`SenderWxid`
-- 内容：`raw_message`、`content`、`Content`、`text`
-- 媒体：`msg_type=image/voice/video/file` 搭配 `media_url`、`file_url`、`url`、`FileUrl`
-- 常见嵌套：字段可以位于顶层，也可以位于 `data`、`payload`、`msg`、`message` 对象内。
-- 常见数字类型：`MsgType=1` 文本、`3` 图片、`34` 语音、`43` 视频、`47` 表情、`49` 卡片/分享。
-
-微信事件会被规范化为内部消息模型并以 `platform=wechat` 入库；图片、语音、视频和文件会转成现有 CQ 片段，继续复用本地媒体缓存、导出导入和离线验收链路。
-群聊文本如果带有 `sender_wxid:\n内容` 前缀，会自动拆出真实发送者并去掉前缀后入库。
-
-微信 Hook 样本回放：
+推荐每个 NapCat 容器使用独立 `adapter_id`，例如：
 
 ```text
-tests/fixtures/wechat_hook_samples.json
+napcat1
+napcat2
+napcat3
 ```
 
-新增真实客户端样本时，优先追加到该文件并运行 `tests/test_wechat_pc_adapter.py`。
+适配器第一次连接后，系统会读取当前 QQ 账号身份并创建机器人身份档案。之后如果同一个适配器切换到另一个 QQ 账号，系统会识别新身份并建立新的档案，避免新旧机器人消息混合。
 
-## 微信 PC 托盘采集器
+## 数据目录
 
-Windows PC 端采集器骨架位于 `wechat_tray_adapter/`，说明见 `WECHAT_TRAY_ADAPTER.md`。目标是通过 `pythonw.exe` 或 PyInstaller `--noconsole` 静默启动，仅显示系统托盘图标，并在程序内部集成 `wcferry` / WeChatFerry 同步官方 PC 微信消息到 NAS。
+运行数据默认挂载在：
 
-当前 NAS 端已支持：
+```text
+data/storage   # 媒体、头像、卡片快照、合并转发缓存等资产
+data/backups   # 自动备份与失败记录
+postgres_data  # Docker volume，PostgreSQL 数据库
+```
 
-- `POST /api/receive_external_msg` 外部消息兼容入口
-- `POST /api/external/media` 与 `POST /api/wechat/media` multipart 媒体上传入口
-- WeChatFerry 常见字段和已上传本地媒体路径归一化
+稳定版源码包只保留 `data/storage/.gitkeep` 和 `data/backups/.gitkeep`，不会携带真实聊天记录、媒体文件、SQLite 数据库、日志或本地 `.env`。
 
-真实 PC 微信与 WeChatFerry 兼容性、托盘图标行为、端到端样本采集仍需在 Windows 桌面环境验收。
+## 自动备份与导入导出
 
-## 自动备份
-
-应用启动时会根据 `AUTO_BACKUP_CRON` 启动自动备份任务，将导出包写入 `BACKUP_ROOT`。
-
-当前支持每日固定时间格式：
+默认每天 03:00 执行自动备份：
 
 ```text
 AUTO_BACKUP_CRON=0 3 * * *
 AUTO_BACKUP_KEEP_LATEST=7
 ```
 
-输出文件示例：
+可在 Web 控制台的设置页面直接修改备份计划，也可以使用 API：
 
 ```text
-data/backups/auto-backup-20260703T030000Z.json
+GET   /api/backup/status
+PATCH /api/backup/settings
+POST  /api/backup/run
+GET   /api/export
+POST  /api/import/validate
+POST  /api/import
 ```
 
-说明：
+导出包包含 manifest、签名、消息、会话、身份档案和可携带的媒体资产。导入前会先执行校验，报告新增、更新、未变化、缺失媒体和校验错误。
 
-- 备份内容复用 `/api/export` 的包结构。
-- 导出包会尽量携带本地媒体文件内容，单个媒体文件超过 `MEDIA_MAX_BYTES` 时只导出索引与校验信息，不嵌入文件内容。
-- manifest 会标记 `backup_type=auto` 与 `created_by=auto_backup_scheduler`。
-- manifest 会写入 `checksum.algorithm=sha256` 与 `checksum.value`；导入时如校验值不匹配会拒绝导入，避免篡改包被静默回录。
-- manifest 会写入 `source.system`、`source.instance_id` 与 `signature`；签名使用 `APP_SECRET_KEY` 做 HMAC-SHA256。旧版无签名包仍可导入，但校验报告会显示 signature 未提供。
-- `/api/import/validate` 可在真正写库前返回 schema、checksum、counts、数据库差异预览、媒体文件校验结果与错误列表。
-- Web 控制台支持“导入 JSON”：先校验导出包，通过后再确认导入；校验报告会展示新增/更新/不变统计与媒体文件 checked/missing/mismatch。
-- 导入失败与自动备份失败会写入 `BACKUP_ROOT/failures.log`，每行一条 JSON 失败记录。
-- `AUTO_BACKUP_KEEP_LATEST` 控制保留最近多少个 `auto-backup-*.json` 文件。
-- 如需禁用自动备份，可将 `AUTO_BACKUP_CRON` 设置为 `off`、`disabled`、`none`、`false` 或 `0`。
-- `.env` 仍作为默认配置；通过 Web 控制台或 `PATCH /api/backup/settings` 保存的数据库覆盖项优先生效，不会回写 `.env`。
+## 抓取策略
 
-管理接口：
+每个机器人身份可配置黑名单 / 白名单：
+
+- 黑白名单都为空：默认抓取所有可见会话。
+- 黑名单存在目标：跳过这些群或个人。
+- 白名单存在目标：只抓取白名单中的群或个人。
+
+每个目标可独立配置抓取内容：
+
+- 文本：包括普通文本、链接、卡片消息、合并转发。
+- 图片：包括普通图片和动画表情。
+- 语音。
+- 文件：指 zip、安装包、文档等普通文件，默认关闭。
+
+## 权限与安全
+
+生产环境必须设置非默认密钥和 token：
 
 ```text
-GET   /api/backup/status    # 查看自动备份开关、cron、保留数量、配置来源和最新备份
-PATCH /api/backup/settings  # 更新 cron/保留数量，或 {"reset_to_env": true} 恢复 .env 默认值
-POST  /api/backup/run       # 立即执行一次签名自动备份
+APP_SECRET_KEY=长随机字符串
+ADMIN_API_TOKEN=管理 token
+ONEBOT_ACCESS_TOKEN=OneBot 连接 token
 ```
 
-Web 控制台的账号设置面板提供自动备份状态、cron/保留数量编辑、恢复 `.env` 默认值与“立即备份”按钮。配置变更会写入 `audit_logs`。
+管理接口支持三种角色：
 
-灾难恢复和恢复演练步骤见 `DISASTER_RECOVERY.md`。
+- `viewer`：只读查询、搜索、审计日志和导入包预校验。
+- `operator`：包含只读权限，可执行备份、离线修复、媒体回填和适配器更新。
+- `admin`：最高权限，可执行删除、导入、用户管理和 token 管理。
 
-## 管理 API 鉴权
-
-开发环境中 `ADMIN_API_TOKEN` 留空时，`/api/*` 管理接口默认开放，便于本地调试。
-
-生产环境 `APP_ENV=production` 时必须配置非默认 `ADMIN_API_TOKEN`，或配置 `ADMIN_API_TOKENS` 角色 Token。配置后，请求 `/api/*` 需要携带：
-
-```text
-Authorization: Bearer 你的管理API Token
-```
-
-或：
-
-```text
-X-Admin-Token: 你的管理API Token
-```
-
-内置 Web 控制台遇到 401 时会提示输入该 token，并缓存在浏览器本地存储中。
-
-`ADMIN_API_TOKEN` 为兼容旧部署的最高权限 token。需要多角色时可额外配置 `ADMIN_API_TOKENS` JSON：
-
-```text
-ADMIN_API_TOKENS=[{"name":"readonly","role":"viewer","token":"replace-with-readonly-token"}]
-```
-
-角色说明：
-
-- `viewer`：只读查询、搜索、审计日志、导入包预校验。
-- `operator`：包含只读权限，并可执行媒体回填、离线修复、手动备份、适配器创建/更新。
-- `admin`：最高权限，可删除适配器、执行导入等破坏性写操作。
-
-也可以使用数据库托管 Token 做日常分权和轮换。托管 Token 只保存 SHA-256 哈希，完整 token 仅在创建成功时返回一次：
+支持数据库托管 Token：
 
 ```text
 GET    /api/admin/tokens
-POST   /api/admin/tokens       # body: {"name":"readonly","role":"viewer"}
+POST   /api/admin/tokens
 POST   /api/admin/tokens/{id}/rotate
-DELETE /api/admin/tokens/{id}  # 吊销
+DELETE /api/admin/tokens/{id}
 ```
 
-数据库用户与登录态也可用于 Web 控制台日常登录。密码使用 PBKDF2-SHA256 保存，登录态只保存 token 哈希：
+支持 Web 登录用户：
 
 ```text
-POST /api/auth/login       # body: {"username":"ops","password":"..."}
+POST /api/auth/login
 GET  /api/auth/me
 POST /api/auth/logout
-GET  /api/admin/users
-POST /api/admin/users      # body: {"username":"ops","password":"...","role":"operator"}
-POST /api/admin/users/{id}/password  # body: {"password":"new-password"}
-DELETE /api/admin/users/{id}
-GET  /api/admin/sessions
-DELETE /api/admin/sessions/{id}
 ```
 
-生产环境建议仍保留一个静态 `ADMIN_API_TOKEN` 作为 bootstrap/应急入口，再用数据库托管 Token 分配日常只读或运维权限。
-Web 控制台的账号设置面板提供数据库托管 Token 的列表、创建、吊销入口，以及数据库用户创建、列表、禁用、密码重置、会话列表、强制下线、登录、退出和当前角色显示；高风险控件会按当前角色禁用。
-
-## 操作审计与限流
-
-系统会将高风险管理操作写入 `audit_logs`，包括：
-
-- 管理 API 鉴权失败。
-- 删除适配器。
-- 媒体回填。
-- 离线修复。
-- 导入 JSON。
-- 手动备份。
-- 用户登录/退出、数据库用户创建/禁用/密码重置、数据库会话强制下线、Token 创建/轮换/吊销。
-
-查询接口：
-
-```text
-GET /api/audit/logs?action=offline.repair&limit=100
-```
-
-高风险写操作有简单每分钟限流，默认：
-
-```text
-HIGH_RISK_RATE_LIMIT_PER_MINUTE=10
-```
-
-设置为 `0` 可关闭该限流。
-
-## 数据库迁移记录
-
-应用启动时会执行 `create_all` 与轻量兼容迁移，并将已确认的兼容迁移写入 `schema_migrations`。当前迁移记录覆盖：
-
-- `adapters.current_robot_id`
-- `messages.external_message_id`
-- `audit_logs`
-- `schema_migrations`
-- `admin_tokens`
-- `system_settings`
-- `admin_users`
-- `admin_sessions`
-
-轻量启动迁移仍会在应用启动时做兼容兜底；同时已启用 Alembic CLI，`migrations/versions/` 与轻量迁移注册表一一对应，空库可初始化为当前 schema，旧库可补齐已知兼容列。
-
-本地或部署环境手动迁移：
+## 本地开发
 
 ```powershell
-$env:DATABASE_URL='sqlite+aiosqlite:///./data/chat_audit.sqlite3'
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m alembic current
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+copy .env.example .env
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-容器内可使用同样的 `DATABASE_URL` 执行 `python -m alembic upgrade head`。
+运行测试：
 
-迁移状态查询：
-
-```text
-GET /api/system/migrations
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-## 高风险操作限流
+同步压缩前端资源：
 
-`HIGH_RISK_RATE_LIMIT_PER_MINUTE` 控制高风险写入/维护接口的每分钟请求次数，默认值为 `10`。设置为 `0` 或负数可关闭该限制。
-
-当前受限操作包括：适配器创建/更新/删除、手动备份、管理员令牌创建/轮换、管理员用户与会话管理、媒体回填、离线修复、导入写入等会改变数据或触发批处理的接口。
-
-触发限流时接口返回 `HTTP 429`，响应头包含 `Retry-After: 60`，前端会提示稍后重试。`/metrics` 会导出 `chat_audit_rate_limit_exceeded_total{action,actor}`，可用于 Grafana/Prometheus 监控高风险操作的限流频率。
-
-## Forgejo
-
-局域网仓库：
-
-```text
-http://192.168.31.210:18085/YokiiroBW/chat-audit-core
+```powershell
+.\.venv\Scripts\python.exe scripts\minify_static_assets.py
 ```
 
-## 仓库连接检查
+## 发布包内容
 
-新增检查脚本（双通道）：`scripts/git_connectivity_check.py`
+稳定版发布包包含运行所需文件：
 
-- SSH 与 token 两条链路都已具备检测：
-  - SSH：`python3 scripts/git_connectivity_check.py --remote origin`，通过私钥与主机密钥握手 + `git ls-remote`
-  - HTTPS + token：同命令会自动读取 Forgejo token 并做 API + git 授权校验
+- `app/`
+- `migrations/`
+- `data/storage/.gitkeep`
+- `data/backups/.gitkeep`
+- `vendor/wheels/`
+- `Dockerfile*`
+- `docker-compose*.yml`
+- `requirements*.txt`
+- `alembic.ini`
+- `scripts/`
+- `wechat_tray_adapter/`
+- `README.md`、`ARCHITECTURE.md`、`CONTRIBUTING.md`、`DISASTER_RECOVERY.md`
 
-常用命令（按环境覆盖）：
-```bash
-# 全量检查
-FORGEJO_TOKEN_FILE=/path/to/forgejo.token python3 scripts/git_connectivity_check.py --remote origin
+发布包会排除：
 
-# 仅 HTTPS（当 SSH 尚未就绪）
-python3 scripts/git_connectivity_check.py --remote origin --skip-ssh
+- `.env`、真实 token、密钥和证书
+- SQLite 数据库、媒体缓存、备份文件和日志
+- `.venv`、`.tmp`、`build`、`dist`、`__pycache__`、pytest 缓存
+- 测试目录、CI 配置、早期审计报告和开发队列文档
 
-# 仅 SSH（当 token 不可用）
-python3 scripts/git_connectivity_check.py --remote origin --skip-https
+## 项目状态
 
-# 跳过 SSH 口令/私钥错误导致阻塞时
-python3 scripts/git_connectivity_check.py --remote origin --skip-ssh
-```
-
-建议执行顺序：先执行 HTTPS（确认 token 与 API/仓库可达），再修复 SSH Key 后补跑 `--skip-https`。
+当前主线已进入第一个稳定版：QQ / NapCat 消息备份、资产缓存、审计查看、导入导出和基础运维功能已经闭环。后续版本会继续围绕稳定性、移动端适配、更多消息类型细节和采集器生态扩展推进。

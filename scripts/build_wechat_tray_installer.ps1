@@ -50,7 +50,7 @@ Remove-Item -LiteralPath $Payload -Force
 $ConfigPath = Join-Path $InstallRoot "config.json"
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
     @{
-        nas_url = "http://192.168.31.210:8000"
+        nas_url = "http://127.0.0.1:8000"
         token = "replace-with-operator-token"
         account_id = "wxid_xxx"
         account_name = "微信采集账号"
