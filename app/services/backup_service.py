@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -320,11 +321,9 @@ class BackupService:
             BackupService.attach_package_checksum(package)
 
         timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
-        backup_path = backup_root / f"auto-backup-{timestamp}.json"
-        counter = 1
+        backup_path = backup_root / f"auto-backup-{timestamp}-{secrets.token_hex(4)}.json"
         while backup_path.exists():
-            backup_path = backup_root / f"auto-backup-{timestamp}-{counter}.json"
-            counter += 1
+            backup_path = backup_root / f"auto-backup-{timestamp}-{secrets.token_hex(4)}.json"
 
         backup_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
 

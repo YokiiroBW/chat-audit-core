@@ -250,6 +250,7 @@ async def test_backup_service_writes_auto_backup_file_and_prunes_old_files(db_se
     assert backup_path.exists()
     assert backup_path.name.startswith("auto-backup-")
     assert backup_path.suffix == ".json"
+    assert __import__("re").fullmatch(r"auto-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.json", backup_path.name)
     package = __import__("json").loads(backup_path.read_text(encoding="utf-8"))
     assert package["manifest"]["schema"] == "chat-audit-core.backup.v1"
     assert package["manifest"]["backup_type"] == "auto"
