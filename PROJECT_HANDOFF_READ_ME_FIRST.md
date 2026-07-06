@@ -18,9 +18,10 @@ read_this_first: true
 - 远端：局域网 Forgejo
 - 当前主线：QQ/NapCat 消息备份、离线可用性和审计体验完善
 - 微信路线：已封存，保留已完成代码，不再作为当前开发队列推进
-- 本地最近全量测试：`164 passed`
+- 本地最近全量测试：`165 passed`
 - 最新提交：以 `git log -1 --oneline` 为准
-- NAS 基础验收：健康检查、首页和管理鉴权链路此前已通过
+- NAS 基础验收：健康检查、首页离线资源、管理鉴权和 OneBot 路由已通过
+- NAS 离线验收：2026-07-06 部署后扫描 9269 条消息、3659 个媒体资产、300 个头像，`offline_ready=true`，缺失项 0
 - NAS FFmpeg：推荐使用 `docker-compose.ffmpeg.yml` 内置静态 FFmpeg 路线，`/api/system/runtime` 返回 `ffmpeg_available=true`
 
 ## 已完成能力
@@ -45,6 +46,11 @@ read_this_first: true
 - 数据库迁移体系：轻量迁移注册表、`schema_migrations`、`GET /api/system/migrations`、Alembic CLI
 - 运行时状态：`GET /api/system/runtime`
 - 可选 FFmpeg 转码：内置静态 FFmpeg Docker 覆盖文件为推荐路线
+- 离线审计缺失原因分类、原因汇总和前端缺失说明
+- 媒体回填失败原因细分、结构化统计和结果展示
+- 合并转发自动后台拉取与媒体缓存，断开连接时清理后台任务
+- 回复消息点击跳转与原消息缺失态提示
+- 聊天区空状态压缩，减少无效说明占位
 - 角色抓取策略：
   - `GET /api/bots/{robot_id}/capture-targets`
   - `PUT /api/bots/{robot_id}/capture-policies/{target_type}/{target_id}`
@@ -136,12 +142,9 @@ git push ssh://git@192.168.31.210:2222/YokiiroBW/chat-audit-core.git main
 
 当前 QQ 主线：
 
-- QQ 离线完整性验收。
-- QQ 媒体回填与缺失原因细化。
-- QQ 合并转发与卡片消息增强。
-- QQ 回复消息点击跳转。
-- QQ 前端审计体验完善。
-- 生产化回归、NAS 验收、文档更新。
+- QQ/NapCat 当前核心开发队列已进入生产样本持续验收阶段。
+- 后续重点是发现真实样本缺口后补测试和修复，而不是继续扩展微信路线。
+- 每次运行时或部署行为变更后继续执行本地全量测试、Forgejo 推送、NAS 部署和离线审计。
 
 ## 继续推进规则
 
