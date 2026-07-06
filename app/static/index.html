@@ -474,6 +474,19 @@
     </div>
   </div>
 
+  <div id="forwardPreviewModal" class="modal-backdrop forward-preview-backdrop">
+    <div class="forward-preview-card">
+      <div class="forward-preview-head">
+        <div>
+          <strong id="forwardPreviewTitle">合并转发消息</strong>
+          <span id="forwardPreviewCaption"></span>
+        </div>
+        <button class="btn" data-close-modal="forwardPreviewModal">关闭</button>
+      </div>
+      <div id="forwardPreviewBody" class="forward-preview-body"></div>
+    </div>
+  </div>
+
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
