@@ -19,6 +19,7 @@ class LightweightMigration:
     version: str
     description: str
     apply: MigrationApply
+    rollback: MigrationApply | None = None
 
 
 async def _noop_migration(_conn) -> None:
@@ -29,6 +30,7 @@ async def _add_adapter_current_robot_id(conn) -> None:
     adapter_columns = await _table_columns(conn, "adapters")
     if "current_robot_id" not in adapter_columns:
         await conn.exec_driver_sql("ALTER TABLE adapters ADD COLUMN current_robot_id VARCHAR(64)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_adapters_current_robot_id ON adapters (current_robot_id)")
 
 
 async def _add_message_external_message_id(conn) -> None:
@@ -38,9 +40,25 @@ async def _add_message_external_message_id(conn) -> None:
         await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_external_message_id ON messages (external_message_id)")
 
 
+async def _drop_column_if_exists(conn, table_name: str, column_name: str) -> None:
+    table_columns = await _table_columns(conn, table_name)
+    if column_name in table_columns:
+        await conn.exec_driver_sql(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
+
+
+async def _rollback_adapter_current_robot_id(conn) -> None:
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS ix_adapters_current_robot_id")
+    await _drop_column_if_exists(conn, "adapters", "current_robot_id")
+
+
+async def _rollback_message_external_message_id(conn) -> None:
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS ix_messages_external_message_id")
+    await _drop_column_if_exists(conn, "messages", "external_message_id")
+
+
 LIGHTWEIGHT_MIGRATION_REGISTRY = (
-    LightweightMigration("20260705_001_adapter_current_robot_id", "Add adapters.current_robot_id", _add_adapter_current_robot_id),
-    LightweightMigration("20260705_002_message_external_message_id", "Add messages.external_message_id", _add_message_external_message_id),
+    LightweightMigration("20260705_001_adapter_current_robot_id", "Add adapters.current_robot_id", _add_adapter_current_robot_id, _rollback_adapter_current_robot_id),
+    LightweightMigration("20260705_002_message_external_message_id", "Add messages.external_message_id", _add_message_external_message_id, _rollback_message_external_message_id),
     LightweightMigration("20260705_003_audit_logs", "Create audit_logs table", _noop_migration),
     LightweightMigration("20260705_004_schema_migrations", "Create schema_migrations table", _noop_migration),
     LightweightMigration("20260705_005_admin_tokens", "Create admin_tokens table", _noop_migration),
@@ -113,6 +131,22 @@ async def _record_migration(conn, migration: LightweightMigration) -> None:
         text("INSERT INTO schema_migrations (version, description, applied_at) VALUES (:version, :description, CURRENT_TIMESTAMP) ON CONFLICT (version) DO NOTHING"),
         {"version": migration.version, "description": migration.description},
     )
+
+
+async def rollback_migration(conn: AsyncConnection, migration: LightweightMigration) -> None:
+    if migration.rollback is None:
+        raise ValueError(f"Migration {migration.version} does not support rollback")
+    await migration.rollback(conn)
+    await conn.execute(text("DELETE FROM schema_migrations WHERE version = :version"), {"version": migration.version})
+
+
+async def rollback_lightweight_migration(version: str, target_engine: AsyncEngine | None = None) -> None:
+    migration = next((item for item in LIGHTWEIGHT_MIGRATION_REGISTRY if item.version == version), None)
+    if migration is None:
+        raise ValueError(f"Unknown lightweight migration: {version}")
+    active_engine = target_engine or engine
+    async with active_engine.begin() as conn:
+        await rollback_migration(conn, migration)
 
 
 async def backfill_bot_profiles(sessionmaker: async_sessionmaker[AsyncSession] | None = None) -> None:
