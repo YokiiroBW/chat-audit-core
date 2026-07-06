@@ -1,15 +1,22 @@
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements-prod.txt ./
+RUN pip install --upgrade pip \
+    && pip install --user -r requirements-prod.txt
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PATH=/root/.local/bin:$PATH
 
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
-
+COPY --from=builder /root/.local /root/.local
 COPY app ./app
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations

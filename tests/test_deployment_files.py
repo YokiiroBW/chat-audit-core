@@ -9,10 +9,12 @@ def test_dockerfile_uses_offline_friendly_runtime_and_runs_uvicorn():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
+    assert "FROM python:3.11-slim AS builder" in dockerfile
+    assert "COPY --from=builder /root/.local /root/.local" in dockerfile
     assert "apt-get" not in dockerfile
     assert "curl" not in dockerfile
     assert "pip install" in dockerfile
-    assert "requirements.txt" in dockerfile
+    assert "requirements-prod.txt" in dockerfile
     assert "alembic.ini" in dockerfile
     assert "migrations" in dockerfile
     assert "uvicorn" in dockerfile
@@ -24,9 +26,12 @@ def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
     dockerfile = (ROOT / "Dockerfile.ffmpeg").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
+    assert "FROM python:3.11-slim AS builder" in dockerfile
+    assert "COPY --from=builder /root/.local /root/.local" in dockerfile
     assert "apt-get" not in dockerfile
     assert "COPY vendor/wheels ./vendor/wheels" in dockerfile
-    assert "pip install --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0" in dockerfile
+    assert "pip install --user --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0" in dockerfile
+    assert "requirements-prod.txt" in dockerfile
     assert "imageio-ffmpeg==0.6.0" in dockerfile
     assert "imageio_ffmpeg.get_ffmpeg_exe()" in dockerfile
     assert "/usr/local/bin/ffmpeg" in dockerfile
@@ -38,9 +43,15 @@ def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
 
 
 def test_requirements_include_structured_logging_dependency():
-    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements-prod.txt").read_text(encoding="utf-8")
+    dev_requirements = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    default_requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 
     assert "python-json-logger==2.0.7" in requirements
+    assert "pytest==" not in requirements
+    assert "-r requirements-prod.txt" in dev_requirements
+    assert "pytest==" in dev_requirements
+    assert default_requirements.strip() == "-r requirements-dev.txt"
 
 
 def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():

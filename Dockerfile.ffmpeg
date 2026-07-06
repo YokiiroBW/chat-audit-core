@@ -1,19 +1,25 @@
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements-prod.txt ./
+COPY vendor/wheels ./vendor/wheels
+RUN pip install --upgrade pip \
+    && pip install --user -r requirements-prod.txt \
+    && pip install --user --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PATH=/root/.local/bin:$PATH
 
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
-
-COPY vendor/wheels ./vendor/wheels
-RUN pip install --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0 \
-    && python -c "import imageio_ffmpeg, os; os.symlink(imageio_ffmpeg.get_ffmpeg_exe(), '/usr/local/bin/ffmpeg')" \
-    && rm -rf ./vendor/wheels \
+COPY --from=builder /root/.local /root/.local
+RUN python -c "import imageio_ffmpeg, os; os.symlink(imageio_ffmpeg.get_ffmpeg_exe(), '/usr/local/bin/ffmpeg')" \
     && ffmpeg -version
 
 COPY app ./app
