@@ -1,66 +1,59 @@
 # QQ社交资产审计平台
 
-QQ社交资产审计平台是一套面向 QQ / NapCat / OneBot 11 的本地化聊天资产备份与审计系统。它会把机器人账号可见的群聊、私聊、媒体、合并转发、卡片链接和会话资料沉淀到自己的数据库与本地文件存储中，方便长期留存、检索、导出、离线查看和审计。
+一个用于备份和审计 QQ / NapCat 聊天记录的本地化平台。
 
-项目优先保证三件事：
+它可以把机器人账号能看到的群聊、私聊、图片、语音、视频、文件、卡片消息、回复消息和合并转发消息保存到本地，方便之后搜索、查看、导出和离线留存。
 
-- **不串线**：适配器和机器人身份分离，同一个适配器切换到不同 QQ 账号时会自动识别并绑定对应身份档案。
-- **可离线**：图片、语音、视频、文件、头像、群名称、卡片快照、合并转发内容等资产尽量缓存到本地，历史记录在断网后仍可查看。
-- **可审计**：提供多账号视角、消息检索、黑白名单抓取策略、导出导入、自动备份、离线缺失检查和修复入口。
+## 适合做什么
 
-## 当前能力
+- 长期备份 QQ 群聊和私聊记录
+- 保存图片、动画表情、语音、视频、文件等聊天资产
+- 查看合并转发、回复消息、卡片链接等特殊消息
+- 多个机器人账号分开管理，避免消息串线
+- 按群聊或个人设置黑名单、白名单和抓取范围
+- 在断网后继续查看已经缓存过的历史记录
+- 定期自动备份，必要时导出和恢复
 
-- QQ / NapCat / OneBot 11 反向 WebSocket 接入。
-- 多适配器、多机器人账号、多会话统一管理。
-- 群聊和私聊消息入库，按机器人账号视角隔离查看。
-- 文本、链接、图片、动画表情、语音、视频、普通文件、卡片消息、回复消息、戳一戳、合并转发消息解析与展示。
-- 合并转发消息缓存与弹层预览，支持嵌套合并转发读取。
-- 图片弹层预览，支持滚轮缩放、拖拽移动和双击复位。
-- B 站、小程序等卡片优先解析真实网页链接，前端自动识别蓝链。
-- 本地媒体缓存，内容哈希去重，避免重复落盘。
-- 头像、群名称、群号、私聊档案本地缓存。
-- 黑名单 / 白名单抓取策略，按群或个人配置文本、图片、语音、文件等抓取范围。
-- 高级导出、导入预校验、导入恢复、自动备份和备份签名校验。
-- 离线资产审计与自动修复，检查缺失头像、媒体、卡片和转发缓存。
-- Web 控制台，支持浅色 / 深色主题、调色盘、操作记录、适配器管理和账号设置。
-- 管理 API Token、数据库用户、角色权限、CSRF 防护、审计日志和基础 Prometheus 指标。
+请只备份你自己有权限管理和保存的聊天数据。
 
-微信 PC 采集器相关代码仍保留在 `wechat_tray_adapter/`，当前属于可选实验方向。稳定版主线以 QQ / NapCat 消息备份与审计为核心。
+## 主要功能
 
-## 技术栈
+- 支持 NapCat / OneBot 11 反向连接
+- 支持多个适配器和多个 QQ 账号
+- 自动识别机器人身份，适配器换号后不会混淆旧账号数据
+- 支持群聊名称、头像、私聊头像本地缓存
+- 支持文本、链接、图片、动画表情、语音、视频、普通文件
+- 支持回复消息跳转、戳一戳、合并转发消息
+- 支持图片弹窗预览、滚轮缩放、拖拽查看细节
+- 支持 B 站、小程序等卡片解析真实网页链接
+- 支持黑名单 / 白名单抓取策略
+- 支持自动备份、导入、导出和离线资产检查
+- 默认使用 SQLite，安装简单；也可以切换到 PostgreSQL
 
-- 后端：FastAPI、SQLAlchemy Async、Pydantic Settings
-- 数据库：默认 SQLite，可选 PostgreSQL 16
-- 前端：原生 HTML / CSS / JavaScript，无外部 CDN
-- 媒体：HTTPX 下载、内容 MD5 去重、可选 FFmpeg 转码
-- 部署：Docker Compose，支持内置静态 FFmpeg 镜像
-- 自动化：pytest、Alembic 迁移、Forgejo Actions CI
+## 快速开始
 
-## 快速部署
-
-1. 复制环境变量模板：
+先复制配置文件：
 
 ```bash
 cp .env.example .env
 ```
 
-2. 修改 `.env` 中的生产配置：
+编辑 `.env`，至少修改下面几项：
 
 ```text
-APP_ENV=production
-APP_SECRET_KEY=请替换为长随机字符串
-ADMIN_API_TOKEN=请替换为管理后台 token
-ONEBOT_ACCESS_TOKEN=请替换为 OneBot 连接 token
-SYSTEM_INSTANCE_ID=你的实例名称
+APP_SECRET_KEY=换成一段长随机字符串
+ADMIN_API_TOKEN=换成你的管理后台密码
+ONEBOT_ACCESS_TOKEN=换成你的 NapCat 连接密码
+SYSTEM_INSTANCE_ID=换成你的实例名称
 ```
 
-3. 启动服务：
+启动服务：
 
 ```bash
 docker compose up -d --build
 ```
 
-4. 打开控制台：
+打开页面：
 
 ```text
 http://服务器IP:8000/
@@ -72,63 +65,15 @@ http://服务器IP:8000/
 http://服务器IP:8000/health
 ```
 
-接口文档：
+## 连接 NapCat
 
-```text
-http://服务器IP:8000/docs
-```
-
-## 可选 PostgreSQL
-
-1.0 版本默认使用 SQLite，数据库文件保存在 `data/chat_audit.sqlite3`，适合单机部署和直接安装包体验。
-
-如果需要 PostgreSQL，可在 `.env` 中启用 PostgreSQL 配置：
-
-```text
-POSTGRES_DB=chat_audit
-POSTGRES_USER=chat_audit
-POSTGRES_PASSWORD=请替换为数据库密码
-DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-```
-
-然后使用 PostgreSQL 覆盖文件启动：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
-```
-
-## FFmpeg 可选方案
-
-默认镜像不强制依赖系统 FFmpeg。需要语音 / 视频转码时推荐使用内置静态 FFmpeg 构建：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build
-```
-
-如果宿主机已经有兼容的 FFmpeg，也可以使用挂载方案：
-
-```bash
-FFMPEG_HOST_BIN=/usr/bin/ffmpeg \
-FFMPEG_HOST_LIB64=/lib64 \
-FFMPEG_HOST_USR_LIB=/usr/lib \
-docker compose -f docker-compose.yml -f docker-compose.ffmpeg-host.yml up -d
-```
-
-运行后可通过以下接口确认 FFmpeg 状态：
-
-```text
-GET /api/system/runtime
-```
-
-## NapCat 接入
-
-平台提供 OneBot 11 反向 WebSocket 入口：
+在 NapCat 中配置反向 WebSocket：
 
 ```text
 ws://服务器IP:8000/onebot/v11/ws?adapter_id=napcat1&access_token=你的ONEBOT_ACCESS_TOKEN
 ```
 
-推荐每个 NapCat 容器使用独立 `adapter_id`，例如：
+如果你有多个 NapCat，可以使用不同的 `adapter_id`：
 
 ```text
 napcat1
@@ -136,136 +81,67 @@ napcat2
 napcat3
 ```
 
-适配器第一次连接后，系统会读取当前 QQ 账号身份并创建机器人身份档案。之后如果同一个适配器切换到另一个 QQ 账号，系统会识别新身份并建立新的档案，避免新旧机器人消息混合。
+每个连接成功的 QQ 账号都会自动建立自己的身份档案。
 
-## 数据目录
+## 数据保存在哪里
 
-运行数据默认挂载在：
-
-```text
-data/storage   # 媒体、头像、卡片快照、合并转发缓存等资产
-data/backups   # 自动备份与失败记录
-data/chat_audit.sqlite3  # 默认 SQLite 数据库
-```
-
-稳定版源码包只保留 `data/storage/.gitkeep` 和 `data/backups/.gitkeep`，不会携带真实聊天记录、媒体文件、SQLite 数据库、日志或本地 `.env`。
-
-## 自动备份与导入导出
-
-默认每天 03:00 执行自动备份：
+默认数据目录：
 
 ```text
-AUTO_BACKUP_CRON=0 3 * * *
-AUTO_BACKUP_KEEP_LATEST=7
+data/chat_audit.sqlite3  # 默认数据库
+data/storage             # 图片、语音、视频、头像、卡片等缓存
+data/backups             # 自动备份文件
 ```
 
-可在 Web 控制台的设置页面直接修改备份计划，也可以使用 API：
+这些目录不会包含在发布源码包里。请定期备份 `data/` 目录。
+
+## 使用 PostgreSQL
+
+默认 SQLite 已经可以直接使用。如果你希望使用 PostgreSQL，先在 `.env` 里填写：
 
 ```text
-GET   /api/backup/status
-PATCH /api/backup/settings
-POST  /api/backup/run
-GET   /api/export
-POST  /api/import/validate
-POST  /api/import
+POSTGRES_DB=chat_audit
+POSTGRES_USER=chat_audit
+POSTGRES_PASSWORD=换成数据库密码
+DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 ```
 
-导出包包含 manifest、签名、消息、会话、身份档案和可携带的媒体资产。导入前会先执行校验，报告新增、更新、未变化、缺失媒体和校验错误。
+然后用 PostgreSQL 配置启动：
 
-## 抓取策略
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+```
 
-每个机器人身份可配置黑名单 / 白名单：
+## 可选 FFmpeg
 
-- 黑白名单都为空：默认抓取所有可见会话。
-- 黑名单存在目标：跳过这些群或个人。
-- 白名单存在目标：只抓取白名单中的群或个人。
+如果需要更好的语音、视频播放兼容性，可以使用带 FFmpeg 的构建：
 
-每个目标可独立配置抓取内容：
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build
+```
 
-- 文本：包括普通文本、链接、卡片消息、合并转发。
-- 图片：包括普通图片和动画表情。
-- 语音。
-- 文件：指 zip、安装包、文档等普通文件，默认关闭。
+也可以挂载宿主机已有的 FFmpeg，配置见 `docker-compose.ffmpeg-host.yml`。
 
-## 权限与安全
+## 备份和恢复
 
-生产环境必须设置非默认密钥和 token：
+系统默认每天自动备份一次。你也可以在网页设置里修改备份时间、手动备份、导出数据或导入旧备份。
+
+建议同时备份：
 
 ```text
-APP_SECRET_KEY=长随机字符串
-ADMIN_API_TOKEN=管理 token
-ONEBOT_ACCESS_TOKEN=OneBot 连接 token
+data/
+.env
 ```
 
-管理接口支持三种角色：
+`.env` 里包含密钥和连接密码，不要公开上传。
 
-- `viewer`：只读查询、搜索、审计日志和导入包预校验。
-- `operator`：包含只读权限，可执行备份、离线修复、媒体回填和适配器更新。
-- `admin`：最高权限，可执行删除、导入、用户管理和 token 管理。
+## 安全提醒
 
-支持数据库托管 Token：
+- 不要把 `.env`、数据库、聊天媒体缓存提交到公开仓库
+- 不要公开你的 `ADMIN_API_TOKEN` 和 `ONEBOT_ACCESS_TOKEN`
+- 对外网开放前请先配置强密码和反向代理访问控制
+- 请遵守聊天平台规则和当地法律法规
 
-```text
-GET    /api/admin/tokens
-POST   /api/admin/tokens
-POST   /api/admin/tokens/{id}/rotate
-DELETE /api/admin/tokens/{id}
-```
+## 当前状态
 
-支持 Web 登录用户：
-
-```text
-POST /api/auth/login
-GET  /api/auth/me
-POST /api/auth/logout
-```
-
-## 本地开发
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-copy .env.example .env
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
-```
-
-运行测试：
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests -q
-```
-
-同步压缩前端资源：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\minify_static_assets.py
-```
-
-## 发布包内容
-
-稳定版发布包包含运行所需文件：
-
-- `app/`
-- `migrations/`
-- `data/storage/.gitkeep`
-- `data/backups/.gitkeep`
-- `vendor/wheels/`
-- `Dockerfile*`
-- `docker-compose*.yml`
-- `requirements*.txt`
-- `alembic.ini`
-- `scripts/`
-- `wechat_tray_adapter/`
-- `README.md`、`ARCHITECTURE.md`、`CONTRIBUTING.md`、`DISASTER_RECOVERY.md`
-
-发布包会排除：
-
-- `.env`、真实 token、密钥和证书
-- SQLite 数据库、媒体缓存、备份文件和日志
-- `.venv`、`.tmp`、`build`、`dist`、`__pycache__`、pytest 缓存
-- 测试目录、CI 配置、早期审计报告和开发队列文档
-
-## 项目状态
-
-当前主线已进入第一个稳定版：QQ / NapCat 消息备份、资产缓存、审计查看、导入导出和基础运维功能已经闭环。后续版本会继续围绕稳定性、移动端适配、更多消息类型细节和采集器生态扩展推进。
+`v1.0.0` 是第一个稳定版本，主线功能已经围绕 QQ / NapCat 聊天记录备份、浏览、搜索、导出和离线留存闭环。
