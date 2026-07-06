@@ -1447,7 +1447,20 @@
       }
     };
 
+    const normalizeForwardParams = (params = {}) => {
+      const source = params && typeof params === 'object' && params.data && typeof params.data === 'object'
+        ? params.data
+        : params;
+      const localCandidate = source.local || source.local_path || source.path || source.url || '';
+      return {
+        ...source,
+        id: source.id || source.forward_id || source.file || source.resid || source.resource_id || '',
+        local: isLocalPath(localCandidate) ? localCandidate : (source.local || source.local_path || ''),
+      };
+    };
+
     const renderForwardCard = (container, params) => {
+      const normalized = normalizeForwardParams(params);
       const card = document.createElement('div');
       card.className = 'forward-card';
       const action = document.createElement('button');
@@ -1456,29 +1469,31 @@
       const title = document.createElement('span');
       title.className = 'forward-title';
       title.textContent = '合并转发消息';
-      if (params.id) action.title = `合并转发消息 ${params.id}`;
+      if (normalized.id) action.title = `合并转发消息 ${normalized.id}`;
       const summary = document.createElement('div');
       summary.className = 'forward-summary';
-      summary.textContent = params.local ? '正在读取摘要...' : '点击查看合并转发内容';
+      summary.textContent = normalized.local ? '正在读取摘要...' : '点击查看合并转发内容';
       action.append(title, summary);
       action.addEventListener('click', async () => {
-        await toggleForwardDetail(params.id, detail, params.local);
+        await toggleForwardDetail(normalized.id, detail, normalized.local, card);
       });
       const detail = document.createElement('div');
       detail.className = 'forward-detail';
       detail.hidden = true;
       card.append(action, detail);
       container.appendChild(card);
-      loadForwardSummary(params.local, summary);
+      loadForwardSummary(normalized.local, summary);
     };
 
-    const toggleForwardDetail = async (forwardId, detail, localPath = '') => {
+    const toggleForwardDetail = async (forwardId, detail, localPath = '', card = null) => {
       if ((!forwardId && !localPath) || !state.currentRobot) return;
       if (detail.dataset.loaded === 'true') {
         detail.hidden = !detail.hidden;
+        if (card) card.classList.toggle('expanded', !detail.hidden);
         return;
       }
       detail.hidden = false;
+      if (card) card.classList.add('expanded');
       detail.textContent = '正在加载合并消息...';
       try {
         const payload = localPath

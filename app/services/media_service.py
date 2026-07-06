@@ -710,10 +710,11 @@ class MediaService:
         max_bytes: int | None = None,
         unavailable_placeholders: bool = False,
         allowed_media_types: set[str] | None = None,
+        forward_depth: int = 3,
+        seen_forward_ids: set[str] | None = None,
     ) -> str:
-        from app.services.message_service import MessageService
-
         rewritten = local_message
+        seen = seen_forward_ids or set()
         for match in list(_CQ_PATTERN.finditer(local_message)):
             if match.group("kind") != "forward":
                 continue
@@ -721,33 +722,230 @@ class MediaService:
             forward_id = params.get("id")
             if not forward_id or params.get("local"):
                 continue
-            try:
-                payload = await forward_loader(forward_id)
-            except Exception:
-                continue
-            if not isinstance(payload, dict):
-                continue
-            localized = await MediaService.localize_onebot_payload(
+            local_path = await MediaService._cache_forward_payload_by_id(
                 db,
-                payload,
+                forward_id=forward_id,
+                forward_loader=forward_loader,
                 http_client=http_client,
                 storage_root=storage_root,
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
                 unavailable_placeholders=unavailable_placeholders,
                 allowed_media_types=allowed_media_types,
+                forward_depth=forward_depth,
+                seen_forward_ids=seen,
             )
-            local_path = await MessageService.save_media_asset(
+            if local_path:
+                params["local"] = local_path
+                rewritten = rewritten.replace(match.group(0), _build_cq_segment("forward", params), 1)
+        return rewritten
+
+    @staticmethod
+    async def _cache_forward_payload_by_id(
+        db: AsyncSession,
+        forward_id: str,
+        forward_loader: Any,
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
+        forward_depth: int = 3,
+        seen_forward_ids: set[str] | None = None,
+    ) -> str | None:
+        from app.services.message_service import MessageService
+
+        if forward_depth <= 0:
+            return None
+        seen = seen_forward_ids or set()
+        if forward_id in seen:
+            return None
+        seen.add(forward_id)
+        try:
+            payload = await forward_loader(forward_id)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        localized = await MediaService.localize_onebot_payload(
+            db,
+            payload,
+            http_client=http_client,
+            storage_root=storage_root,
+            public_prefix=public_prefix,
+            max_bytes=max_bytes,
+            unavailable_placeholders=unavailable_placeholders,
+            allowed_media_types=allowed_media_types,
+        )
+        localized = await MediaService.cache_nested_forward_payloads(
+            db,
+            localized,
+            forward_loader=forward_loader,
+            http_client=http_client,
+            storage_root=storage_root,
+            public_prefix=public_prefix,
+            max_bytes=max_bytes,
+            unavailable_placeholders=unavailable_placeholders,
+            allowed_media_types=allowed_media_types,
+            forward_depth=forward_depth - 1,
+            seen_forward_ids=seen,
+        )
+        return await MessageService.save_media_asset(
+            db,
+            file_content=json.dumps(localized, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            file_type="forward",
+            ext="json",
+            storage_root=storage_root,
+            public_prefix=public_prefix,
+        )
+
+    @staticmethod
+    async def cache_nested_forward_payloads(
+        db: AsyncSession,
+        payload: dict[str, Any],
+        forward_loader: Any,
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
+        forward_depth: int = 2,
+        seen_forward_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        if forward_depth <= 0:
+            return payload
+        localized = deepcopy(payload)
+        data = localized.get("data", localized)
+        messages = data.get("messages") if isinstance(data, dict) else None
+        if messages is None and isinstance(data, dict):
+            messages = data.get("message")
+        if not isinstance(messages, list):
+            return localized
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("raw_message"), str):
+                item["raw_message"] = await MediaService.cache_cq_forward_payloads(
+                    db,
+                    local_message=item["raw_message"],
+                    forward_loader=forward_loader,
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
+                    allowed_media_types=allowed_media_types,
+                    forward_depth=forward_depth,
+                    seen_forward_ids=seen_forward_ids,
+                )
+            for key in ("message", "content"):
+                if key in item:
+                    item[key] = await MediaService.cache_nested_forward_content(
+                        db,
+                        item[key],
+                        forward_loader=forward_loader,
+                        http_client=http_client,
+                        storage_root=storage_root,
+                        public_prefix=public_prefix,
+                        max_bytes=max_bytes,
+                        unavailable_placeholders=unavailable_placeholders,
+                        allowed_media_types=allowed_media_types,
+                        forward_depth=forward_depth,
+                        seen_forward_ids=seen_forward_ids,
+                    )
+        return localized
+
+    @staticmethod
+    async def cache_nested_forward_content(
+        db: AsyncSession,
+        content: Any,
+        forward_loader: Any,
+        http_client: Any | None = None,
+        storage_root: str | Path | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+        unavailable_placeholders: bool = False,
+        allowed_media_types: set[str] | None = None,
+        forward_depth: int = 2,
+        seen_forward_ids: set[str] | None = None,
+    ) -> Any:
+        if forward_depth <= 0:
+            return content
+        if isinstance(content, str):
+            return await MediaService.cache_cq_forward_payloads(
                 db,
-                file_content=json.dumps(localized, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
-                file_type="forward",
-                ext="json",
+                local_message=content,
+                forward_loader=forward_loader,
+                http_client=http_client,
                 storage_root=storage_root,
                 public_prefix=public_prefix,
+                max_bytes=max_bytes,
+                unavailable_placeholders=unavailable_placeholders,
+                allowed_media_types=allowed_media_types,
+                forward_depth=forward_depth,
+                seen_forward_ids=seen_forward_ids,
             )
-            params["local"] = local_path
-            rewritten = rewritten.replace(match.group(0), _build_cq_segment("forward", params), 1)
-        return rewritten
+        if isinstance(content, list):
+            return [
+                await MediaService.cache_nested_forward_content(
+                    db,
+                    item,
+                    forward_loader=forward_loader,
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
+                    allowed_media_types=allowed_media_types,
+                    forward_depth=forward_depth,
+                    seen_forward_ids=seen_forward_ids,
+                )
+                for item in content
+            ]
+        if not isinstance(content, dict):
+            return content
+
+        segment = deepcopy(content)
+        segment_type = segment.get("type") or segment.get("kind")
+        data = segment.get("data") if isinstance(segment.get("data"), dict) else segment
+        if isinstance(data, dict) and segment_type == "forward":
+            forward_id = data.get("id") or data.get("forward_id") or data.get("file")
+            local_path = data.get("local") or data.get("local_path")
+            if forward_id and not local_path:
+                cached = await MediaService._cache_forward_payload_by_id(
+                    db,
+                    forward_id=str(forward_id),
+                    forward_loader=forward_loader,
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                    unavailable_placeholders=unavailable_placeholders,
+                    allowed_media_types=allowed_media_types,
+                    forward_depth=forward_depth,
+                    seen_forward_ids=seen_forward_ids,
+                )
+                if cached:
+                    data["local"] = cached
+            return segment
+
+        for key, value in list(segment.items()):
+            segment[key] = await MediaService.cache_nested_forward_content(
+                db,
+                value,
+                forward_loader=forward_loader,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+                unavailable_placeholders=unavailable_placeholders,
+                allowed_media_types=allowed_media_types,
+                forward_depth=forward_depth,
+                seen_forward_ids=seen_forward_ids,
+            )
+        return segment
 
     @staticmethod
     async def localize_onebot_content(

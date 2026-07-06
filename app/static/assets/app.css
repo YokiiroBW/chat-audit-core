@@ -1546,6 +1546,7 @@
       font-size: 12px;
       line-height: 1.35;
     }
+    .forward-card.expanded .forward-summary { display: none; }
     .forward-summary-line {
       overflow: hidden;
       text-overflow: ellipsis;

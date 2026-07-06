@@ -1310,9 +1310,21 @@ async def get_forward_message(
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="onebot action timed out") from exc
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
+        async def load_forward(nested_forward_id: str) -> dict:
+            return await OneBotRPCService.call_action(robot_id, "get_forward_msg", {"id": nested_forward_id})
+
         localized = await MediaService.localize_onebot_payload(
             db,
             payload,
+            http_client=client,
+            storage_root=settings.storage_root,
+            public_prefix=settings.public_storage_prefix,
+            max_bytes=settings.media_max_bytes,
+        )
+        localized = await MediaService.cache_nested_forward_payloads(
+            db,
+            localized,
+            forward_loader=load_forward,
             http_client=client,
             storage_root=settings.storage_root,
             public_prefix=settings.public_storage_prefix,
