@@ -10,10 +10,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} && psql -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'SELECT 1'"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   app:
     build:
@@ -54,10 +55,10 @@ services:
       - ./data/storage:/app/data/storage
       - ./data/backups:/app/data/backups
     healthcheck:
-      test: ["CMD", "python", "-c", "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)))"]
+      test: ["CMD", "python", "-c", "import json, sys, urllib.request; r = json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)); sys.exit(0 if r.get('status') == 'ok' else 1)"]
       interval: 30s
-      timeout: 5s
-      retries: 3
+      timeout: 10s
+      retries: 5
       start_period: 20s
 
 volumes:

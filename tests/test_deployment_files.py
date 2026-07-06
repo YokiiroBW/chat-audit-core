@@ -80,10 +80,20 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert "healthcheck" in services["postgres"]
     assert "postgres_data" in compose["volumes"]
 
+    postgres_healthcheck = " ".join(services["postgres"]["healthcheck"]["test"])
+    assert "pg_isready" in postgres_healthcheck
+    assert "psql" in postgres_healthcheck
+    assert "SELECT 1" in postgres_healthcheck
+    assert services["postgres"]["healthcheck"]["start_period"] == "10s"
+
     app_healthcheck = " ".join(services["app"]["healthcheck"]["test"])
     assert "python" in app_healthcheck
     assert "urllib.request" in app_healthcheck
+    assert "sys.exit" in app_healthcheck
+    assert "status" in app_healthcheck
     assert "curl" not in app_healthcheck
+    assert services["app"]["healthcheck"]["timeout"] == "10s"
+    assert services["app"]["healthcheck"]["retries"] == 5
 
 
 def test_optional_ffmpeg_compose_override_uses_ffmpeg_dockerfile():
