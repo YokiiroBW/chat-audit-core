@@ -56,6 +56,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "decodeHtmlEntities" in page_bundle
     assert "renderForwardCard" in page_bundle
     assert "/api/forward" in page_bundle
+    assert "forward-toggle" in page_bundle
+    assert ".forward-card.expanded > .forward-toggle" in page_bundle
     assert "renderLocalMediaParts" in page_bundle
     assert "renderLocalMediaAsset" in page_bundle
     assert "renderAvatar" in page_bundle

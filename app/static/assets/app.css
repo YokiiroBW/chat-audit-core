@@ -1533,6 +1533,10 @@
       gap: 6px;
       text-align: left;
     }
+    .forward-card.expanded > .forward-toggle,
+    .forward-toggle[hidden] {
+      display: none;
+    }
     .forward-title {
       color: var(--ink);
       font-weight: 800;
@@ -1546,7 +1550,11 @@
       font-size: 12px;
       line-height: 1.35;
     }
-    .forward-card.expanded .forward-summary { display: none; }
+    .forward-card.expanded .forward-summary,
+    .forward-card:has(.forward-detail:not([hidden])) .forward-summary,
+    .forward-summary[hidden] {
+      display: none;
+    }
     .forward-summary-line {
       overflow: hidden;
       text-overflow: ellipsis;
