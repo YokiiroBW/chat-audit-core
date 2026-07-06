@@ -219,6 +219,8 @@ POST  /api/backup/run       # 立即执行一次签名自动备份
 
 Web 控制台的账号设置面板提供自动备份状态、cron/保留数量编辑、恢复 `.env` 默认值与“立即备份”按钮。配置变更会写入 `audit_logs`。
 
+灾难恢复和恢复演练步骤见 `DISASTER_RECOVERY.md`。
+
 ## 管理 API 鉴权
 
 开发环境中 `ADMIN_API_TOKEN` 留空时，`/api/*` 管理接口默认开放，便于本地调试。

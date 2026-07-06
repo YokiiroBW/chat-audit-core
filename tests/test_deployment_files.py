@@ -141,6 +141,21 @@ def test_static_assets_include_minified_frontend_bundle():
     assert min_css.stat().st_size < source_css.stat().st_size
 
 
+def test_disaster_recovery_document_covers_restore_drill_and_targets():
+    guide = (ROOT / "DISASTER_RECOVERY.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "RTO" in guide
+    assert "RPO" in guide
+    assert "AUTO_BACKUP_CRON" in guide
+    assert "AUTO_BACKUP_KEEP_LATEST" in guide
+    assert "/api/import/validate" in guide
+    assert "/api/offline/audit" in guide
+    assert "/api/offline/repair" in guide
+    assert "演练流程" in guide
+    assert "DISASTER_RECOVERY.md" in readme
+
+
 def test_wechat_tray_packaging_scripts_are_present_and_headless():
     build_script = (ROOT / "scripts/build_wechat_tray.ps1").read_text(encoding="utf-8")
     installer_script = (ROOT / "scripts/build_wechat_tray_installer.ps1").read_text(encoding="utf-8")
