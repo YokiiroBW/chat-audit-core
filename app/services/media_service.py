@@ -367,6 +367,7 @@ class MediaService:
         *,
         ffmpeg_bin: str,
         ffmpeg_library_path: str = "",
+        timeout_seconds: int = 60,
         voice_ext: str = "mp3",
         video_ext: str = "mp4",
     ) -> TranscodedMedia | None:
@@ -396,7 +397,12 @@ class MediaService:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            stdout, _stderr = await process.communicate(content)
+            try:
+                stdout, _stderr = await asyncio.wait_for(process.communicate(content), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return None
         except (FileNotFoundError, OSError):
             return None
 
@@ -415,6 +421,7 @@ class MediaService:
         ffmpeg_library_path: str,
         voice_ext: str,
         video_ext: str,
+        transcode_timeout_seconds: int,
         max_bytes: int,
     ) -> tuple[bytes, str]:
         if not enabled:
@@ -425,6 +432,7 @@ class MediaService:
             media_type,
             ffmpeg_bin=ffmpeg_bin,
             ffmpeg_library_path=ffmpeg_library_path,
+            timeout_seconds=transcode_timeout_seconds,
             voice_ext=voice_ext,
             video_ext=video_ext,
         )
@@ -534,6 +542,7 @@ class MediaService:
                 ffmpeg_library_path=settings.ffmpeg_library_path,
                 voice_ext=settings.media_transcode_voice_ext,
                 video_ext=settings.media_transcode_video_ext,
+                transcode_timeout_seconds=settings.media_transcode_timeout_seconds,
                 max_bytes=media_max_bytes,
             )
             return await MessageService.save_media_asset(

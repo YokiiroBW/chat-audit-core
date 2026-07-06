@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import re
@@ -202,11 +203,12 @@ async def test_download_url_to_local_path_accepts_card_page_html(db_session, tmp
 async def test_download_url_to_local_path_transcodes_voice_when_enabled(db_session, tmp_path, monkeypatch):
     client = StubAsyncClient({"http://media.local/v.silk": b"silk voice"})
 
-    async def fake_transcode(content, media_type, *, ffmpeg_bin, ffmpeg_library_path="", voice_ext="mp3", video_ext="mp4"):
+    async def fake_transcode(content, media_type, *, ffmpeg_bin, ffmpeg_library_path="", timeout_seconds=60, voice_ext="mp3", video_ext="mp4"):
         assert content == b"silk voice"
         assert media_type == "voice"
         assert ffmpeg_bin == "fake-ffmpeg"
         assert ffmpeg_library_path == ""
+        assert timeout_seconds == 60
         assert voice_ext == "mp3"
         return TranscodedMedia(content=b"mp3 voice", ext="mp3")
 
@@ -236,7 +238,7 @@ async def test_download_url_to_local_path_transcodes_voice_when_enabled(db_sessi
 async def test_download_url_to_local_path_keeps_original_when_transcode_fails(db_session, tmp_path, monkeypatch):
     client = StubAsyncClient({"http://media.local/v.silk": b"silk voice"})
 
-    async def fake_transcode(content, media_type, *, ffmpeg_bin, ffmpeg_library_path="", voice_ext="mp3", video_ext="mp4"):
+    async def fake_transcode(content, media_type, *, ffmpeg_bin, ffmpeg_library_path="", timeout_seconds=60, voice_ext="mp3", video_ext="mp4"):
         return None
 
     monkeypatch.setattr(MediaService, "transcode_media_bytes", fake_transcode)
@@ -256,6 +258,45 @@ async def test_download_url_to_local_path_keeps_original_when_transcode_fails(db
     assert local_path is not None
     assert local_path.endswith(".silk")
     assert (tmp_path / local_path.rsplit("/", 1)[-1]).read_bytes() == b"silk voice"
+
+
+@pytest.mark.asyncio
+async def test_transcode_media_bytes_kills_ffmpeg_on_timeout(monkeypatch):
+    class HangingProcess:
+        returncode = None
+
+        def __init__(self):
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self, content):
+            await asyncio.sleep(10)
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            self.waited = True
+
+    process = HangingProcess()
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    transcoded = await MediaService.transcode_media_bytes(
+        b"voice",
+        "voice",
+        ffmpeg_bin="fake-ffmpeg",
+        timeout_seconds=0.01,
+    )
+
+    assert transcoded is None
+    assert process.killed is True
+    assert process.waited is True
 
 
 @pytest.mark.asyncio
