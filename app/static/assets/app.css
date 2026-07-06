@@ -1631,7 +1631,7 @@
       gap: 12px;
     }
     .image-preview-backdrop {
-      z-index: 30;
+      z-index: 40;
       background: rgba(15, 23, 42, .78);
     }
     .forward-preview-backdrop {

@@ -74,6 +74,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "forwardPreviewModal" in page_bundle
     assert "openForwardPreview" in page_bundle
     assert "forward-preview-bubble" in page_bundle
+    assert ".image-preview-backdrop{z-index:40" in page_bundle
+    assert ".forward-preview-backdrop{z-index:30" in page_bundle
     assert "renderLocalMediaParts" in page_bundle
     assert "renderLocalMediaAsset" in page_bundle
     assert "renderAvatar" in page_bundle
