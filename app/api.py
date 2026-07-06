@@ -796,7 +796,14 @@ async def get_runtime_status(settings: Settings = Depends(get_settings)) -> Runt
     return RuntimeStatusResponse(**RuntimeService.ffmpeg_status(settings))
 
 
-@router.post("/adapters", response_model=AdapterResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/adapters",
+    response_model=AdapterResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an adapter",
+    description="Register a QQ/NapCat, WeChat, or custom adapter before it starts sending messages.",
+    responses={409: {"description": "Adapter id already exists"}},
+)
 async def create_adapter(
     payload: AdapterCreateRequest,
     db: AsyncSession = Depends(get_db_session),
@@ -984,7 +991,18 @@ async def _hydrate_missing_message_sender_profiles(db: AsyncSession, messages: l
     return True
 
 
-@router.post("/messages", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/messages",
+    response_model=MessageIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a normalized message",
+    description="Receive a normalized message from an external collector. Capture policies may skip the message and return skipped=true.",
+    responses={
+        201: {"description": "Message accepted", "content": {"application/json": {"example": {"msg_hash": "sha256...", "skipped": False, "skip_reason": None}}}},
+        401: {"description": "Missing or invalid admin token"},
+        403: {"description": "Token role cannot write messages"},
+    },
+)
 async def ingest_message(
     payload: MessageIngestRequest,
     db: AsyncSession = Depends(get_db_session),
@@ -1083,7 +1101,13 @@ async def _process_wechat_event_payload(
     )
 
 
-@router.post("/wechat/events", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/wechat/events",
+    response_model=MessageIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a WeChat tray event",
+    description="Receive a raw event from the optional WeChat tray adapter and normalize it into the shared message store.",
+)
 async def ingest_wechat_event(
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db_session),
@@ -1093,7 +1117,13 @@ async def ingest_wechat_event(
     return await _process_wechat_event_payload(payload, db, settings)
 
 
-@router.post("/receive_external_msg", response_model=MessageIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/receive_external_msg",
+    response_model=MessageIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ingest a generic external message",
+    description="Compatibility endpoint for third-party collectors that send WeChat-like event payloads.",
+)
 async def receive_external_message(
     payload: dict[str, Any],
     db: AsyncSession = Depends(get_db_session),
@@ -1368,7 +1398,20 @@ def _rewrite_forward_segment_with_local_path(local_message: str, forward_id: str
     return re.sub(pattern, replace, local_message)
 
 
-@router.get("/export")
+@router.get(
+    "/export",
+    summary="Export chat backup package",
+    description="Export messages, robot views, profiles, and cached media. Set compressed=true to download a .json.gz package.",
+    responses={
+        200: {
+            "description": "Backup package as JSON or gzip",
+            "content": {
+                "application/json": {"example": {"manifest": {"schema": "chat-audit-core.backup.v1"}, "messages": []}},
+                "application/gzip": {"schema": {"type": "string", "format": "binary"}},
+            },
+        }
+    },
+)
 async def export_data(
     robot_id: str | None = Query(default=None, min_length=1),
     room_id: str | None = Query(default=None, min_length=1),
@@ -1418,7 +1461,12 @@ async def _read_import_package_request(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"invalid import package: {exc}") from exc
 
 
-@router.post("/import/validate", response_model=ImportValidationResponse)
+@router.post(
+    "/import/validate",
+    response_model=ImportValidationResponse,
+    summary="Validate an import package",
+    description="Preview checksum, signature, and database diff for a JSON or gzip backup package before importing.",
+)
 async def validate_import_data(
     request: Request,
     db: AsyncSession = Depends(get_db_session),
@@ -1435,7 +1483,13 @@ async def validate_import_data(
     return ImportValidationResponse(**report)
 
 
-@router.post("/import", response_model=ImportResultResponse)
+@router.post(
+    "/import",
+    response_model=ImportResultResponse,
+    summary="Import a backup package",
+    description="Import a JSON or gzip backup package. Requires admin role because existing records may be updated.",
+    responses={400: {"description": "Package validation failed"}, 403: {"description": "Admin role required"}},
+)
 async def import_data(
     request: Request,
     db: AsyncSession = Depends(get_db_session),

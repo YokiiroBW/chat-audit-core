@@ -20,18 +20,35 @@ class AdapterResponse(BaseModel):
 
 
 class AdapterCreateRequest(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
-    platform: str = Field(min_length=1, max_length=20)
-    config_json: str | None = None
-    status: str = Field(default="gray", min_length=1, max_length=20)
-    current_robot_id: str | None = Field(default=None, max_length=64)
+    """Adapter registration payload for a QQ/NapCat or future platform connector."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "id": "napcat-26109",
+                    "platform": "qq",
+                    "status": "gray",
+                    "config_json": "{\"reverse_ws_host\":\"0.0.0.0\",\"reverse_ws_port\":26109}",
+                }
+            ]
+        }
+    )
+
+    id: str = Field(min_length=1, max_length=64, description="Stable adapter id, usually the connector name or self_id.")
+    platform: str = Field(min_length=1, max_length=20, description="Source platform, for example qq or wechat.")
+    config_json: str | None = Field(default=None, description="Optional adapter configuration serialized as JSON.")
+    status: str = Field(default="gray", min_length=1, max_length=20, description="Display/status flag: green, red, or gray.")
+    current_robot_id: str | None = Field(default=None, max_length=64, description="Robot profile currently bound to this adapter.")
 
 
 class AdapterUpdateRequest(BaseModel):
-    platform: str | None = Field(default=None, min_length=1, max_length=20)
-    config_json: str | None = None
-    status: str | None = Field(default=None, min_length=1, max_length=20)
-    current_robot_id: str | None = Field(default=None, max_length=64)
+    """Partial adapter update payload."""
+
+    platform: str | None = Field(default=None, min_length=1, max_length=20, description="Source platform, for example qq or wechat.")
+    config_json: str | None = Field(default=None, description="Optional adapter configuration serialized as JSON.")
+    status: str | None = Field(default=None, min_length=1, max_length=20, description="Display/status flag: green, red, or gray.")
+    current_robot_id: str | None = Field(default=None, max_length=64, description="Robot profile currently bound to this adapter.")
 
 
 class BotProfileResponse(BaseModel):
@@ -47,12 +64,29 @@ class BotProfileResponse(BaseModel):
 
 
 class CaptureTargetPolicyUpdateRequest(BaseModel):
-    list_mode: str = Field(default="none", min_length=1, max_length=20)
-    capture_text: bool = True
-    capture_image: bool = True
-    capture_voice: bool = True
-    capture_video: bool = True
-    capture_file: bool = False
+    """Per-room or per-private-chat capture policy."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "list_mode": "whitelist",
+                    "capture_text": True,
+                    "capture_image": True,
+                    "capture_voice": True,
+                    "capture_video": True,
+                    "capture_file": False,
+                }
+            ]
+        }
+    )
+
+    list_mode: str = Field(default="none", min_length=1, max_length=20, description="none captures by default, blacklist skips target, whitelist captures only listed targets.")
+    capture_text: bool = Field(default=True, description="Capture text, links, cards, and merged forwards.")
+    capture_image: bool = Field(default=True, description="Capture image and animated image messages.")
+    capture_voice: bool = Field(default=True, description="Capture voice messages.")
+    capture_video: bool = Field(default=True, description="Capture video messages.")
+    capture_file: bool = Field(default=False, description="Capture generic files such as zip/apk/installers. Disabled by default.")
 
 
 class CaptureTargetPolicyResponse(BaseModel):
@@ -106,9 +140,13 @@ class BackupStatusResponse(BaseModel):
 
 
 class BackupSettingsUpdateRequest(BaseModel):
-    cron: str | None = Field(default=None, max_length=64)
-    keep_latest: int | None = Field(default=None, ge=0, le=365)
-    reset_to_env: bool = False
+    """Runtime auto-backup settings update."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"cron": "0 3 * * *", "keep_latest": 7}]})
+
+    cron: str | None = Field(default=None, max_length=64, description="Five-field cron expression, or off/disabled/none/false/0 to disable.")
+    keep_latest: int | None = Field(default=None, ge=0, le=365, description="Number of auto-backup files to retain.")
+    reset_to_env: bool = Field(default=False, description="Reset database-stored backup settings and use environment values.")
 
 
 class BackupRunResponse(BaseModel):
@@ -130,8 +168,12 @@ class AuditLogResponse(BaseModel):
 
 
 class AdminTokenCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-    role: str = Field(default="viewer", min_length=1, max_length=20)
+    """Create an operator/admin API token."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"name": "nas-ops", "role": "operator"}]})
+
+    name: str = Field(min_length=1, max_length=128, description="Human-readable token name.")
+    role: str = Field(default="viewer", min_length=1, max_length=20, description="viewer, operator, or admin.")
 
 
 class AdminTokenResponse(BaseModel):
@@ -153,10 +195,20 @@ class AdminTokenRotateResponse(AdminTokenResponse):
 
 
 class AdminUserCreateRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
-    role: str = Field(default="viewer", min_length=1, max_length=20)
-    display_name: str | None = Field(default=None, max_length=128)
+    """Create a database-managed admin console user."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"username": "ops", "password": "change-me-strong-password", "role": "operator", "display_name": "Ops"}
+            ]
+        }
+    )
+
+    username: str = Field(min_length=1, max_length=64, description="Login username.")
+    password: str = Field(min_length=8, max_length=256, description="Initial password. Stored with bcrypt.")
+    role: str = Field(default="viewer", min_length=1, max_length=20, description="viewer, operator, or admin.")
+    display_name: str | None = Field(default=None, max_length=128, description="Optional display name.")
 
 
 class AdminUserPasswordResetRequest(BaseModel):
@@ -189,8 +241,12 @@ class AdminSessionResponse(BaseModel):
 
 
 class AuthLoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=256)
+    """Password login request for database-managed admin users."""
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"username": "ops", "password": "change-me-strong-password"}]})
+
+    username: str = Field(min_length=1, max_length=64, description="Admin username.")
+    password: str = Field(min_length=1, max_length=256, description="Admin password.")
 
 
 class AuthLoginResponse(BaseModel):
@@ -254,16 +310,36 @@ class MessageResponse(BaseModel):
 
 
 class MessageIngestRequest(BaseModel):
-    robot_id: str = Field(min_length=1, max_length=64)
-    platform: str = Field(min_length=1, max_length=20)
-    room_id: str = Field(min_length=1, max_length=64)
-    message_type: str = Field(min_length=1, max_length=20)
-    sender_id: str = Field(min_length=1, max_length=64)
-    nickname: str | None = Field(default=None, max_length=128)
-    raw_message: str = Field(min_length=1)
-    local_message: str | None = None
-    timestamp: int
-    message_id: str | None = Field(default=None, max_length=64)
+    """External normalized message ingestion payload."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "robot_id": "1449801200",
+                    "platform": "qq",
+                    "room_id": "955973452",
+                    "message_type": "group",
+                    "sender_id": "389772436",
+                    "nickname": "Alice",
+                    "raw_message": "hello [CQ:image,file=a.jpg,url=https://example.test/a.jpg]",
+                    "timestamp": 1783317330,
+                    "message_id": "762197037",
+                }
+            ]
+        }
+    )
+
+    robot_id: str = Field(min_length=1, max_length=64, description="Robot account id from whose perspective this message is captured.")
+    platform: str = Field(min_length=1, max_length=20, description="Source platform, for example qq or wechat.")
+    room_id: str = Field(min_length=1, max_length=64, description="Group id or private peer id.")
+    message_type: str = Field(min_length=1, max_length=20, description="group or private.")
+    sender_id: str = Field(min_length=1, max_length=64, description="Original sender id.")
+    nickname: str | None = Field(default=None, max_length=128, description="Sender display name when available.")
+    raw_message: str = Field(min_length=1, description="Raw message content, including CQ segments if present.")
+    local_message: str | None = Field(default=None, description="Optional already-localized message content.")
+    timestamp: int = Field(description="Message timestamp in Unix seconds.")
+    message_id: str | None = Field(default=None, max_length=64, description="Source-platform message id used for reply jumps and deduplication.")
 
 
 class MessageIngestResponse(BaseModel):
