@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class HealthResponse(BaseModel):
     status: str = Field(default="ok")
     app: str
+    checks: dict[str, str] = Field(default_factory=dict)
 
 
 class AdapterResponse(BaseModel):

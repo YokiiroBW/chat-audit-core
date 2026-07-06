@@ -12,6 +12,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.api import public_router as public_api_router, router as api_router
@@ -20,6 +21,7 @@ from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_ta
 from app.logging_config import setup_logging
 from app.schemas import HealthResponse
 from app.services.backup_service import start_auto_backup_scheduler
+from app.services.runtime_service import RuntimeService
 from app.ws import router as ws_router
 
 CSRF_COOKIE_NAME = "chat_audit_csrf"
@@ -59,6 +61,18 @@ def _csrf_response(settings: Settings) -> JSONResponse:
     response = JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
     _set_csrf_cookie(response, settings, _new_csrf_token())
     return response
+
+
+def _check_writable_directory(path: Path) -> str:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".health_check_{secrets.token_hex(8)}"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return "ok"
+    except Exception as exc:
+        logger.warning("Health check directory probe failed", extra={"path": str(path), "error": str(exc)})
+        return "error"
 
 
 def _has_configured_admin_tokens(settings: Settings) -> bool:
@@ -216,8 +230,33 @@ def create_app(
         return FileResponse(index_file, media_type="text/html")
 
     @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
-        return HealthResponse(status="ok", app=active_settings.app_name)
+    async def health() -> JSONResponse | HealthResponse:
+        checks: dict[str, str] = {
+            "app": "ok",
+            "database": "unknown",
+            "storage": "unknown",
+            "backup": "unknown",
+        }
+        try:
+            async with active_sessionmaker() as session:
+                await session.execute(sql_text("SELECT 1"))
+            checks["database"] = "ok"
+        except Exception as exc:
+            logger.warning("Health check database probe failed", extra={"error": str(exc)})
+            checks["database"] = "error"
+
+        checks["storage"] = _check_writable_directory(active_settings.storage_root)
+        checks["backup"] = _check_writable_directory(active_settings.backup_root)
+
+        if active_settings.media_transcode_enabled:
+            ffmpeg = RuntimeService.ffmpeg_status(active_settings)
+            checks["ffmpeg"] = "ok" if ffmpeg["ffmpeg_available"] else "error"
+
+        status_value = "ok" if all(value == "ok" for value in checks.values()) else "degraded"
+        payload = HealthResponse(status=status_value, app=active_settings.app_name, checks=checks).model_dump()
+        if status_value != "ok":
+            return JSONResponse(payload, status_code=503)
+        return HealthResponse(**payload)
 
     return app
 

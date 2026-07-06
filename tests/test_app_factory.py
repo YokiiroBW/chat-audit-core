@@ -104,7 +104,11 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
         migrations_response = client.get("/api/system/migrations")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "app": "chat-audit-core"}
+    assert response.json() == {
+        "status": "ok",
+        "app": "chat-audit-core",
+        "checks": {"app": "ok", "database": "ok", "storage": "ok", "backup": "ok"},
+    }
     assert migrations_response.status_code == 200
     assert migrations_response.json() == [
         {
