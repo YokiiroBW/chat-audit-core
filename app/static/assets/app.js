@@ -137,7 +137,7 @@
     const renderAvatar = (container, id, type = 'user', src = '') => {
       clearNode(container);
       container.textContent = avatarText(id);
-      const url = src || '';
+      const url = normalizeSafeMediaSrc(src);
       if (!url) return;
       const img = document.createElement('img');
       img.alt = '';
@@ -154,6 +154,30 @@
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
     const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
     const isRemoteUrl = (value) => /^https?:\/\//i.test(String(value || ''));
+    const isSafeProtocol = (url) => ['http:', 'https:'].includes(url.protocol);
+    const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.:@-]+$/;
+    const SAFE_USERNAME_PATTERN = /^[A-Za-z0-9_.@-]+$/;
+    const SAFE_ROLES = new Set(['viewer', 'operator', 'admin']);
+    const SAFE_ADAPTER_STATUSES = new Set(['green', 'red', 'gray']);
+    const SAFE_CAPTURE_LIST_MODES = new Set(['none', 'blacklist', 'whitelist']);
+    const MAX_ADAPTER_CONFIG_BYTES = 64 * 1024;
+    const MAX_IMPORT_PACKAGE_BYTES = 5 * 1024 * 1024;
+    const normalizeSafeUrl = (value, { allowLocal = false } = {}) => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      if (allowLocal && isLocalPath(raw)) return raw;
+      if (raw.startsWith('/')) return '';
+      const normalized = raw.startsWith('//')
+        ? `https:${raw}`
+        : (/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`);
+      try {
+        const parsed = new URL(normalized, window.location.origin);
+        return isSafeProtocol(parsed) ? parsed.href : '';
+      } catch {
+        return '';
+      }
+    };
+    const normalizeSafeMediaSrc = (value) => normalizeSafeUrl(value, { allowLocal: true });
     const fileName = (value) => text(value).split('/').pop() || 'media';
     const URL_TEXT_PATTERN = /((?:https?:\/\/|www\.)[^\s<>"']+)/ig;
     const TRAILING_URL_PUNCTUATION = /[),.;:!?，。；：！？、）】》]+$/;
@@ -164,10 +188,68 @@
     };
 
     const normalizeTextUrl = (url) => {
-      const value = String(url || '').trim();
-      if (!value) return '';
-      if (/^https?:\/\//i.test(value)) return value;
-      return `https://${value}`;
+      return normalizeSafeUrl(url);
+    };
+
+    const utf8ByteLength = (value) => new Blob([String(value || '')]).size;
+
+    const validationError = (message) => {
+      pushUiLog(message, 'warning');
+      return null;
+    };
+
+    const normalizedIdentifier = (value, label, { required = true, max = 64, pattern = SAFE_IDENTIFIER_PATTERN } = {}) => {
+      const normalized = text(value).trim();
+      if (!normalized) return required ? validationError(`${label} is required`) : '';
+      if (normalized.length > max) return validationError(`${label} is too long`);
+      if (!pattern.test(normalized)) return validationError(`${label} contains unsupported characters`);
+      return normalized;
+    };
+
+    const normalizedChoice = (value, allowed, label) => {
+      const normalized = text(value).trim();
+      if (!allowed.has(normalized)) return validationError(`${label} is invalid`);
+      return normalized;
+    };
+
+    const normalizedInteger = (value, label, { min = 0, max = Number.MAX_SAFE_INTEGER, required = true } = {}) => {
+      const normalized = text(value).trim();
+      if (!normalized) return required ? validationError(`${label} is required`) : null;
+      if (!/^\d+$/.test(normalized)) return validationError(`${label} must be a non-negative integer`);
+      const parsed = Number(normalized);
+      if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return validationError(`${label} is out of range`);
+      return parsed;
+    };
+
+    const normalizedTimestamp = (value, label) => {
+      const normalized = text(value).trim();
+      if (!normalized) return '';
+      const parsed = normalizedInteger(normalized, label, { min: 0, max: 9999999999 });
+      return parsed === null ? null : String(parsed);
+    };
+
+    const normalizeCronValue = (value) => {
+      const normalized = text(value).trim();
+      if (!normalized || ['off', 'disabled', 'none', 'false', '0'].includes(normalized.toLowerCase())) return normalized || 'off';
+      const parts = normalized.split(/\s+/);
+      if (parts.length !== 5) return validationError('backup cron must be off or a 5-field cron');
+      if (!parts.every((part) => /^[0-9*/,\-]+$/.test(part) && part.length <= 20)) {
+        return validationError('backup cron contains unsupported characters');
+      }
+      return parts.join(' ');
+    };
+
+    const parseJsonObjectInput = (value, label, { maxBytes = MAX_ADAPTER_CONFIG_BYTES, required = false } = {}) => {
+      const raw = text(value).trim();
+      if (!raw) return required ? validationError(`${label} is required`) : {};
+      if (utf8ByteLength(raw) > maxBytes) return validationError(`${label} is too large`);
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return validationError(`${label} must be a JSON object`);
+        return parsed;
+      } catch {
+        return validationError(`${label} is not valid JSON`);
+      }
     };
 
     const appendLinkedText = (container, value, className = 'cq-text') => {
@@ -186,9 +268,16 @@
         const clean = trailing ? rawMatch.slice(0, -trailing.length) : rawMatch;
         wrapper.appendChild(document.createTextNode(source.slice(cursor, match.index)));
         if (clean) {
+          const href = normalizeTextUrl(clean);
+          if (!href) {
+            wrapper.appendChild(document.createTextNode(clean));
+            if (trailing) wrapper.appendChild(document.createTextNode(trailing));
+            cursor = match.index + rawMatch.length;
+            continue;
+          }
           const link = document.createElement('a');
           link.className = 'message-link';
-          link.href = normalizeTextUrl(clean);
+          link.href = href;
           link.target = '_blank';
           link.rel = 'noreferrer';
           link.textContent = clean;
@@ -1212,22 +1301,32 @@
         return;
         const img = document.createElement('img');
         img.className = 'media-img';
-        img.src = value;
+        img.src = normalizeSafeMediaSrc(value);
         img.alt = '媒体图片';
         container.appendChild(img);
         return;
       }
       if (isVideo(value)) {
+        const src = normalizeSafeMediaSrc(value);
+        if (!src) {
+          renderMissingMediaChip(container, value);
+          return;
+        }
         const video = document.createElement('video');
         video.className = 'media-video';
-        video.src = value;
+        video.src = src;
         video.controls = true;
         container.appendChild(video);
         return;
       }
       if (isVoice(value)) {
+        const src = normalizeSafeMediaSrc(value);
+        if (!src) {
+          renderMissingMediaChip(container, value);
+          return;
+        }
         const audio = document.createElement('audio');
-        audio.src = value;
+        audio.src = src;
         audio.controls = true;
         container.appendChild(audio);
         return;
@@ -1285,14 +1384,24 @@
       if (isImg(path)) {
         renderImageLink(container, path, '媒体图片');
       } else if (isVideo(path)) {
+        const src = normalizeSafeMediaSrc(path);
+        if (!src) {
+          renderMissingMediaChip(container, path);
+          return;
+        }
         const video = document.createElement('video');
         video.className = 'media-video';
-        video.src = path;
+        video.src = src;
         video.controls = true;
         container.appendChild(video);
       } else if (isVoice(path)) {
+        const src = normalizeSafeMediaSrc(path);
+        if (!src) {
+          renderMissingMediaChip(container, path);
+          return;
+        }
         const audio = document.createElement('audio');
-        audio.src = path;
+        audio.src = src;
         audio.controls = true;
         container.appendChild(audio);
       } else {
@@ -1355,9 +1464,9 @@
     };
 
     const renderImageLink = (container, src, alt) => {
-      const cleanSrc = decodeHtmlEntities(String(src || ''));
-      if (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc)) {
-        renderMissingMediaChip(container, cleanSrc);
+      const cleanSrc = normalizeSafeMediaSrc(decodeHtmlEntities(String(src || '')));
+      if (!cleanSrc || (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc))) {
+        renderMissingMediaChip(container, src);
         return;
       }
       const preview = document.createElement('button');
@@ -1375,9 +1484,9 @@
     };
 
     const renderFileLink = (container, src, label) => {
-      const cleanSrc = decodeHtmlEntities(String(src || ''));
-      if (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc)) {
-        renderMissingMediaChip(container, cleanSrc);
+      const cleanSrc = normalizeSafeMediaSrc(decodeHtmlEntities(String(src || '')));
+      if (!cleanSrc || (!isLocalPath(cleanSrc) && isRemoteUrl(cleanSrc))) {
+        renderMissingMediaChip(container, src);
         return;
       }
       const link = document.createElement('a');
@@ -1676,11 +1785,7 @@
     };
 
     const normalizeCardUrl = (url) => {
-      if (!url) return '';
-      if (url.startsWith('/')) return url;
-      if (url.startsWith('http')) return url;
-      if (url.startsWith('//')) return `https:${url}`;
-      return `https://${url}`;
+      return normalizeSafeUrl(url, { allowLocal: true });
     };
 
     const cardPageUrlPriority = {
@@ -1786,7 +1891,7 @@
       }
       if (preview) {
         const previewSrc = normalizeCardUrl(preview);
-        if (isLocalPath(previewSrc) || !isRemoteUrl(previewSrc)) {
+        if (previewSrc && (isLocalPath(previewSrc) || !isRemoteUrl(previewSrc))) {
           const img = document.createElement('img');
           img.className = 'json-card-img';
           img.src = previewSrc;
@@ -1891,18 +1996,29 @@
       el('adapterWsToken').value = firstConfigValue(config, ['reverse_ws_token', 'token', 'access_token']);
     };
 
-    const syncAdapterConfigFromQuickFields = () => {
-      const config = parseAdapterConfig(el('adapterConfig').value);
+    const syncAdapterConfigFromQuickFields = (config = parseAdapterConfig(el('adapterConfig').value)) => {
       const host = el('adapterWsHost').value.trim();
       const port = el('adapterWsPort').value.trim();
       const token = el('adapterWsToken').value.trim();
+      if (host && (host.length > 255 || !/^[A-Za-z0-9_.:-]+$/.test(host))) {
+        return validationError('adapter host is invalid');
+      }
+      if (port) {
+        const parsedPort = normalizedInteger(port, 'adapter port', { min: 1, max: 65535 });
+        if (parsedPort === null) return null;
+        config.reverse_ws_port = parsedPort;
+      } else {
+        delete config.reverse_ws_port;
+      }
+      if (token && (token.length > 1024 || /[\r\n]/.test(token))) {
+        return validationError('adapter token is invalid');
+      }
       if (host) config.reverse_ws_host = host;
       else delete config.reverse_ws_host;
-      if (port) config.reverse_ws_port = /^\d+$/.test(port) ? Number(port) : port;
-      else delete config.reverse_ws_port;
       if (token) config.token = token;
       else delete config.token;
       el('adapterConfig').value = Object.keys(config).length ? JSON.stringify(config, null, 2) : '';
+      return config;
     };
 
     const setAdapterStatusFromEnabled = () => {
@@ -1947,17 +2063,25 @@
 
     const saveAdapter = async () => {
       setAdapterStatusFromEnabled();
-      syncAdapterConfigFromQuickFields();
+      const adapterId = normalizedIdentifier(el('adapterId').value, 'adapter id');
+      if (adapterId === null) return;
+      const platform = normalizedIdentifier(el('adapterPlatform').value, 'adapter platform', { max: 20 });
+      if (platform === null) return;
+      const status = normalizedChoice(el('adapterStatus').value, SAFE_ADAPTER_STATUSES, 'adapter status');
+      if (status === null) return;
+      const config = parseJsonObjectInput(el('adapterConfig').value, 'adapter config');
+      if (config === null) return;
+      const mergedConfig = syncAdapterConfigFromQuickFields(config);
+      if (mergedConfig === null) return;
       const payload = {
-        platform: el('adapterPlatform').value,
-        status: el('adapterStatus').value,
-        config_json: el('adapterConfig').value ? el('adapterConfig').value : null,
+        platform,
+        status,
+        config_json: Object.keys(mergedConfig).length ? JSON.stringify(mergedConfig, null, 2) : null,
       };
-      if (!el('adapterId').value || !payload.platform) return;
       if (state.editingAdapterId) {
         await apiSend(`/api/adapters/${encodeURIComponent(state.editingAdapterId)}`, 'PATCH', payload);
       } else {
-        await apiSend('/api/adapters', 'POST', { id: el('adapterId').value, ...payload });
+        await apiSend('/api/adapters', 'POST', { id: adapterId, ...payload });
       }
       resetAdapterForm();
       await loadAdapters();
@@ -1988,9 +2112,13 @@
 
     async function saveBackupSettings() {
       syncBackupCronFromControls();
+      const cron = normalizeCronValue(el('backupCronInput').value);
+      if (cron === null) return;
+      const keepLatest = normalizedInteger(el('backupKeepLatestInput').value, 'backup keep_latest', { min: 0, max: 365 });
+      if (keepLatest === null) return;
       const payload = {
-        cron: el('backupCronInput').value.trim(),
-        keep_latest: Number(el('backupKeepLatestInput').value),
+        cron,
+        keep_latest: keepLatest,
       };
       state.backupSettingsSaving = true;
       renderSettings();
@@ -2079,8 +2207,10 @@
     }
 
     async function saveCapturePolicy(target, row) {
+      const listMode = normalizedChoice(row.querySelector('[data-field="list_mode"]').value, SAFE_CAPTURE_LIST_MODES, 'capture list mode');
+      if (listMode === null) return;
       const payload = {
-        list_mode: row.querySelector('[data-field="list_mode"]').value,
+        list_mode: listMode,
         capture_text: row.querySelector('[data-field="capture_text"]').checked,
         capture_image: row.querySelector('[data-field="capture_image"]').checked,
         capture_voice: row.querySelector('[data-field="capture_voice"]').checked,
@@ -2142,9 +2272,11 @@
     }
 
     async function createAdminToken() {
-      const name = el('adminTokenName').value.trim();
-      const role = el('adminTokenRole').value;
-      if (!name) return;
+      const name = text(el('adminTokenName').value).trim();
+      if (!name) return validationError('token name is required');
+      if (name.length > 128 || /[\r\n]/.test(name)) return validationError('token name is invalid');
+      const role = normalizedChoice(el('adminTokenRole').value, SAFE_ROLES, 'token role');
+      if (role === null) return;
       state.adminTokenCreateResult = await apiSend('/api/admin/tokens', 'POST', { name, role });
       el('adminTokenName').value = '';
       await refreshAdminTokens();
@@ -2152,13 +2284,20 @@
     }
 
     async function createAdminUser() {
+      const username = normalizedIdentifier(el('adminUsername').value, 'username', { max: 64, pattern: SAFE_USERNAME_PATTERN });
+      if (username === null) return;
+      const password = text(el('adminPassword').value);
+      if (password.length < 8 || password.length > 256) return validationError('password must be 8-256 characters');
+      const displayName = text(el('adminDisplayName').value).trim();
+      if (displayName.length > 128 || /[\r\n]/.test(displayName)) return validationError('display name is invalid');
+      const role = normalizedChoice(el('adminUserRole').value, SAFE_ROLES, 'user role');
+      if (role === null) return;
       const payload = {
-        username: el('adminUsername').value.trim(),
-        password: el('adminPassword').value,
-        display_name: el('adminDisplayName').value.trim() || null,
-        role: el('adminUserRole').value,
+        username,
+        password,
+        display_name: displayName || null,
+        role,
       };
-      if (!payload.username || !payload.password) return;
       try {
         state.adminUserCreateResult = await apiSend('/api/admin/users', 'POST', payload);
         state.adminUserError = '';
@@ -2184,6 +2323,10 @@
     async function resetAdminUserPassword(userId) {
       const password = window.prompt('请输入新密码（至少 8 位）');
       if (!password) return;
+      if (password.length < 8 || password.length > 256) {
+        validationError('password must be 8-256 characters');
+        return;
+      }
       await apiSend(`/api/admin/users/${encodeURIComponent(userId)}/password`, 'POST', { password });
       state.adminUserCreateResult = null;
       await refreshAdminUsers();
@@ -2343,13 +2486,20 @@
     };
 
     async function downloadExportPackage() {
-      if (!el('exportRobotId').value.trim()) return;
+      const robotId = normalizedIdentifier(el('exportRobotId').value, 'export robot_id');
+      if (robotId === null) return;
+      const roomId = normalizedIdentifier(el('exportRoomId').value, 'export room_id', { required: false });
+      if (roomId === null) return;
+      const startTimestamp = normalizedTimestamp(el('exportStartTimestamp').value, 'start timestamp');
+      if (startTimestamp === null) return;
+      const endTimestamp = normalizedTimestamp(el('exportEndTimestamp').value, 'end timestamp');
+      if (endTimestamp === null) return;
       const params = new URLSearchParams();
       [
-        ['robot_id', el('exportRobotId').value],
-        ['room_id', el('exportRoomId').value],
-        ['start_timestamp', el('exportStartTimestamp').value],
-        ['end_timestamp', el('exportEndTimestamp').value],
+        ['robot_id', robotId],
+        ['room_id', roomId],
+        ['start_timestamp', startTimestamp],
+        ['end_timestamp', endTimestamp],
       ].forEach(([key, value]) => {
         if (text(value).trim()) params.append(key, text(value).trim());
       });
@@ -2374,17 +2524,32 @@
       openModal('importModal');
     };
 
-    const parseImportPackage = () => JSON.parse(el('importPackageText').value);
+    const parseImportPackage = () => {
+      const raw = text(el('importPackageText').value).trim();
+      if (!raw) return validationError('import package is required');
+      if (utf8ByteLength(raw) > MAX_IMPORT_PACKAGE_BYTES) return validationError('import package is too large');
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return validationError('import package must be a JSON object');
+        return parsed;
+      } catch {
+        return validationError('import package is not valid JSON');
+      }
+    };
 
     async function validateImportPackage() {
       if (!el('importPackageText').value.trim()) return;
-      state.importValidationReport = await apiSend('/api/import/validate', 'POST', parseImportPackage());
+      const packageJson = parseImportPackage();
+      if (packageJson === null) return;
+      state.importValidationReport = await apiSend('/api/import/validate', 'POST', packageJson);
       renderImportReport();
     }
 
     async function submitImportPackage() {
       if (!state.importValidationReport || !state.importValidationReport.valid) return;
-      await apiSend('/api/import', 'POST', parseImportPackage());
+      const packageJson = parseImportPackage();
+      if (packageJson === null) return;
+      await apiSend('/api/import', 'POST', packageJson);
       closeModal('importModal');
       if (state.currentRobot) await switchAccount(state.currentRobot);
     }
@@ -2561,7 +2726,9 @@
     };
 
     const openImagePreview = (src, alt) => {
-      el('imagePreviewImg').src = src;
+      const cleanSrc = normalizeSafeMediaSrc(src);
+      if (!cleanSrc) return;
+      el('imagePreviewImg').src = cleanSrc;
       el('imagePreviewImg').alt = alt || '';
       el('imagePreviewCaption').textContent = alt || src;
       openModal('imagePreviewModal');

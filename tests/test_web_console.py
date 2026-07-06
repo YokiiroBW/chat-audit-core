@@ -72,6 +72,14 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "finalizeMessageBubbleLayout" in page_bundle
     assert "message-link" in page_bundle
     assert "appendLinkedText" in page_bundle
+    assert "normalizeSafeUrl" in page_bundle
+    assert "normalizeSafeMediaSrc" in page_bundle
+    assert "validationError" in page_bundle
+    assert "SAFE_ADAPTER_STATUSES" in page_bundle
+    assert "SAFE_CAPTURE_LIST_MODES" in page_bundle
+    assert "MAX_IMPORT_PACKAGE_BYTES" in page_bundle
+    assert "parseJsonObjectInput" in page_bundle
+    assert "normalizedTimestamp" in page_bundle
     assert "media-missing" in page_bundle
     assert "renderMissingMediaChip" in page_bundle
     assert "plainMessagePreview" in page_bundle
