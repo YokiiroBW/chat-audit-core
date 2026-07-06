@@ -42,6 +42,7 @@
       theme: localStorage.getItem('chatAuditTheme') || 'light',
       themeTransitionTimer: 0,
       themeTransitionFrame: 0,
+      restoringRoute: false,
       palette: JSON.parse(localStorage.getItem('chatAuditPalette') || 'null') || {
         primary: '#1d4ed8',
         secondary: '#dbeafe',
@@ -268,6 +269,50 @@
         return parsed;
       } catch {
         return validationError(`${label} is not valid JSON`);
+      }
+    };
+
+    const routeParams = () => new URLSearchParams(window.location.hash.replace(/^#/, ''));
+
+    const routeValue = (key) => {
+      const value = routeParams().get(key);
+      return value && SAFE_IDENTIFIER_PATTERN.test(value) ? value : '';
+    };
+
+    const writeRouteState = ({ replace = false } = {}) => {
+      if (state.restoringRoute) return;
+      const params = new URLSearchParams();
+      if (state.currentRobot) params.set('robot', state.currentRobot.id);
+      if (state.currentRoom) params.set('room', state.currentRoom.room_id);
+      const nextHash = params.toString() ? `#${params.toString()}` : '';
+      const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+      const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (nextUrl === currentUrl) return;
+      if (replace) window.history.replaceState(null, '', nextUrl);
+      else window.history.pushState(null, '', nextUrl);
+    };
+
+    const restoreRouteState = async () => {
+      const robotId = routeValue('robot');
+      if (!robotId || !state.accountList.length) return false;
+      const account = state.accountList.find((item) => item.id === robotId);
+      if (!account) return false;
+      const roomId = routeValue('room');
+      state.restoringRoute = true;
+      try {
+        if (!state.currentRobot || state.currentRobot.id !== account.id) {
+          await switchAccount(account, { updateRoute: false });
+        }
+        if (roomId) {
+          const room = state.roomList.find((item) => item.room_id === roomId);
+          if (room && (!state.currentRoom || state.currentRoom.room_id !== room.room_id)) {
+            await selectRoom(room, { updateRoute: false });
+          }
+        }
+        return true;
+      } finally {
+        state.restoringRoute = false;
+        writeRouteState({ replace: true });
       }
     };
 
@@ -1956,6 +2001,8 @@
       await refreshAdminTokens();
       await refreshAdminUsers();
       await refreshAdminSessions();
+      const restored = await restoreRouteState();
+      if (restored) return;
       if (state.accountList.length > 0 && !state.currentRobot) {
         await switchAccount(state.accountList[0]);
       } else {
@@ -1963,12 +2010,13 @@
       }
     };
 
-    async function switchAccount(acc) {
+    async function switchAccount(acc, { updateRoute = true } = {}) {
       state.selectionMode = false;
       state.selectedMessageHashes.clear();
       state.currentRobot = acc;
       state.currentRoom = null;
       state.messageList = [];
+      if (updateRoute) writeRouteState();
       pushUiLog(`切换账号：${acc.display_name || acc.id}`);
       clearSearch();
       state.loadingRooms = true;
@@ -2368,11 +2416,12 @@
       renderSettings();
     }
 
-    async function selectRoom(room) {
+    async function selectRoom(room, { updateRoute = true } = {}) {
       state.selectionMode = false;
       state.selectedMessageHashes.clear();
       state.currentRoom = room;
       state.messageList = [];
+      if (updateRoute) writeRouteState();
       pushUiLog(`打开会话：${roomDisplayName(room)}`);
       renderAll();
       await reloadCurrentRoom();
@@ -2388,6 +2437,7 @@
       state.selectedMessageHashes.clear();
       state.currentRoom = room;
       state.messageList = [result];
+      writeRouteState();
       renderAll();
       scrollChatToBottom();
     }
@@ -2838,6 +2888,12 @@
             closeSettingsPage();
           }
         }
+      });
+      window.addEventListener('hashchange', () => {
+        restoreRouteState().catch((error) => pushUiLog(`route restore failed: ${error.message}`, 'error'));
+      });
+      window.addEventListener('popstate', () => {
+        restoreRouteState().catch((error) => pushUiLog(`route restore failed: ${error.message}`, 'error'));
       });
     };
 

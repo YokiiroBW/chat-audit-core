@@ -43,6 +43,11 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "performSearch" in page_bundle
     assert "searchResults" in page_bundle
     assert "selectSearchResult" in page_bundle
+    assert "writeRouteState" in page_bundle
+    assert "restoreRouteState" in page_bundle
+    assert "URLSearchParams(window.location.hash" in page_bundle
+    assert "hashchange" in page_bundle
+    assert "popstate" in page_bundle
     assert "搜索结果" in page_bundle
     assert "before_timestamp" in page_bundle
     assert "static/storage" in page_bundle
