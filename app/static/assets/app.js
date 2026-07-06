@@ -43,6 +43,17 @@
       themeTransitionTimer: 0,
       themeTransitionFrame: 0,
       restoringRoute: false,
+      imagePreview: {
+        scale: 1,
+        x: 0,
+        y: 0,
+        dragging: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        originX: 0,
+        originY: 0,
+      },
       palette: JSON.parse(localStorage.getItem('chatAuditPalette') || 'null') || {
         primary: '#1d4ed8',
         secondary: '#dbeafe',
@@ -2834,6 +2845,7 @@
       if (id === 'imagePreviewModal') {
         el('imagePreviewImg').removeAttribute('src');
         el('imagePreviewCaption').textContent = '';
+        resetImagePreviewTransform();
       }
       if (id === 'forwardPreviewModal') {
         el('forwardPreviewCaption').textContent = '';
@@ -2881,12 +2893,99 @@
       el('topLogCard').classList.remove('open');
     };
 
+    const clampImagePreview = () => {
+      const stage = el('imagePreviewStage');
+      const img = el('imagePreviewImg');
+      const preview = state.imagePreview;
+      const stageWidth = stage.clientWidth || 1;
+      const stageHeight = stage.clientHeight || 1;
+      const scaledWidth = (img.offsetWidth || stageWidth) * preview.scale;
+      const scaledHeight = (img.offsetHeight || stageHeight) * preview.scale;
+      const maxX = Math.max(80, (scaledWidth - stageWidth) / 2 + 80);
+      const maxY = Math.max(80, (scaledHeight - stageHeight) / 2 + 80);
+      preview.x = Math.max(-maxX, Math.min(maxX, preview.x));
+      preview.y = Math.max(-maxY, Math.min(maxY, preview.y));
+    };
+
+    const applyImagePreviewTransform = () => {
+      clampImagePreview();
+      const img = el('imagePreviewImg');
+      img.style.setProperty('--preview-scale', state.imagePreview.scale.toFixed(3));
+      img.style.setProperty('--preview-x', `${Math.round(state.imagePreview.x)}px`);
+      img.style.setProperty('--preview-y', `${Math.round(state.imagePreview.y)}px`);
+    };
+
+    const resetImagePreviewTransform = () => {
+      Object.assign(state.imagePreview, {
+        scale: 1,
+        x: 0,
+        y: 0,
+        dragging: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        originX: 0,
+        originY: 0,
+      });
+      el('imagePreviewStage').classList.remove('dragging');
+      applyImagePreviewTransform();
+    };
+
+    const handleImagePreviewWheel = (event) => {
+      if (!el('imagePreviewModal').classList.contains('open')) return;
+      event.preventDefault();
+      const preview = state.imagePreview;
+      const stageRect = el('imagePreviewStage').getBoundingClientRect();
+      const pointX = event.clientX - stageRect.left - stageRect.width / 2;
+      const pointY = event.clientY - stageRect.top - stageRect.height / 2;
+      const nextScale = Math.max(1, Math.min(8, preview.scale * (event.deltaY < 0 ? 1.16 : 0.86)));
+      if (nextScale === preview.scale) return;
+      preview.x = pointX - (pointX - preview.x) * (nextScale / preview.scale);
+      preview.y = pointY - (pointY - preview.y) * (nextScale / preview.scale);
+      preview.scale = nextScale;
+      applyImagePreviewTransform();
+    };
+
+    const startImagePreviewDrag = (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      event.preventDefault();
+      const preview = state.imagePreview;
+      preview.dragging = true;
+      preview.pointerId = event.pointerId;
+      preview.startX = event.clientX;
+      preview.startY = event.clientY;
+      preview.originX = preview.x;
+      preview.originY = preview.y;
+      const stage = el('imagePreviewStage');
+      stage.classList.add('dragging');
+      stage.setPointerCapture(event.pointerId);
+    };
+
+    const moveImagePreviewDrag = (event) => {
+      const preview = state.imagePreview;
+      if (!preview.dragging || preview.pointerId !== event.pointerId) return;
+      preview.x = preview.originX + event.clientX - preview.startX;
+      preview.y = preview.originY + event.clientY - preview.startY;
+      applyImagePreviewTransform();
+    };
+
+    const stopImagePreviewDrag = (event) => {
+      const preview = state.imagePreview;
+      if (!preview.dragging || preview.pointerId !== event.pointerId) return;
+      preview.dragging = false;
+      preview.pointerId = null;
+      const stage = el('imagePreviewStage');
+      stage.classList.remove('dragging');
+      if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+    };
+
     const openImagePreview = (src, alt) => {
       const cleanSrc = normalizeSafeMediaSrc(src);
       if (!cleanSrc) return;
       el('imagePreviewImg').src = cleanSrc;
       el('imagePreviewImg').alt = alt || '';
       el('imagePreviewCaption').textContent = alt || src;
+      resetImagePreviewTransform();
       openModal('imagePreviewModal');
     };
 
@@ -2965,6 +3064,13 @@
       on('primaryColorInput', 'input', (event) => { state.palette.primary = event.target.value; savePalette(); });
       on('secondaryColorInput', 'input', (event) => { state.palette.secondary = event.target.value; savePalette(); });
       on('contrastColorInput', 'input', (event) => { state.palette.contrast = event.target.value; savePalette(); });
+      el('imagePreviewStage').addEventListener('wheel', guardedHandler(handleImagePreviewWheel), { passive: false });
+      on('imagePreviewStage', 'pointerdown', startImagePreviewDrag);
+      on('imagePreviewStage', 'pointermove', moveImagePreviewDrag);
+      on('imagePreviewStage', 'pointerup', stopImagePreviewDrag);
+      on('imagePreviewStage', 'pointercancel', stopImagePreviewDrag);
+      on('imagePreviewStage', 'dblclick', resetImagePreviewTransform);
+      on('imagePreviewImg', 'load', applyImagePreviewTransform);
       onAll('[data-close-modal]', 'click', (event) => closeModal(event.currentTarget.dataset.closeModal));
       onAll('.modal-backdrop', 'click', (event) => {
         if (event.target === event.currentTarget) closeModal(event.currentTarget.id);

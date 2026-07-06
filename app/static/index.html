@@ -469,7 +469,9 @@
   <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop">
     <div class="image-preview">
       <button class="btn image-preview-close" data-close-modal="imagePreviewModal">关闭</button>
-      <img id="imagePreviewImg" alt="" />
+      <div id="imagePreviewStage" class="image-preview-stage">
+        <img id="imagePreviewImg" alt="" draggable="false" />
+      </div>
       <div id="imagePreviewCaption" class="image-preview-caption"></div>
     </div>
   </div>

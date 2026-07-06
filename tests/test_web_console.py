@@ -87,7 +87,13 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "shouldRetryResponse" in page_bundle
     assert "guardedHandler" in page_bundle
     assert "imagePreviewModal" in page_bundle
+    assert "imagePreviewStage" in page_bundle
     assert "openImagePreview" in page_bundle
+    assert "handleImagePreviewWheel" in page_bundle
+    assert "startImagePreviewDrag" in page_bundle
+    assert "resetImagePreviewTransform" in page_bundle
+    assert "--preview-scale" in page_bundle
+    assert "cursor:grab" in page_bundle
     assert "media-image-button" in page_bundle
     assert "bubble-media-only" in page_bundle
     assert "finalizeMessageBubbleLayout" in page_bundle
