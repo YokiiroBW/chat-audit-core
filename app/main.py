@@ -132,6 +132,13 @@ def create_app(
     app = FastAPI(title=active_settings.app_name, lifespan=lifespan)
 
     @app.middleware("http")
+    async def request_size_limit_middleware(request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > active_settings.api_max_request_body_bytes:
+            return JSONResponse({"detail": "Request body too large"}, status_code=413)
+        return await call_next(request)
+
+    @app.middleware("http")
     async def csrf_middleware(request: Request, call_next):
         if not active_settings.csrf_enabled:
             return await call_next(request)

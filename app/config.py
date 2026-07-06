@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     database_max_overflow: int = 10
     database_pool_timeout_seconds: int = 30
     database_pool_recycle_seconds: int = 3600
+    api_max_request_body_bytes: int = 104857600
 
     storage_root: Path = Path("./data/storage")
     backup_root: Path = Path("./data/backups")

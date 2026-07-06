@@ -221,6 +221,26 @@ def test_create_app_lifespan_starts_auto_backup_scheduler(tmp_path, monkeypatch)
     assert calls[-1] == "cancel"
 
 
+def test_create_app_rejects_request_body_over_configured_limit(tmp_path):
+    database_path = tmp_path / "audit.sqlite3"
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{database_path.as_posix()}",
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+        api_max_request_body_bytes=16,
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+    app = create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+
+    with TestClient(app) as client:
+        ok_response = client.post("/api/import/validate", json={})
+        large_response = client.post("/api/import/validate", content="x" * 32)
+
+    assert ok_response.status_code != 413
+    assert large_response.status_code == 413
+    assert large_response.json()["detail"] == "Request body too large"
+
+
 
 def test_create_app_rejects_default_secret_in_production(tmp_path):
     settings = Settings(
