@@ -10,6 +10,7 @@ async def test_web_console_index_serves_three_column_dashboard():
         response = await client.get("/")
         css_response = await client.get("/assets/app.min.css")
         js_response = await client.get("/assets/app.min.js")
+        sw_response = await client.get("/sw.js")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
@@ -19,16 +20,22 @@ async def test_web_console_index_serves_three_column_dashboard():
 
     assert css_response.status_code == 200
     assert js_response.status_code == 200
+    assert sw_response.status_code == 200
     assert "text/css" in css_response.headers["content-type"]
     assert "javascript" in js_response.headers["content-type"]
+    assert "javascript" in sw_response.headers["content-type"]
 
-    page_bundle = "\n".join([html, css_response.text, js_response.text])
+    page_bundle = "\n".join([html, css_response.text, js_response.text, sw_response.text])
     assert "社交资产多租户审计控制台" in html
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
     assert "ElementPlus" not in page_bundle
     assert "Vue" not in page_bundle
+    assert "navigator.serviceWorker.register('/sw.js')" in html
+    assert "CACHE_NAME" in sw_response.text
+    assert "/assets/app.min.js" in sw_response.text
+    assert "/assets/app.min.css" in sw_response.text
     assert "/api/adapters" in page_bundle
     assert "/api/bots" in page_bundle
     assert "/api/dashboard" in page_bundle

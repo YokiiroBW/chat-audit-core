@@ -474,6 +474,13 @@
     </div>
   </div>
 
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
   <script src="/assets/app.min.js" defer></script>
 </body>
 </html>

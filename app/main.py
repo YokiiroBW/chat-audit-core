@@ -244,6 +244,10 @@ def create_app(
     async def index() -> FileResponse:
         return FileResponse(index_file, media_type="text/html")
 
+    @app.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        return FileResponse(static_dir / "sw.js", media_type="application/javascript")
+
     @app.get("/health", response_model=HealthResponse)
     async def health() -> JSONResponse | HealthResponse:
         checks: dict[str, str] = {
