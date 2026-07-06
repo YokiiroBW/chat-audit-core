@@ -156,6 +156,23 @@ def test_disaster_recovery_document_covers_restore_drill_and_targets():
     assert "DISASTER_RECOVERY.md" in readme
 
 
+def test_forgejo_ci_workflow_runs_tests_and_docker_build():
+    workflow = yaml.safe_load((ROOT / ".forgejo/workflows/ci.yml").read_text(encoding="utf-8"))
+
+    assert workflow["name"] == "CI"
+    test_job = workflow["jobs"]["test"]
+    assert test_job["runs-on"] == "ubuntu-latest"
+    assert test_job["services"]["postgres"]["image"] == "postgres:16-alpine"
+    assert "pg_isready" in test_job["services"]["postgres"]["options"]
+    steps = {step["name"]: step["run"] for step in test_job["steps"] if "run" in step}
+    assert "python -m pip install -r requirements-dev.txt" in steps["Install dependencies"]
+    assert "python scripts/minify_static_assets.py" in steps["Verify minified frontend assets"]
+    assert "git diff --exit-code app/static/assets/app.min.css app/static/assets/app.min.js" in steps["Verify minified frontend assets"]
+    assert steps["Compile Python modules"] == "python -m compileall app tests"
+    assert steps["Run tests"] == "python -m pytest tests -q"
+    assert steps["Build Docker image"] == "docker build -t chat-audit-core:ci ."
+
+
 def test_wechat_tray_packaging_scripts_are_present_and_headless():
     build_script = (ROOT / "scripts/build_wechat_tray.ps1").read_text(encoding="utf-8")
     installer_script = (ROOT / "scripts/build_wechat_tray_installer.ps1").read_text(encoding="utf-8")
