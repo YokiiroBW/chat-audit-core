@@ -142,6 +142,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "submitImportPackage" in page_bundle
     assert "chatAuditAdminApiToken" in page_bundle
     assert "Authorization" in page_bundle
+    assert "chat_audit_csrf" in page_bundle
+    assert "X-CSRF-Token" in page_bundle
+    assert "csrfHeaders" in page_bundle
     assert "/api/auth/login" in page_bundle
     assert "/api/auth/me" in page_bundle
     assert "/api/auth/logout" in page_bundle

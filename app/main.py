@@ -1,12 +1,13 @@
 import asyncio
 import contextlib
 import json
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -16,6 +17,43 @@ from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_ta
 from app.schemas import HealthResponse
 from app.services.backup_service import start_auto_backup_scheduler
 from app.ws import router as ws_router
+
+CSRF_COOKIE_NAME = "chat_audit_csrf"
+CSRF_HEADER_NAME = "x-csrf-token"
+CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+CSRF_EXEMPT_PATHS = {"/api/auth/login"}
+
+
+def _is_browser_context(request: Request) -> bool:
+    return any(
+        request.headers.get(header)
+        for header in ("sec-fetch-site", "origin", "referer")
+    )
+
+
+def _is_cross_site_request(request: Request) -> bool:
+    return request.headers.get("sec-fetch-site", "").lower() == "cross-site"
+
+
+def _new_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _set_csrf_cookie(response, settings: Settings, token: str) -> None:
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        token,
+        httponly=False,
+        secure=settings.csrf_secure_cookie,
+        samesite="strict",
+        max_age=86400 * 7,
+    )
+
+
+def _csrf_response(settings: Settings) -> JSONResponse:
+    response = JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
+    _set_csrf_cookie(response, settings, _new_csrf_token())
+    return response
 
 
 def _has_configured_admin_tokens(settings: Settings) -> bool:
@@ -79,6 +117,25 @@ def create_app(
                         await backup_task
 
     app = FastAPI(title=active_settings.app_name, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def csrf_middleware(request: Request, call_next):
+        if not active_settings.csrf_enabled:
+            return await call_next(request)
+
+        csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME)
+        needs_cookie = csrf_cookie is None
+        if request.method not in CSRF_SAFE_METHODS and request.url.path not in CSRF_EXEMPT_PATHS and _is_browser_context(request):
+            if _is_cross_site_request(request):
+                return _csrf_response(active_settings)
+            csrf_header = request.headers.get(CSRF_HEADER_NAME)
+            if not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header):
+                return _csrf_response(active_settings)
+
+        response = await call_next(request)
+        if needs_cookie:
+            _set_csrf_cookie(response, active_settings, _new_csrf_token())
+        return response
 
     async def app_db_session() -> AsyncIterator[AsyncSession]:
         async with active_sessionmaker() as session:

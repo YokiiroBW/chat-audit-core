@@ -71,6 +71,21 @@
       return { ...headers, Authorization: `Bearer ${state.adminApiToken}` };
     };
 
+    const cookieValue = (name) => {
+      const prefix = `${name}=`;
+      return document.cookie
+        .split(';')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(prefix))
+        ?.slice(prefix.length) || '';
+    };
+
+    const csrfHeaders = (method, headers = {}) => {
+      if (method === 'GET') return headers;
+      const token = cookieValue('chat_audit_csrf');
+      return token ? { ...headers, 'X-CSRF-Token': token } : headers;
+    };
+
     const responseErrorMessage = async (response, url) => {
       let detail = '';
       try {
@@ -87,14 +102,14 @@
     };
 
     const requestJson = async (url, options = {}) => {
+      const method = options.method || 'GET';
       const withAuth = {
         ...options,
-        headers: authHeaders(options.headers || {}),
+        headers: csrfHeaders(method, authHeaders(options.headers || {})),
       };
-      const method = options.method || 'GET';
       let response = await fetch(url, withAuth);
       if (response.status === 401 && promptForAdminApiToken()) {
-        response = await fetch(url, { ...options, headers: authHeaders(options.headers || {}) });
+        response = await fetch(url, { ...options, headers: csrfHeaders(method, authHeaders(options.headers || {})) });
       }
       if (!response.ok) {
         const message = await responseErrorMessage(response, url);
@@ -2095,7 +2110,7 @@
       if (!password) return;
       const response = await fetch('/api/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: csrfHeaders('POST', { 'Content-Type': 'application/json' }),
         body: JSON.stringify({ username, password }),
       });
       if (!response.ok) {

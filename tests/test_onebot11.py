@@ -163,10 +163,14 @@ async def test_onebot_websocket_registers_rpc_connection_from_meta_event(db_sess
         await asyncio.sleep(0)
 
         assert websocket.accepted is True
-        assert OneBotRPCService._connections["123456"] is websocket
+        active_websocket, connection_id = OneBotRPCService._connections["123456"]
+        assert active_websocket is websocket
+        assert await OneBotRPCService.is_current_connection("123456", connection_id) is True
     finally:
         task.cancel()
-        OneBotRPCService.unregister_connection(websocket)
+        active = OneBotRPCService._connections.get("123456")
+        if active is not None:
+            await OneBotRPCService.unregister_connection("123456", active[1])
         try:
             await task
         except asyncio.CancelledError:
@@ -247,10 +251,11 @@ async def test_onebot_forward_hydration_caches_payload_without_opening(tmp_path,
     await create_all_tables(engine)
     monkeypatch.setattr(ws_module, "AsyncSessionLocal", sessionmaker)
 
-    async def fake_call_action(robot_id: str, action: str, params: dict):
+    async def fake_call_action(robot_id: str, action: str, params: dict, **kwargs):
         assert robot_id == "123456"
         assert action == "get_forward_msg"
         assert params == {"id": "forward-auto"}
+        assert kwargs["connection_id"] == "test-connection"
         return {
             "status": "ok",
             "data": {
@@ -263,7 +268,13 @@ async def test_onebot_forward_hydration_caches_payload_without_opening(tmp_path,
             },
         }
 
+    async def fake_is_current_connection(robot_id: str, connection_id: str):
+        assert robot_id == "123456"
+        assert connection_id == "test-connection"
+        return True
+
     monkeypatch.setattr(ws_module.OneBotRPCService, "call_action", fake_call_action)
+    monkeypatch.setattr(ws_module.OneBotRPCService, "is_current_connection", fake_is_current_connection)
 
     try:
         async with sessionmaker() as session:
@@ -285,7 +296,7 @@ async def test_onebot_forward_hydration_caches_payload_without_opening(tmp_path,
         stub_client = StubAsyncClient({"http://media.local/forward.jpg": b"forward image"})
         monkeypatch.setattr(ws_module.httpx, "AsyncClient", lambda *args, **kwargs: stub_client)
 
-        await ws_module._hydrate_forward_payloads("123456", msg_hash)
+        await ws_module._hydrate_forward_payloads("123456", "test-connection", msg_hash)
 
         async with sessionmaker() as session:
             messages = await QueryService.list_messages(session, robot_id="123456", room_id="998877")
