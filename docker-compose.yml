@@ -55,6 +55,9 @@ services:
     volumes:
       - ./data/storage:/app/data/storage
       - ./data/backups:/app/data/backups
+    networks:
+      - default
+      - qqbot_astrbot_network
     healthcheck:
       test: ["CMD", "python", "-c", "import json, sys, urllib.request; r = json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)); sys.exit(0 if r.get('status') == 'ok' else 1)"]
       interval: 30s
@@ -64,3 +67,7 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  qqbot_astrbot_network:
+    external: true
