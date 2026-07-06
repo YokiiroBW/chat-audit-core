@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="QQ social asset audit">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D4ED8"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#0F172A" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#bg)"/>
+  <path d="M17 22c0-6.1 5.2-11 11.8-11h6.4C41.8 11 47 15.9 47 22s-5.2 11-11.8 11h-1.7l-8.4 6.5V33C20.4 31.6 17 27.3 17 22Z" fill="#FFFFFF" filter="url(#shadow)"/>
+  <path d="M41.5 38.5 47 44l10-12" fill="none" stroke="#FFFFFF" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="32" y="26" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" font-weight="800" fill="#1D4ED8">QQ</text>
+</svg>

@@ -1,6 +1,7 @@
-const CACHE_NAME = 'chat-audit-static-v1';
+const CACHE_NAME = 'chat-audit-static-v2';
 const STATIC_ASSETS = [
   '/',
+  '/assets/favicon.svg',
   '/assets/app.min.css',
   '/assets/app.min.js',
 ];

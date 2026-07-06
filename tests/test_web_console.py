@@ -8,25 +8,34 @@ from app.main import app
 async def test_web_console_index_serves_three_column_dashboard():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/")
+        favicon_response = await client.get("/assets/favicon.svg")
         css_response = await client.get("/assets/app.min.css")
         js_response = await client.get("/assets/app.min.js")
         sw_response = await client.get("/sw.js")
 
     assert response.status_code == 200
+    assert favicon_response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     html = response.text
+    assert "<title>QQ社交资产审计平台</title>" in html
+    assert '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />' in html
     assert '<link rel="stylesheet" href="/assets/app.min.css" />' in html
     assert '<script src="/assets/app.min.js" defer></script>' in html
 
     assert css_response.status_code == 200
     assert js_response.status_code == 200
     assert sw_response.status_code == 200
+    assert "image/svg+xml" in favicon_response.headers["content-type"]
     assert "text/css" in css_response.headers["content-type"]
     assert "javascript" in js_response.headers["content-type"]
     assert "javascript" in sw_response.headers["content-type"]
 
     page_bundle = "\n".join([html, css_response.text, js_response.text, sw_response.text])
-    assert "社交资产多租户审计控制台" in html
+    assert "QQ社交资产审计平台" in html
+    assert "<text" in favicon_response.text
+    assert ">QQ<" in favicon_response.text
+    assert "/assets/favicon.svg" in sw_response.text
+    assert "chat-audit-static-v2" in sw_response.text
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
