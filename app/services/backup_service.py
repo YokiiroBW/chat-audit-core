@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.time_utils import format_utc_z, to_utc_naive, utc_now
 
 BACKUP_SCHEMA = "chat-audit-core.backup.v1"
 BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
+logger = logging.getLogger(__name__)
 
 
 class BackupService:
@@ -781,7 +783,7 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
                 backup_config = await BackupConfigService.get_effective_config(session, settings)
                 if not backup_config.enabled:
                     continue
-                await BackupService.write_auto_backup_file(
+                backup_path = await BackupService.write_auto_backup_file(
                     session,
                     backup_root=settings.backup_root,
                     storage_root=settings.storage_root,
@@ -791,7 +793,15 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
                     system_id=getattr(settings, "system_instance_id", None),
                     signing_key=getattr(settings, "app_secret_key", None),
                 )
+                logger.info(
+                    "Auto backup completed",
+                    extra={"backup_path": str(backup_path), "cron": backup_config.cron, "keep_latest": backup_config.keep_latest},
+                )
         except Exception as exc:
+            logger.exception(
+                "Auto backup failed",
+                extra={"cron": getattr(settings, "auto_backup_cron", None), "error": str(exc)},
+            )
             BackupService.write_failure_log(
                 settings.backup_root,
                 event="auto_backup",

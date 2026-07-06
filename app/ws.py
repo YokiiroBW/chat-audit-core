@@ -63,7 +63,10 @@ async def _hydrate_forward_payloads(robot_id: str, connection_id: str, msg_hash:
     settings = get_settings()
     try:
         if not await OneBotRPCService.is_current_connection(robot_id, connection_id):
-            logger.info("Skip forward hydration for stale OneBot connection: robot_id=%s, msg_hash=%s", robot_id, msg_hash)
+            logger.info(
+                "Skip forward hydration for stale OneBot connection",
+                extra={"robot_id": robot_id, "connection_id": connection_id, "msg_hash": msg_hash},
+            )
             return
         async with AsyncSessionLocal() as session, httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
             message = await session.get(Message, msg_hash)
@@ -101,7 +104,10 @@ async def _hydrate_forward_payloads(robot_id: str, connection_id: str, msg_hash:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.exception(f"Failed to hydrate forward payloads: robot_id={robot_id}, msg_hash={msg_hash}, error={exc}")
+        logger.exception(
+            "Failed to hydrate forward payloads",
+            extra={"robot_id": robot_id, "connection_id": connection_id, "msg_hash": msg_hash, "error": str(exc)},
+        )
 
 
 async def _hydrate_group_profile(robot_id: str, connection_id: str, platform: str, room_id: str) -> None:
@@ -109,7 +115,10 @@ async def _hydrate_group_profile(robot_id: str, connection_id: str, platform: st
     settings = get_settings()
     try:
         if not await OneBotRPCService.is_current_connection(robot_id, connection_id):
-            logger.info("Skip group profile hydration for stale OneBot connection: robot_id=%s, room_id=%s", robot_id, room_id)
+            logger.info(
+                "Skip group profile hydration for stale OneBot connection",
+                extra={"robot_id": robot_id, "connection_id": connection_id, "room_id": room_id},
+            )
             return
         async with AsyncSessionLocal() as session:
             existing = await session.get(RoomProfile, room_id)
@@ -128,11 +137,8 @@ async def _hydrate_group_profile(robot_id: str, connection_id: str, platform: st
                 group_info = payload["data"]
         except Exception as exc:
             logger.warning(
-                "Failed to load QQ group info: robot_id=%s, connection_id=%s, room_id=%s, error=%s",
-                robot_id,
-                connection_id,
-                room_id,
-                exc,
+                "Failed to load QQ group info",
+                extra={"robot_id": robot_id, "connection_id": connection_id, "room_id": room_id, "error": str(exc)},
             )
             group_info = None
 
@@ -150,7 +156,10 @@ async def _hydrate_group_profile(robot_id: str, connection_id: str, platform: st
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.exception(f"Failed to hydrate group profile: robot_id={robot_id}, platform={platform}, room_id={room_id}, error={exc}")
+        logger.exception(
+            "Failed to hydrate group profile",
+            extra={"robot_id": robot_id, "connection_id": connection_id, "platform": platform, "room_id": room_id, "error": str(exc)},
+        )
 
 
 async def _hydrate_user_profile(robot_id: str, connection_id: str, platform: str, user_id: str, display_name: str | None = None) -> None:
@@ -158,7 +167,10 @@ async def _hydrate_user_profile(robot_id: str, connection_id: str, platform: str
     settings = get_settings()
     try:
         if not await OneBotRPCService.is_current_connection(robot_id, connection_id):
-            logger.info("Skip user profile hydration for stale OneBot connection: robot_id=%s, user_id=%s", robot_id, user_id)
+            logger.info(
+                "Skip user profile hydration for stale OneBot connection",
+                extra={"robot_id": robot_id, "connection_id": connection_id, "user_id": user_id},
+            )
             return
         async with AsyncSessionLocal() as session:
             existing = await session.get(UserProfile, user_id)
@@ -179,7 +191,10 @@ async def _hydrate_user_profile(robot_id: str, connection_id: str, platform: str
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.exception(f"Failed to hydrate user profile: platform={platform}, user_id={user_id}, error={exc}")
+        logger.exception(
+            "Failed to hydrate user profile",
+            extra={"robot_id": robot_id, "connection_id": connection_id, "platform": platform, "user_id": user_id, "error": str(exc)},
+        )
 
 
 @router.websocket("/onebot/v11/ws")
@@ -213,13 +228,14 @@ async def onebot11_reverse_ws(
                 if robot_id != current_robot_id:
                     connection_id = await OneBotRPCService.register_connection(robot_id, websocket)
                     current_robot_id = robot_id
-                    logger.info(f"OneBot WebSocket connected: adapter_id={adapter_id}, robot_id={robot_id}, connection_id={connection_id}")
+                    logger.info(
+                        "OneBot WebSocket connected",
+                        extra={"adapter_id": adapter_id, "robot_id": robot_id, "connection_id": connection_id},
+                    )
                 elif not await OneBotRPCService.is_current_connection(robot_id, connection_id):
                     logger.info(
-                        "Stop stale OneBot WebSocket: adapter_id=%s, robot_id=%s, connection_id=%s",
-                        adapter_id,
-                        robot_id,
-                        connection_id,
+                        "Stop stale OneBot WebSocket",
+                        extra={"adapter_id": adapter_id, "robot_id": robot_id, "connection_id": connection_id},
                     )
                     await websocket.close(code=4000)
                     return
@@ -264,9 +280,15 @@ async def onebot11_reverse_ws(
                 if normalized.msg_data.get("message_type") == "group":
                     track_background_task(_hydrate_group_profile(normalized.robot_id, connection_id, normalized.platform, normalized.msg_data["room_id"]))
     except WebSocketDisconnect:
-        logger.info(f"OneBot WebSocket disconnected: adapter_id={adapter_id}, robot_id={current_robot_id}")
+        logger.info(
+            "OneBot WebSocket disconnected",
+            extra={"adapter_id": adapter_id, "robot_id": current_robot_id, "connection_id": connection_id},
+        )
     except Exception as exc:
-        logger.exception(f"OneBot WebSocket error: adapter_id={adapter_id}, robot_id={current_robot_id}, error={exc}")
+        logger.exception(
+            "OneBot WebSocket error",
+            extra={"adapter_id": adapter_id, "robot_id": current_robot_id, "connection_id": connection_id, "error": str(exc)},
+        )
     finally:
         for task in list(background_tasks):
             task.cancel()

@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -15,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.api import public_router as public_api_router, router as api_router
 from app.config import Settings, get_settings
 from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
+from app.logging_config import setup_logging
 from app.schemas import HealthResponse
 from app.services.backup_service import start_auto_backup_scheduler
 from app.ws import router as ws_router
@@ -23,6 +26,7 @@ CSRF_COOKIE_NAME = "chat_audit_csrf"
 CSRF_HEADER_NAME = "x-csrf-token"
 CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 CSRF_EXEMPT_PATHS = {"/api/auth/login"}
+logger = logging.getLogger(__name__)
 
 
 def _is_browser_context(request: Request) -> bool:
@@ -106,6 +110,7 @@ def create_app(
     sessionmaker: async_sessionmaker[AsyncSession] | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
+    setup_logging(active_settings.log_level)
     validate_production_settings(active_settings)
     active_engine = engine or default_engine
     active_sessionmaker = sessionmaker or AsyncSessionLocal
@@ -130,6 +135,36 @@ def create_app(
                         await backup_task
 
     app = FastAPI(title=active_settings.app_name, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def request_logging_middleware(request: Request, call_next):
+        started_at = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            logger.exception(
+                "HTTP request failed",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "duration_ms": duration_ms,
+                    "client": request.client.host if request.client else None,
+                },
+            )
+            raise
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        logger.info(
+            "HTTP request completed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+                "client": request.client.host if request.client else None,
+            },
+        )
+        return response
 
     @app.middleware("http")
     async def request_size_limit_middleware(request: Request, call_next):

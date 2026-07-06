@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     app_secret_key: str = "change-me"
+    log_level: str = "INFO"
     system_instance_id: str = "chat-audit-core"
     admin_api_token: str = ""
     admin_api_tokens: str = ""

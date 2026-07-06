@@ -37,6 +37,12 @@ def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
     assert "uvicorn" in dockerfile
 
 
+def test_requirements_include_structured_logging_dependency():
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "python-json-logger==2.0.7" in requirements
+
+
 def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 
@@ -52,6 +58,7 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert services["app"]["environment"]["ADMIN_API_TOKEN"] == "${ADMIN_API_TOKEN}"
     assert services["app"]["environment"]["ADMIN_API_TOKENS"] == "${ADMIN_API_TOKENS:-}"
     assert services["app"]["environment"]["ONEBOT_ACCESS_TOKEN"] == "${ONEBOT_ACCESS_TOKEN}"
+    assert services["app"]["environment"]["LOG_LEVEL"] == "${LOG_LEVEL:-INFO}"
     assert services["app"]["environment"]["FFMPEG_BIN"] == "ffmpeg"
     assert services["app"]["environment"]["FFMPEG_LIBRARY_PATH"] == "${FFMPEG_LIBRARY_PATH:-}"
     assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"

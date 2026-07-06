@@ -1,6 +1,7 @@
 import asyncio
 import html
 import json
+import logging
 import os
 import re
 from copy import deepcopy
@@ -13,6 +14,8 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -402,11 +405,23 @@ class MediaService:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
+                logger.warning(
+                    "FFmpeg transcode timeout",
+                    extra={"media_type": media_type, "target_ext": target_ext, "timeout_seconds": timeout_seconds},
+                )
                 return None
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "FFmpeg transcode unavailable",
+                extra={"media_type": media_type, "target_ext": target_ext, "ffmpeg_bin": ffmpeg_bin, "error": str(exc)},
+            )
             return None
 
         if process.returncode != 0 or not stdout:
+            logger.warning(
+                "FFmpeg transcode failed",
+                extra={"media_type": media_type, "target_ext": target_ext, "returncode": process.returncode},
+            )
             return None
         return TranscodedMedia(content=stdout, ext=target_ext)
 
@@ -521,16 +536,36 @@ class MediaService:
         try:
             try:
                 response = await client.get(url)
-            except (httpx.HTTPError, KeyError):
+            except (httpx.HTTPError, KeyError) as exc:
+                logger.warning(
+                    "Media download request failed",
+                    extra={"url": url, "media_type": media_type, "error": str(exc)},
+                )
                 return None
             if response.status_code >= 400:
+                logger.warning(
+                    "Media download rejected by upstream",
+                    extra={"url": url, "media_type": media_type, "status_code": response.status_code},
+                )
                 return None
             if not _is_allowed_download_content_type(media_type, response.headers.get("content-type")):
+                logger.warning(
+                    "Media download content type rejected",
+                    extra={"url": url, "media_type": media_type, "content_type": response.headers.get("content-type")},
+                )
                 return None
             content_length = response.headers.get("content-length")
             if content_length is not None and content_length.isdigit() and int(content_length) > media_max_bytes:
+                logger.warning(
+                    "Media download content length exceeds limit",
+                    extra={"url": url, "media_type": media_type, "content_length": int(content_length), "max_bytes": media_max_bytes},
+                )
                 return None
             if len(response.content) > media_max_bytes:
+                logger.warning(
+                    "Media download body exceeds limit",
+                    extra={"url": url, "media_type": media_type, "content_length": len(response.content), "max_bytes": media_max_bytes},
+                )
                 return None
             ext = _guess_ext(url, file_name, media_type)
             content, ext = await MediaService._maybe_transcode_media(

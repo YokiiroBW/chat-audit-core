@@ -38,8 +38,8 @@ class OneBotRPCService:
             if old is not None:
                 old_websocket, old_connection_id = old
                 logger.warning(
-                    f"Robot {robot_id} already connected (old connection_id={old_connection_id}), "
-                    f"new connection {connection_id} will replace it"
+                    "OneBot robot connection replaced",
+                    extra={"robot_id": robot_id, "old_connection_id": old_connection_id, "connection_id": connection_id},
                 )
             cls._connections[robot_id] = (websocket, connection_id)
 
@@ -48,14 +48,11 @@ class OneBotRPCService:
                 await old_websocket.close(code=4000)
             except Exception as exc:
                 logger.debug(
-                    "Failed to close replaced OneBot connection: "
-                    "robot_id=%s, old_connection_id=%s, error=%s",
-                    robot_id,
-                    old_connection_id,
-                    exc,
+                    "Failed to close replaced OneBot connection",
+                    extra={"robot_id": robot_id, "old_connection_id": old_connection_id, "error": str(exc)},
                 )
 
-        logger.info(f"Registered OneBot connection: robot_id={robot_id}, connection_id={connection_id}")
+        logger.info("Registered OneBot connection", extra={"robot_id": robot_id, "connection_id": connection_id})
         return connection_id
 
     @classmethod
@@ -74,11 +71,11 @@ class OneBotRPCService:
                 _, current_id = current
                 if current_id == connection_id:
                     cls._connections.pop(robot_id, None)
-                    logger.info(f"Unregistered OneBot connection: robot_id={robot_id}, connection_id={connection_id}")
+                    logger.info("Unregistered OneBot connection", extra={"robot_id": robot_id, "connection_id": connection_id})
                 else:
                     logger.warning(
-                        f"Connection ID mismatch for robot {robot_id}: "
-                        f"requested={connection_id}, current={current_id}, skipping unregister"
+                        "Skip unregister for stale OneBot connection",
+                        extra={"robot_id": robot_id, "requested_connection_id": connection_id, "current_connection_id": current_id},
                     )
 
     @classmethod
@@ -151,15 +148,21 @@ class OneBotRPCService:
 
         try:
             await websocket.send_json({"action": action, "params": params, "echo": echo})
-            logger.debug(f"Sent RPC call: robot_id={robot_id}, action={action}, echo={echo}")
+            logger.debug("Sent OneBot RPC call", extra={"robot_id": robot_id, "action": action, "echo": echo})
             result = await asyncio.wait_for(future, timeout=timeout_seconds)
-            logger.debug(f"Received RPC response: robot_id={robot_id}, echo={echo}")
+            logger.debug("Received OneBot RPC response", extra={"robot_id": robot_id, "action": action, "echo": echo})
             return result
         except asyncio.TimeoutError:
-            logger.warning(f"RPC call timeout: robot_id={robot_id}, action={action}, echo={echo}, timeout={timeout_seconds}s")
+            logger.warning(
+                "OneBot RPC call timeout",
+                extra={"robot_id": robot_id, "action": action, "echo": echo, "timeout_seconds": timeout_seconds},
+            )
             raise
         except Exception as exc:
-            logger.exception(f"RPC call failed: robot_id={robot_id}, action={action}, echo={echo}, error={exc}")
+            logger.exception(
+                "OneBot RPC call failed",
+                extra={"robot_id": robot_id, "action": action, "echo": echo, "error": str(exc)},
+            )
             raise
         finally:
             cls._pending.pop(echo, None)
