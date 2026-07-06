@@ -102,13 +102,68 @@
       return detail ? `HTTP ${response.status}: ${detail}` : `HTTP ${response.status}: ${url}`;
     };
 
+    const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+    const friendlyHttpErrorMessage = (response, technicalMessage) => {
+      if (response.status === 401) return '登录已失效，请重新输入 Token';
+      if (response.status === 403) return '权限不足，请检查 Token 角色';
+      if (response.status === 413) return '请求内容过大，请缩小范围或文件后重试';
+      if (response.status === 429) return '操作太频繁，请稍后重试';
+      if (response.status >= 500) return '服务器暂时不可用，请稍后重试';
+      return technicalMessage;
+    };
+
+    const friendlyNetworkErrorMessage = (error) => {
+      if (error && error.name === 'AbortError') return '请求超时，请稍后重试';
+      return '网络连接失败，请检查服务是否在线';
+    };
+
+    const shouldRetryResponse = (response) => response.status === 429 || response.status >= 500;
+
+    const requestWithRetry = async (url, options = {}, { retries = 2 } = {}) => {
+      const method = options.method || 'GET';
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+          const headers = csrfHeaders(method, authHeaders(options.headers || {}));
+          let response = await fetch(url, { ...options, headers });
+          if (response.status === 401 && attempt === 0 && promptForAdminApiToken()) {
+            response = await fetch(url, { ...options, headers: csrfHeaders(method, authHeaders(options.headers || {})) });
+          }
+          if (response.ok) {
+            pushUiLog(`${method} ${url} · ${response.status}`);
+            return response;
+          }
+          const technicalMessage = await responseErrorMessage(response, url);
+          const userMessage = friendlyHttpErrorMessage(response, technicalMessage);
+          if (shouldRetryResponse(response) && attempt < retries) {
+            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retries}: ${userMessage}`, 'warning');
+            await sleep(1000 * (attempt + 1));
+            continue;
+          }
+          const error = new Error(userMessage);
+          error.technicalMessage = technicalMessage;
+          throw error;
+        } catch (error) {
+          if (error.technicalMessage) throw error;
+          if (attempt < retries) {
+            const userMessage = friendlyNetworkErrorMessage(error);
+            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retries}: ${userMessage}`, 'warning');
+            await sleep(1000 * (attempt + 1));
+            continue;
+          }
+          throw new Error(friendlyNetworkErrorMessage(error));
+        }
+      }
+      throw new Error('请求失败，请稍后重试');
+    };
+
     const requestJson = async (url, options = {}) => {
       const method = options.method || 'GET';
       const withAuth = {
         ...options,
         headers: csrfHeaders(method, authHeaders(options.headers || {})),
       };
-      let response = await fetch(url, withAuth);
+      const response = await requestWithRetry(url, options);
       if (response.status === 401 && promptForAdminApiToken()) {
         response = await fetch(url, { ...options, headers: csrfHeaders(method, authHeaders(options.headers || {})) });
       }
@@ -128,7 +183,7 @@
         ...options,
         headers: csrfHeaders(method, authHeaders(options.headers || {})),
       };
-      let response = await fetch(url, withAuth);
+      const response = await requestWithRetry(url, options);
       if (response.status === 401 && promptForAdminApiToken()) {
         response = await fetch(url, { ...options, headers: csrfHeaders(method, authHeaders(options.headers || {})) });
       }
@@ -2803,12 +2858,25 @@
       openModal('imagePreviewModal');
     };
 
+    const handleUiError = (error) => {
+      const message = error && error.message ? error.message : '操作失败，请稍后重试';
+      pushUiLog(message, 'error');
+    };
+
+    const guardedHandler = (handler) => (event) => {
+      try {
+        Promise.resolve(handler(event)).catch(handleUiError);
+      } catch (error) {
+        handleUiError(error);
+      }
+    };
+
     const on = (id, eventName, handler) => {
-      el(id).addEventListener(eventName, handler);
+      el(id).addEventListener(eventName, guardedHandler(handler));
     };
 
     const onAll = (selector, eventName, handler) => {
-      document.querySelectorAll(selector).forEach((node) => node.addEventListener(eventName, handler));
+      document.querySelectorAll(selector).forEach((node) => node.addEventListener(eventName, guardedHandler(handler)));
     };
 
     const bindEvents = () => {

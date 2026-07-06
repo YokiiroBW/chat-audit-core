@@ -70,6 +70,11 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderAvatar" in page_bundle
     assert "qlogo.cn" not in page_bundle
     assert "responseErrorMessage" in page_bundle
+    assert "requestWithRetry" in page_bundle
+    assert "friendlyHttpErrorMessage" in page_bundle
+    assert "friendlyNetworkErrorMessage" in page_bundle
+    assert "shouldRetryResponse" in page_bundle
+    assert "guardedHandler" in page_bundle
     assert "imagePreviewModal" in page_bundle
     assert "openImagePreview" in page_bundle
     assert "media-image-button" in page_bundle
