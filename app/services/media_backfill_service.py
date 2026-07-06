@@ -15,6 +15,7 @@ from app.services.media_service import (
     _looks_like_media_url,
     _looks_like_card_page_url,
     _parse_cq_params,
+    _sort_card_page_candidates,
     parse_cq_media_segments,
 )
 
@@ -121,14 +122,14 @@ def _find_card_media_urls(local_message: str) -> list[str]:
     return urls
 
 
-def _iter_uncached_card_page_urls(value: Any, key: str | None = None) -> list[str]:
+def _iter_uncached_card_page_urls(value: Any, key: str | None = None) -> list[tuple[str, str | None]]:
     if isinstance(value, dict):
-        urls: list[str] = []
+        urls: list[tuple[str, str | None]] = []
         has_local_page = bool(value.get("local_page"))
         for child_key, child_value in value.items():
             urls.extend(_iter_uncached_card_page_urls(child_value, str(child_key)))
             if not has_local_page and isinstance(child_value, str) and _looks_like_card_page_url(child_value, str(child_key)):
-                urls.append(child_value)
+                urls.append((child_value, str(child_key)))
         return urls
     if isinstance(value, list):
         urls = []
@@ -139,7 +140,7 @@ def _iter_uncached_card_page_urls(value: Any, key: str | None = None) -> list[st
 
 
 def _find_uncached_card_page_urls(local_message: str) -> list[str]:
-    urls: list[str] = []
+    urls: list[tuple[str, str | None]] = []
     for match in _CQ_PATTERN.finditer(local_message):
         if match.group("kind") not in {"json", "xml"}:
             continue
@@ -152,7 +153,7 @@ def _find_uncached_card_page_urls(local_message: str) -> list[str]:
         except json.JSONDecodeError:
             continue
         urls.extend(_iter_uncached_card_page_urls(payload))
-    return urls
+    return _sort_card_page_candidates(urls)
 
 
 def _find_uncached_forward_ids(local_message: str) -> list[str]:

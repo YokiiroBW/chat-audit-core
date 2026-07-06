@@ -54,6 +54,8 @@ _CARD_MEDIA_KEYS = {
     "thumbnail",
 }
 _CARD_PAGE_URL_KEYS = {
+    "contenturl",
+    "docurl",
     "jumpurl",
     "link",
     "pageurl",
@@ -61,6 +63,25 @@ _CARD_PAGE_URL_KEYS = {
     "shareurl",
     "targeturl",
     "url",
+    "webpageurl",
+    "weburl",
+}
+_CARD_PAGE_URL_KEY_PRIORITY = {
+    "qqdocurl": 0,
+    "docurl": 0,
+    "weburl": 1,
+    "webpageurl": 1,
+    "targeturl": 2,
+    "jumpurl": 2,
+    "shareurl": 3,
+    "pageurl": 3,
+    "contenturl": 3,
+    "link": 4,
+    "url": 5,
+}
+_QQ_MINIAPP_HOSTS = {
+    "m.q.qq.com",
+    "q.qq.com",
 }
 _KNOWN_MEDIA_HOST_PARTS = (
     "gchat.qpic.cn",
@@ -153,6 +174,40 @@ def _normalize_http_url(url: str) -> str | None:
     return None
 
 
+def _normalize_card_url_key(key: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (key or "").lower())
+
+
+def _is_qq_miniapp_shell_url(url: str) -> bool:
+    normalized = _normalize_http_url(url)
+    if normalized is None:
+        return False
+    parsed = urlparse(normalized)
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    return host in _QQ_MINIAPP_HOSTS and (path.startswith("/a/s/") or "miniapp" in path)
+
+
+def _card_page_url_priority(url: str, key: str | None = None) -> tuple[int, int, int, str]:
+    normalized_key = _normalize_card_url_key(key)
+    key_score = _CARD_PAGE_URL_KEY_PRIORITY.get(normalized_key, 9)
+    shell_score = 1 if _is_qq_miniapp_shell_url(url) else 0
+    return (shell_score, key_score, len(url), url)
+
+
+def _sort_card_page_candidates(candidates: list[tuple[str, str | None]]) -> list[str]:
+    unique: dict[str, str | None] = {}
+    for url, key in candidates:
+        normalized = _normalize_http_url(url)
+        if normalized is None:
+            continue
+        unique.setdefault(normalized, key)
+    return [
+        url
+        for url, key in sorted(unique.items(), key=lambda item: _card_page_url_priority(item[0], item[1]))
+    ]
+
+
 def _looks_like_media_url(url: str, key: str | None = None) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -167,7 +222,7 @@ def _looks_like_media_url(url: str, key: str | None = None) -> bool:
 
 
 def _looks_like_card_page_url(url: str, key: str | None = None) -> bool:
-    lowered_key = (key or "").lower()
+    lowered_key = _normalize_card_url_key(key)
     if lowered_key not in _CARD_PAGE_URL_KEYS:
         return False
     normalized = _normalize_http_url(url)
@@ -529,7 +584,7 @@ class MediaService:
     ) -> Any:
         if isinstance(value, dict):
             cached: dict[str, Any] = {}
-            page_candidates: list[str] = []
+            page_candidates: list[tuple[str, str | None]] = []
             existing_local_page = value.get("local_page")
             for child_key, child_value in value.items():
                 cached[child_key] = await MediaService._cache_card_page_snapshots(
@@ -543,9 +598,9 @@ class MediaService:
                     str(child_key),
                 )
                 if isinstance(child_value, str) and _looks_like_card_page_url(child_value, str(child_key)):
-                    page_candidates.append(child_value)
+                    page_candidates.append((child_value, str(child_key)))
             if not existing_local_page:
-                for candidate in page_candidates:
+                for candidate in _sort_card_page_candidates(page_candidates):
                     local_page = await MediaService._cache_card_page_url(
                         db,
                         candidate,

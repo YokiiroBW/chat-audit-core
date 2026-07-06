@@ -51,6 +51,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "打开卡片网页" in page_bundle
     assert "json-card[href]" in page_bundle
     assert "normalizeCardUrl" in page_bundle
+    assert "pickPreferredCardPageUrl" in page_bundle
+    assert "isQqMiniappShellUrl" in page_bundle
     assert "local_page" in page_bundle
     assert "originalUrl" in page_bundle
     assert "decodeHtmlEntities" in page_bundle

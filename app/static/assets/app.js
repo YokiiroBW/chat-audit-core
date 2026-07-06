@@ -1628,6 +1628,79 @@
       return `https://${url}`;
     };
 
+    const cardPageUrlPriority = {
+      qqdocurl: 0,
+      docurl: 0,
+      weburl: 1,
+      webpageurl: 1,
+      targeturl: 2,
+      jumpurl: 2,
+      shareurl: 3,
+      pageurl: 3,
+      contenturl: 3,
+      link: 4,
+      url: 5,
+    };
+
+    const normalizeCardFieldKey = (key) => String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const isQqMiniappShellUrl = (url) => {
+      const normalized = normalizeCardUrl(url || '');
+      if (!normalized || isLocalPath(normalized)) return false;
+      try {
+        const parsed = new URL(normalized, window.location.origin);
+        const host = parsed.hostname.toLowerCase();
+        const path = parsed.pathname.toLowerCase();
+        return ['m.q.qq.com', 'q.qq.com'].includes(host) && (path.startsWith('/a/s/') || path.includes('miniapp'));
+      } catch {
+        return false;
+      }
+    };
+
+    const collectCardPageUrls = (value, key = '', results = []) => {
+      if (!value) return results;
+      if (typeof value === 'string') {
+        const normalizedKey = normalizeCardFieldKey(key);
+        if (Object.prototype.hasOwnProperty.call(cardPageUrlPriority, normalizedKey)) {
+          const normalizedUrl = normalizeCardUrl(value);
+          if (normalizedUrl && !isLocalPath(normalizedUrl) && !/\.(png|jpe?g|gif|webp|bmp|svg|mp[34]|m4a|wav|ogg|silk|amr|mov|mkv|avi)([?#].*)?$/i.test(normalizedUrl)) {
+            results.push({ url: normalizedUrl, key: normalizedKey });
+          }
+        }
+        return results;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((item) => collectCardPageUrls(item, key, results));
+        return results;
+      }
+      if (typeof value === 'object') {
+        Object.entries(value).forEach(([childKey, childValue]) => collectCardPageUrls(childValue, childKey, results));
+      }
+      return results;
+    };
+
+    const pickPreferredCardPageUrl = (...sources) => {
+      const seen = new Set();
+      const candidates = [];
+      sources.forEach((source) => {
+        collectCardPageUrls(source).forEach((candidate) => {
+          if (seen.has(candidate.url)) return;
+          seen.add(candidate.url);
+          candidates.push(candidate);
+        });
+      });
+      candidates.sort((left, right) => {
+        const leftShell = isQqMiniappShellUrl(left.url) ? 1 : 0;
+        const rightShell = isQqMiniappShellUrl(right.url) ? 1 : 0;
+        if (leftShell !== rightShell) return leftShell - rightShell;
+        const leftKey = cardPageUrlPriority[left.key] ?? 9;
+        const rightKey = cardPageUrlPriority[right.key] ?? 9;
+        if (leftKey !== rightKey) return leftKey - rightKey;
+        return left.url.length - right.url.length;
+      });
+      return candidates[0] ? candidates[0].url : '';
+    };
+
     const renderCQJsonCard = (container, data) => {
       let payload = null;
       try {
@@ -1639,11 +1712,13 @@
       const detail = payload.meta && (payload.meta.detail_1 || Object.values(payload.meta)[0]);
       const title = detail && detail.title ? detail.title : payload.prompt || payload.app || 'JSON 卡片';
       const desc = detail && detail.desc ? detail.desc : payload.prompt || '';
-      const url = detail && (detail.qqdocurl || detail.url);
+      const url = pickPreferredCardPageUrl(detail, payload);
       const localPage = detail && detail.local_page;
       const preview = detail && (detail.preview || detail.icon);
 
-      const cleanUrl = normalizeCardUrl(localPage || url || '');
+      const hasMiniappShell = collectCardPageUrls(detail || payload).some((candidate) => isQqMiniappShellUrl(candidate.url));
+      const shouldPreferDirectUrl = url && hasMiniappShell && !isQqMiniappShellUrl(url);
+      const cleanUrl = normalizeCardUrl((shouldPreferDirectUrl ? url : localPage) || url || '');
       const originalUrl = normalizeCardUrl(url || '');
       const card = document.createElement(cleanUrl ? 'a' : 'div');
       card.className = 'json-card';

@@ -261,6 +261,44 @@ async def test_rewrite_cq_json_card_caches_page_snapshot(db_session, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rewrite_cq_json_card_prefers_website_url_over_qq_miniapp_shell(db_session, tmp_path):
+    client = StubAsyncClient(
+        {
+            "http://media.local/preview.jpg": b"preview bytes",
+            "https://b23.tv/example": b"<html><title>bilibili</title></html>",
+            "https://m.q.qq.com/a/s/miniapp": b"<html><title>miniapp shell</title></html>",
+        }
+    )
+    card = {
+        "meta": {
+            "detail_1": {
+                "title": "Bilibili",
+                "preview": "http://media.local/preview.jpg",
+                "url": "m.q.qq.com/a/s/miniapp",
+                "qqdocurl": "https://b23.tv/example",
+            }
+        }
+    }
+    raw = f"[CQ:json,data={json.dumps(card, ensure_ascii=False).replace(',', '&#44;')}]"
+
+    rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+        db_session,
+        raw_message=raw,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+    payload = json.loads(html.unescape(rewritten.removeprefix("[CQ:json,data=").removesuffix("]")))
+    detail = payload["meta"]["detail_1"]
+
+    assert "https://b23.tv/example" in client.requested_urls
+    assert "https://m.q.qq.com/a/s/miniapp" not in client.requested_urls
+    assert detail["url"] == "m.q.qq.com/a/s/miniapp"
+    assert detail["qqdocurl"] == "https://b23.tv/example"
+    assert detail["local_page"].startswith("/static/storage/")
+
+
+@pytest.mark.asyncio
 async def test_rewrite_cq_json_card_keeps_url_when_snapshot_fails(db_session, tmp_path):
     client = StubAsyncClient({"http://media.local/preview.jpg": b"preview bytes"})
     card = {"meta": {"detail_1": {"title": "Card", "preview": "http://media.local/preview.jpg", "url": "https://example.com/missing"}}}
