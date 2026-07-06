@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.wechat_pc import normalize_wechat_event
 from app.config import Settings, get_settings
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
+from app.metrics import metrics_registry
 from app.models import AdminUser, Message, RobotMessage, SchemaMigration
 from app.schemas import (
     AdapterCreateRequest,
@@ -234,7 +235,12 @@ def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Setti
     bucket = [timestamp for timestamp in _RATE_LIMIT_BUCKETS.get(key, []) if now - timestamp < 60]
     if len(bucket) >= limit:
         _RATE_LIMIT_BUCKETS[key] = bucket
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="high risk operation rate limit exceeded")
+        metrics_registry.record_rate_limit_exceeded(action=action, actor=_actor(request))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded for {action}: max {limit} requests per minute",
+            headers={"Retry-After": "60"},
+        )
     bucket.append(now)
     _RATE_LIMIT_BUCKETS[key] = bucket
 

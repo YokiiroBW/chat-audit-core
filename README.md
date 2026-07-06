@@ -332,6 +332,14 @@ $env:DATABASE_URL='sqlite+aiosqlite:///./data/chat_audit.sqlite3'
 GET /api/system/migrations
 ```
 
+## 高风险操作限流
+
+`HIGH_RISK_RATE_LIMIT_PER_MINUTE` 控制高风险写入/维护接口的每分钟请求次数，默认值为 `10`。设置为 `0` 或负数可关闭该限制。
+
+当前受限操作包括：适配器创建/更新/删除、手动备份、管理员令牌创建/轮换、管理员用户与会话管理、媒体回填、离线修复、导入写入等会改变数据或触发批处理的接口。
+
+触发限流时接口返回 `HTTP 429`，响应头包含 `Retry-After: 60`，前端会提示稍后重试。`/metrics` 会导出 `chat_audit_rate_limit_exceeded_total{action,actor}`，可用于 Grafana/Prometheus 监控高风险操作的限流频率。
+
 ## Forgejo
 
 局域网仓库：

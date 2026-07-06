@@ -19,6 +19,7 @@ class MetricsRegistry:
         self._http_duration_sum: defaultdict[tuple[str, str], float] = defaultdict(float)
         self._http_duration_count: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._media_downloads: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._rate_limit_exceeded: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._websocket_connections = 0
 
     def record_http_request(self, *, method: str, endpoint: str, status_code: int, duration_seconds: float) -> None:
@@ -30,6 +31,10 @@ class MetricsRegistry:
     def record_media_download(self, *, media_type: str, status: str) -> None:
         with self._lock:
             self._media_downloads[(media_type, status)] += 1
+
+    def record_rate_limit_exceeded(self, *, action: str, actor: str) -> None:
+        with self._lock:
+            self._rate_limit_exceeded[(action, actor)] += 1
 
     def websocket_connected(self) -> None:
         with self._lock:
@@ -45,6 +50,7 @@ class MetricsRegistry:
             duration_sum = dict(self._http_duration_sum)
             duration_count = dict(self._http_duration_count)
             media_downloads = dict(self._media_downloads)
+            rate_limit_exceeded = dict(self._rate_limit_exceeded)
             websocket_connections = self._websocket_connections
 
         lines = [
@@ -75,6 +81,15 @@ class MetricsRegistry:
         )
         for (media_type, status), value in sorted(media_downloads.items()):
             lines.append(f"chat_audit_media_download_total{_labels(media_type=media_type, status=status)} {value}")
+
+        lines.extend(
+            [
+                "# HELP chat_audit_rate_limit_exceeded_total Rate limit exceeded events.",
+                "# TYPE chat_audit_rate_limit_exceeded_total counter",
+            ]
+        )
+        for (action, actor), value in sorted(rate_limit_exceeded.items()):
+            lines.append(f"chat_audit_rate_limit_exceeded_total{_labels(action=action, actor=actor)} {value}")
         return "\n".join(lines) + "\n"
 
 

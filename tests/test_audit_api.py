@@ -99,6 +99,8 @@ async def test_high_risk_rate_limit_blocks_repeated_operation(db_session):
 
     assert first.status_code == 204
     assert second.status_code == 429
+    assert second.headers["Retry-After"] == "60"
+    assert "adapter.delete" in second.json()["detail"]
 
 
 @pytest.mark.asyncio
