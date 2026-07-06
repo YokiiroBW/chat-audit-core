@@ -363,7 +363,7 @@ def test_create_app_accepts_role_tokens_in_production(tmp_path):
     assert app.title == "chat-audit-core"
 
 
-def test_create_app_rejects_sqlite_database_in_production(tmp_path):
+def test_create_app_accepts_sqlite_database_in_production(tmp_path):
     settings = Settings(
         app_env="production",
         app_secret_key="strong-production-secret",
@@ -376,10 +376,9 @@ def test_create_app_rejects_sqlite_database_in_production(tmp_path):
     )
     engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
 
-    import pytest
+    app = create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
 
-    with pytest.raises(ValueError, match="DATABASE_URL"):
-        create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+    assert app.title == "chat-audit-core"
 
 
 def test_create_app_rejects_default_instance_id_in_production(tmp_path):

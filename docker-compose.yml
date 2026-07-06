@@ -1,30 +1,10 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: chat-audit-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} && psql -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'SELECT 1'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: chat-audit-core
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       APP_NAME: chat-audit-core
       APP_ENV: production
@@ -35,7 +15,7 @@ services:
       SYSTEM_INSTANCE_ID: ${SYSTEM_INSTANCE_ID}
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
       ADMIN_API_TOKENS: ${ADMIN_API_TOKENS:-}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/chat_audit.sqlite3}
       STORAGE_ROOT: /app/data/storage
       BACKUP_ROOT: /app/data/backups
       PUBLIC_STORAGE_PREFIX: /static/storage
@@ -53,8 +33,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data/storage:/app/data/storage
-      - ./data/backups:/app/data/backups
+      - ./data:/app/data
     networks:
       - default
       - qqbot_astrbot_network
@@ -64,9 +43,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-
-volumes:
-  postgres_data:
 
 networks:
   qqbot_astrbot_network:

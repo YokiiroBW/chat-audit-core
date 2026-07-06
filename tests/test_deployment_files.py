@@ -54,20 +54,16 @@ def test_requirements_include_structured_logging_dependency():
     assert default_requirements.strip() == "-r requirements-dev.txt"
 
 
-def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
+def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 
     services = compose["services"]
-    assert set(services) == {"app", "postgres"}
-    assert services["app"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert set(services) == {"app"}
     assert "8000:8000" in services["app"]["ports"]
-    assert "./data/storage:/app/data/storage" in services["app"]["volumes"]
-    assert "./data/backups:/app/data/backups" in services["app"]["volumes"]
+    assert "./data:/app/data" in services["app"]["volumes"]
     assert services["app"]["networks"] == ["default", "qqbot_astrbot_network"]
-    assert "networks" not in services["postgres"]
     assert compose["networks"]["qqbot_astrbot_network"] == {"external": True}
-    assert services["app"]["environment"]["DATABASE_URL"] == "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
-    assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD}"
+    assert services["app"]["environment"]["DATABASE_URL"] == "${DATABASE_URL:-sqlite+aiosqlite:////app/data/chat_audit.sqlite3}"
     assert services["app"]["environment"]["APP_SECRET_KEY"] == "${APP_SECRET_KEY}"
     assert services["app"]["environment"]["SYSTEM_INSTANCE_ID"] == "${SYSTEM_INSTANCE_ID}"
     assert services["app"]["environment"]["ADMIN_API_TOKEN"] == "${ADMIN_API_TOKEN}"
@@ -81,14 +77,6 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert services["app"]["environment"]["MEDIA_TRANSCODE_VIDEO_EXT"] == "mp4"
     assert services["app"]["environment"]["AUTO_BACKUP_CRON"] == "0 3 * * *"
     assert services["app"]["environment"]["AUTO_BACKUP_KEEP_LATEST"] == 7
-    assert "healthcheck" in services["postgres"]
-    assert "postgres_data" in compose["volumes"]
-
-    postgres_healthcheck = " ".join(services["postgres"]["healthcheck"]["test"])
-    assert "pg_isready" in postgres_healthcheck
-    assert "psql" in postgres_healthcheck
-    assert "SELECT 1" in postgres_healthcheck
-    assert services["postgres"]["healthcheck"]["start_period"] == "10s"
 
     app_healthcheck = " ".join(services["app"]["healthcheck"]["test"])
     assert "python" in app_healthcheck
@@ -98,6 +86,24 @@ def test_docker_compose_defines_app_postgres_volumes_and_healthcheck():
     assert "curl" not in app_healthcheck
     assert services["app"]["healthcheck"]["timeout"] == "10s"
     assert services["app"]["healthcheck"]["retries"] == 5
+
+
+def test_optional_postgres_compose_override_defines_database_service():
+    compose = yaml.safe_load((ROOT / "docker-compose.postgres.yml").read_text(encoding="utf-8"))
+
+    services = compose["services"]
+    assert set(services) == {"app", "postgres"}
+    assert services["app"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert services["app"]["environment"]["DATABASE_URL"] == "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+    assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD}"
+    assert "healthcheck" in services["postgres"]
+    assert "postgres_data" in compose["volumes"]
+
+    postgres_healthcheck = " ".join(services["postgres"]["healthcheck"]["test"])
+    assert "pg_isready" in postgres_healthcheck
+    assert "psql" in postgres_healthcheck
+    assert "SELECT 1" in postgres_healthcheck
+    assert services["postgres"]["healthcheck"]["start_period"] == "10s"
 
 
 def test_optional_ffmpeg_compose_override_uses_ffmpeg_dockerfile():
