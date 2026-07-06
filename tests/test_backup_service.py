@@ -274,6 +274,15 @@ def test_backup_service_calculates_tomorrow_when_daily_cron_time_has_passed():
     assert next_run == __import__("datetime").datetime(2026, 7, 4, 3, 15, 0)
 
 
+def test_backup_service_normalizes_aware_cron_input_to_utc():
+    datetime = __import__("datetime")
+    now = datetime.datetime(2026, 7, 3, 11, 0, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+
+    next_run = BackupService.next_run_from_cron("15 3 * * *", now)
+
+    assert next_run == datetime.datetime(2026, 7, 3, 3, 15, 0)
+
+
 @pytest.mark.asyncio
 async def test_backup_service_export_includes_package_checksum(db_session):
     await MessageService.process_incoming_message(

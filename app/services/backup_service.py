@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MediaAsset, Message, RobotMessage, RoomProfile, UserProfile
-from app.time_utils import utc_now
+from app.time_utils import format_utc_z, to_utc_naive, utc_now
 
 BACKUP_SCHEMA = "chat-audit-core.backup.v1"
 BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
@@ -262,7 +262,7 @@ class BackupService:
         package = {
             "manifest": {
                 "schema": BACKUP_SCHEMA,
-                "created_at": utc_now().isoformat(timespec="seconds") + "Z",
+                "created_at": format_utc_z(utc_now()),
                 "filters": {
                     "robot_id": robot_id,
                     "room_id": room_id,
@@ -338,7 +338,7 @@ class BackupService:
 
     @staticmethod
     def next_run_from_cron(cron_expr: str, now: dt.datetime | None = None) -> dt.datetime:
-        now = (now or utc_now()).replace(microsecond=0)
+        now = to_utc_naive(now or utc_now()).replace(microsecond=0)
         parts = cron_expr.split()
         if len(parts) != 5:
             raise ValueError(f"unsupported cron expression: {cron_expr!r}")
@@ -628,7 +628,7 @@ class BackupService:
         backup_root.mkdir(parents=True, exist_ok=True)
         log_path = backup_root / "failures.log"
         record = {
-            "created_at": utc_now().isoformat(timespec="seconds") + "Z",
+            "created_at": format_utc_z(utc_now()),
             "event": event,
             "error": error,
             "context": context or {},
