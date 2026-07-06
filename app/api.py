@@ -1374,9 +1374,29 @@ async def export_data(
     room_id: str | None = Query(default=None, min_length=1),
     start_timestamp: int | None = Query(default=None),
     end_timestamp: int | None = Query(default=None),
+    compressed: bool = Query(default=False),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ):
+    if compressed:
+        payload = await BackupService.export_package_compressed(
+            db,
+            robot_id=robot_id,
+            room_id=room_id,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            storage_root=settings.storage_root,
+            public_storage_prefix=settings.public_storage_prefix,
+            max_media_bytes=settings.media_max_bytes,
+            system_id=settings.system_instance_id,
+            signing_key=settings.app_secret_key,
+        )
+        filename = f"chat-audit-export-{int(time.time())}.json.gz"
+        return Response(
+            content=payload,
+            media_type="application/gzip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     return await BackupService.export_package(
         db,
         robot_id=robot_id,
@@ -1391,12 +1411,20 @@ async def export_data(
     )
 
 
+async def _read_import_package_request(request: Request) -> dict[str, Any]:
+    try:
+        return BackupService.decode_package_bytes(await request.body())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid import package: {exc}") from exc
+
+
 @router.post("/import/validate", response_model=ImportValidationResponse)
 async def validate_import_data(
-    package: dict,
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> ImportValidationResponse:
+    package = await _read_import_package_request(request)
     report = await BackupService.preview_import_package(
         db,
         package,
@@ -1409,7 +1437,6 @@ async def validate_import_data(
 
 @router.post("/import", response_model=ImportResultResponse)
 async def import_data(
-    package: dict,
     request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
@@ -1417,6 +1444,7 @@ async def import_data(
 ) -> ImportResultResponse:
     action = "import.run"
     _enforce_high_risk_rate_limit(request, action, settings)
+    package = await _read_import_package_request(request)
     try:
         result = await BackupService.import_package(
             db,

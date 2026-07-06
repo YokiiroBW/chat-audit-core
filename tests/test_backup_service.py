@@ -1,3 +1,6 @@
+import gzip
+import json
+
 from httpx import ASGITransport, AsyncClient
 import pytest
 
@@ -217,6 +220,83 @@ async def test_export_import_api_roundtrip(db_session):
     assert export_response.json()["messages"][0]["raw_message"] == "api export"
     assert export_response.json()["manifest"]["source"]["system"] == "chat-audit-core"
     assert export_response.json()["manifest"]["signature"]["algorithm"] == "hmac-sha256"
+    assert import_response.status_code == 200
+    assert import_response.json() == {"messages": 1, "robot_messages": 1, "media_assets": 0}
+
+
+@pytest.mark.asyncio
+async def test_export_compressed(db_session):
+    for index in range(10):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-compress",
+            "qq",
+            {
+                "room_id": "room-compress",
+                "message_type": "group",
+                "sender_id": f"user-{index}",
+                "nickname": "Compress User",
+                "raw_message": "compressible payload " * 20,
+                "timestamp": 1000 + index,
+            },
+        )
+
+    package = await BackupService.export_package(db_session, robot_id="robot-compress")
+    compressed = await BackupService.export_package_compressed(db_session, robot_id="robot-compress")
+    raw = BackupService.package_to_json_bytes(package)
+
+    assert compressed.startswith(b"\x1f\x8b")
+    assert len(compressed) < len(raw)
+    assert json.loads(gzip.decompress(compressed).decode("utf-8"))["manifest"]["counts"]["messages"] == 10
+    assert BackupService.decode_package_bytes(compressed)["manifest"]["counts"]["messages"] == 10
+
+
+@pytest.mark.asyncio
+async def test_export_import_api_accepts_gzip_package(db_session):
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-api-gzip",
+        "qq",
+        {
+            "room_id": "room-api-gzip",
+            "message_type": "group",
+            "sender_id": "user-api-gzip",
+            "nickname": "API Gzip User",
+            "raw_message": "api gzip export",
+            "timestamp": 654,
+        },
+    )
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            export_response = await client.get(
+                "/api/export",
+                params={"robot_id": "robot-api-gzip", "room_id": "room-api-gzip", "compressed": "true"},
+            )
+            package = BackupService.decode_package_bytes(export_response.content)
+            validate_response = await client.post(
+                "/api/import/validate",
+                content=export_response.content,
+                headers={"Content-Type": "application/gzip"},
+            )
+            import_response = await client.post(
+                "/api/import",
+                content=export_response.content,
+                headers={"Content-Type": "application/gzip"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert export_response.status_code == 200
+    assert export_response.headers["content-type"] == "application/gzip"
+    assert "json.gz" in export_response.headers["content-disposition"]
+    assert package["messages"][0]["raw_message"] == "api gzip export"
+    assert validate_response.status_code == 200
+    assert validate_response.json()["valid"] is True
     assert import_response.status_code == 200
     assert import_response.json() == {"messages": 1, "robot_messages": 1, "media_assets": 0}
 

@@ -135,12 +135,15 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "缺失原因汇总" in page_bundle
     assert "exportRobotId" in page_bundle
     assert "downloadExportPackage" in page_bundle
+    assert "requestBlob" in page_bundle
+    assert "compressed', 'true'" in page_bundle
     assert "/api/export" in page_bundle
     assert "robot_id" in page_bundle
     assert "room_id" in page_bundle
     assert "start_timestamp" in page_bundle
     assert "end_timestamp" in page_bundle
     assert "chat-audit-export" in page_bundle
+    assert ".json.gz" in page_bundle
     assert "导入 JSON" in page_bundle
     assert "openImportDialog" in page_bundle
     assert "importModal" in page_bundle

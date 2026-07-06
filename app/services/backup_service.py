@@ -2,6 +2,7 @@ import asyncio
 import base64
 import contextlib
 import datetime as dt
+import gzip
 import hashlib
 import hmac
 import json
@@ -294,6 +295,48 @@ class BackupService:
             BackupService.attach_package_checksum(package)
         return package
 
+    @staticmethod
+    def package_to_json_bytes(package: dict[str, Any]) -> bytes:
+        return json.dumps(package, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    @staticmethod
+    def compress_package(package: dict[str, Any], compresslevel: int = 6) -> bytes:
+        return gzip.compress(BackupService.package_to_json_bytes(package), compresslevel=compresslevel)
+
+    @staticmethod
+    def decode_package_bytes(data: bytes) -> dict[str, Any]:
+        payload = gzip.decompress(data) if data.startswith(b"\x1f\x8b") else data
+        package = json.loads(payload.decode("utf-8"))
+        if not isinstance(package, dict):
+            raise ValueError("backup package must be a JSON object")
+        return package
+
+    @staticmethod
+    async def export_package_compressed(
+        db: AsyncSession,
+        robot_id: str | None = None,
+        room_id: str | None = None,
+        start_timestamp: int | None = None,
+        end_timestamp: int | None = None,
+        storage_root: Path | None = None,
+        public_storage_prefix: str = "/static/storage",
+        max_media_bytes: int | None = None,
+        system_id: str | None = None,
+        signing_key: str | None = None,
+    ) -> bytes:
+        package = await BackupService.export_package(
+            db,
+            robot_id=robot_id,
+            room_id=room_id,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            storage_root=storage_root,
+            public_storage_prefix=public_storage_prefix,
+            max_media_bytes=max_media_bytes,
+            system_id=system_id,
+            signing_key=signing_key,
+        )
+        return BackupService.compress_package(package)
 
     @staticmethod
     async def write_auto_backup_file(

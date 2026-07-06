@@ -121,6 +121,25 @@
       return await response.json();
     };
 
+    const requestBlob = async (url, options = {}) => {
+      const method = options.method || 'GET';
+      const withAuth = {
+        ...options,
+        headers: csrfHeaders(method, authHeaders(options.headers || {})),
+      };
+      let response = await fetch(url, withAuth);
+      if (response.status === 401 && promptForAdminApiToken()) {
+        response = await fetch(url, { ...options, headers: csrfHeaders(method, authHeaders(options.headers || {})) });
+      }
+      if (!response.ok) {
+        const message = await responseErrorMessage(response, url);
+        pushUiLog(`${method} ${url} failed: ${message}`, 'error');
+        throw new Error(message);
+      }
+      pushUiLog(`${method} ${url} · ${response.status}`);
+      return await response.blob();
+    };
+
     const apiGet = (url) => requestJson(url);
     const apiSend = (url, method, body = null) => requestJson(url, {
       method,
@@ -2503,12 +2522,12 @@
       ].forEach(([key, value]) => {
         if (text(value).trim()) params.append(key, text(value).trim());
       });
-      const packageJson = await requestJson(`/api/export?${params.toString()}`);
-      const blob = new Blob([JSON.stringify(packageJson, null, 2)], { type: 'application/json;charset=utf-8' });
+      params.set('compressed', 'true');
+      const blob = await requestBlob(`/api/export?${params.toString()}`);
       const link = document.createElement('a');
       const objectUrl = URL.createObjectURL(blob);
       link.href = objectUrl;
-      link.download = `chat-audit-export-${Date.now()}.json`;
+      link.download = `chat-audit-export-${Date.now()}.json.gz`;
       document.body.appendChild(link);
       link.click();
       link.remove();
