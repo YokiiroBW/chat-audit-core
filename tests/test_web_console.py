@@ -8,14 +8,14 @@ from app.main import app
 async def test_web_console_index_serves_three_column_dashboard():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/")
-        css_response = await client.get("/assets/app.css")
-        js_response = await client.get("/assets/app.js")
+        css_response = await client.get("/assets/app.min.css")
+        js_response = await client.get("/assets/app.min.js")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     html = response.text
-    assert '<link rel="stylesheet" href="/assets/app.css" />' in html
-    assert '<script src="/assets/app.js" defer></script>' in html
+    assert '<link rel="stylesheet" href="/assets/app.min.css" />' in html
+    assert '<script src="/assets/app.min.js" defer></script>' in html
 
     assert css_response.status_code == 200
     assert js_response.status_code == 200
@@ -64,7 +64,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderForwardCard" in page_bundle
     assert "/api/forward" in page_bundle
     assert "forward-toggle" in page_bundle
-    assert ".forward-card.expanded > .forward-toggle" in page_bundle
+    assert ".forward-card.expanded>.forward-toggle" in page_bundle
     assert "renderLocalMediaParts" in page_bundle
     assert "renderLocalMediaAsset" in page_bundle
     assert "renderAvatar" in page_bundle

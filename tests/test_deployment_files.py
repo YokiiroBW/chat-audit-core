@@ -127,6 +127,20 @@ def test_dockerignore_excludes_runtime_and_secret_files():
     assert ".git" in dockerignore
 
 
+def test_static_assets_include_minified_frontend_bundle():
+    source_js = ROOT / "app/static/assets/app.js"
+    source_css = ROOT / "app/static/assets/app.css"
+    min_js = ROOT / "app/static/assets/app.min.js"
+    min_css = ROOT / "app/static/assets/app.min.css"
+    minifier = ROOT / "scripts/minify_static_assets.py"
+
+    assert minifier.exists()
+    assert min_js.exists()
+    assert min_css.exists()
+    assert min_js.stat().st_size < source_js.stat().st_size
+    assert min_css.stat().st_size < source_css.stat().st_size
+
+
 def test_wechat_tray_packaging_scripts_are_present_and_headless():
     build_script = (ROOT / "scripts/build_wechat_tray.ps1").read_text(encoding="utf-8")
     installer_script = (ROOT / "scripts/build_wechat_tray_installer.ps1").read_text(encoding="utf-8")
