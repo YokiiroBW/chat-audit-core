@@ -156,6 +156,23 @@ def test_disaster_recovery_document_covers_restore_drill_and_targets():
     assert "DISASTER_RECOVERY.md" in readme
 
 
+def test_contributing_and_architecture_documents_cover_onboarding():
+    contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "开发环境" in contributing
+    assert "pytest tests -q" in contributing
+    assert "scripts\\minify_static_assets.py" in contributing
+    assert "提交信息使用中文" in contributing
+    assert "数据模型" in architecture
+    assert "消息入库流程" in architecture
+    assert "离线可用性" in architecture
+    assert "CI 使用 `.forgejo/workflows/ci.yml`" in architecture
+    assert "CONTRIBUTING.md" in readme
+    assert "ARCHITECTURE.md" in readme
+
+
 def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     workflow = yaml.safe_load((ROOT / ".forgejo/workflows/ci.yml").read_text(encoding="utf-8"))
 

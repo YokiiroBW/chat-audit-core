@@ -10,6 +10,8 @@
 - 游标滚动加载：聊天历史使用 `before_timestamp + limit` 向上滚动加载，不做传统页码分页。
 - 第一阶段优先打通 QQ/NapCat OneBot 11 反向 WebSocket 存储管道，微信作为第二阶段兼容扩展。
 
+开发贡献见 `CONTRIBUTING.md`，架构说明见 `ARCHITECTURE.md`，灾难恢复见 `DISASTER_RECOVERY.md`。
+
 ## 已落地能力
 
 - FastAPI 应用工厂与启动初始化。
