@@ -196,6 +196,7 @@ class MediaBackfillService:
         forward_payload_loader: ForwardPayloadLoader | None = None,
         finalize_unavailable: bool = False,
         batch_size: int = 50,
+        forward_depth: int = 3,
     ) -> MediaBackfillReport:
         async with MediaBackfillService._backfill_lock:
             return await MediaBackfillService._backfill_historical_media_locked(
@@ -210,6 +211,7 @@ class MediaBackfillService:
                 forward_payload_loader=forward_payload_loader,
                 finalize_unavailable=finalize_unavailable,
                 batch_size=batch_size,
+                forward_depth=forward_depth,
             )
 
     @staticmethod
@@ -226,6 +228,7 @@ class MediaBackfillService:
         forward_payload_loader: ForwardPayloadLoader | None,
         finalize_unavailable: bool,
         batch_size: int,
+        forward_depth: int,
     ) -> MediaBackfillReport:
         report = MediaBackfillReport()
         normalized_batch_size = max(1, batch_size)
@@ -283,6 +286,7 @@ class MediaBackfillService:
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
                     unavailable_placeholders=finalize_unavailable,
+                    forward_depth=forward_depth,
                 )
             if before_forward_ids and finalize_unavailable:
                 rewritten = await MediaBackfillService._finalize_unavailable_forwards(

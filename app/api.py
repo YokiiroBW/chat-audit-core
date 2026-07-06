@@ -1200,6 +1200,7 @@ async def backfill_media(
                 max_bytes=settings.media_max_bytes,
                 forward_payload_loader=load_forward,
                 finalize_unavailable=finalize_unavailable,
+                forward_depth=settings.forward_cache_max_depth,
             )
     except Exception as exc:
         if not dry_run:
@@ -1320,6 +1321,7 @@ async def get_forward_message(
             storage_root=settings.storage_root,
             public_prefix=settings.public_storage_prefix,
             max_bytes=settings.media_max_bytes,
+            forward_depth=settings.forward_cache_max_depth,
         )
         localized = await MediaService.cache_nested_forward_payloads(
             db,

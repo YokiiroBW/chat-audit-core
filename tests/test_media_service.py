@@ -588,3 +588,43 @@ async def test_cache_cq_forward_payloads_recursively_caches_nested_forward(db_se
     assert nested_match
     assert (tmp_path / nested_match.group(1).rsplit("/", 1)[-1]).exists()
     assert seen == ["outer-forward", "inner-forward"]
+
+
+@pytest.mark.asyncio
+async def test_cache_cq_forward_payloads_stops_at_configured_depth(db_session, tmp_path):
+    seen: list[str] = []
+
+    async def load_forward(forward_id):
+        seen.append(forward_id)
+        if forward_id == "outer-forward":
+            return {
+                "status": "ok",
+                "data": {
+                    "messages": [
+                        {
+                            "sender": {"nickname": "Outer"},
+                            "raw_message": "[CQ:forward,id=inner-forward]",
+                        }
+                    ]
+                },
+            }
+        raise AssertionError(forward_id)
+
+    rewritten = await MediaService.cache_cq_forward_payloads(
+        db_session,
+        local_message="[CQ:forward,id=outer-forward]",
+        forward_loader=load_forward,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        forward_depth=1,
+    )
+
+    outer_match = re.search(r"local=(/static/storage/[^,\]]+)", rewritten)
+    assert outer_match
+    outer_path = tmp_path / outer_match.group(1).rsplit("/", 1)[-1]
+    outer_payload = json.loads(outer_path.read_text(encoding="utf-8"))
+    nested_message = outer_payload["data"]["messages"][0]["raw_message"]
+
+    assert "[CQ:forward,id=inner-forward]" in nested_message
+    assert "local=" not in nested_message
+    assert seen == ["outer-forward"]

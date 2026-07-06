@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     media_transcode_timeout_seconds: int = 60
     media_transcode_voice_ext: str = "mp3"
     media_transcode_video_ext: str = "mp4"
+    forward_cache_max_depth: int = 3
     high_risk_rate_limit_per_minute: int = 10
     csrf_enabled: bool = True
     csrf_secure_cookie: bool = False

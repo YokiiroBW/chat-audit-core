@@ -92,6 +92,7 @@ async def _hydrate_forward_payloads(robot_id: str, connection_id: str, msg_hash:
                 public_prefix=settings.public_storage_prefix,
                 max_bytes=settings.media_max_bytes,
                 allowed_media_types=decision.allowed_media_types,
+                forward_depth=settings.forward_cache_max_depth,
             )
             if updated == local_message:
                 return

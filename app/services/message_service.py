@@ -101,6 +101,7 @@ class MessageService:
                         storage_root=media_storage_root,
                         public_prefix=media_public_prefix,
                         allowed_media_types=capture_decision.allowed_media_types,
+                        forward_depth=get_settings().forward_cache_max_depth,
                     )
 
             db.add(
