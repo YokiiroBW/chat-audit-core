@@ -180,38 +180,3 @@ def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     assert steps["Run tests"] == "python -m pytest tests -q"
     assert steps["Build Docker image"] == "docker build -t chat-audit-core:ci ."
 
-
-def test_wechat_tray_packaging_scripts_are_present_and_headless():
-    build_script = (ROOT / "scripts/build_wechat_tray.ps1").read_text(encoding="utf-8")
-    installer_script = (ROOT / "scripts/build_wechat_tray_installer.ps1").read_text(encoding="utf-8")
-    install_script = (ROOT / "scripts/install_wechat_tray_startup.ps1").read_text(encoding="utf-8")
-    uninstall_script = (ROOT / "scripts/uninstall_wechat_tray_startup.ps1").read_text(encoding="utf-8")
-    config_script = (ROOT / "scripts/write_wechat_tray_config.ps1").read_text(encoding="utf-8")
-    requirements = (ROOT / "wechat_tray_adapter/requirements.txt").read_text(encoding="utf-8")
-
-    assert "--noconsole" in build_script
-    assert "wechat_tray_adapter\\__main__.py" in build_script
-    assert "--add-data $WcfData" in build_script
-    assert "--hidden-import wcferry.client" in build_script
-    assert "--hidden-import pynng" in build_script
-    assert "wechat_tray_adapter.version" in build_script
-    assert "Get-FileHash -Algorithm SHA256" in build_script
-    assert "manifest.json" in build_script
-    assert "payload.zip" in installer_script
-    assert "ChatAuditWechatTraySetup.ps1" in installer_script
-    assert "self_extracting_powershell" in installer_script
-    assert "FromBase64String" in installer_script
-    assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in installer_script
-    assert "replace-with-operator-token" in installer_script
-    assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in install_script
-    assert "Set-ItemProperty" in install_script
-    assert "Remove-ItemProperty" in uninstall_script
-    assert "replace-with-operator-token" not in config_script
-    assert "CHAT_AUDIT_TOKEN" not in config_script
-    assert {"pystray", "Pillow", "wcferry", "pyinstaller"} <= set(requirements.splitlines())
-
-
-def test_wechat_tray_adapter_has_package_version():
-    version_file = (ROOT / "wechat_tray_adapter/version.py").read_text(encoding="utf-8")
-
-    assert '__version__ = "0.1.0"' in version_file

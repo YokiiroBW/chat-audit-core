@@ -343,17 +343,17 @@ async def test_offline_audit_and_repair_cover_profile_avatars(db_session, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_offline_repair_keeps_wechat_profile_platform(db_session, tmp_path):
+async def test_offline_repair_keeps_custom_profile_platform(db_session, tmp_path):
     await MessageService.process_incoming_message(
         db_session,
-        "wxid_123",
-        "wechat",
+        "custom-bot",
+        "custom",
         {
-            "room_id": "wx_room",
+            "room_id": "custom-room",
             "message_type": "private",
-            "sender_id": "wx_friend",
-            "nickname": "WeChat Friend",
-            "raw_message": "wechat profile",
+            "sender_id": "custom-user",
+            "nickname": "Custom Friend",
+            "raw_message": "custom profile",
             "timestamp": 1783000000,
         },
     )
@@ -363,14 +363,14 @@ async def test_offline_repair_keeps_wechat_profile_platform(db_session, tmp_path
         storage_root=tmp_path,
         public_storage_prefix="/static/storage",
     )
-    room_profile = await db_session.get(UserProfile, "wx_room")
-    sender_profile = await db_session.get(UserProfile, "wx_friend")
+    room_profile = await db_session.get(UserProfile, "custom-room")
+    sender_profile = await db_session.get(UserProfile, "custom-user")
 
     assert repair.repaired_profile_avatars == 2
     assert room_profile is not None
-    assert room_profile.platform == "wechat"
+    assert room_profile.platform == "custom"
     assert sender_profile is not None
-    assert sender_profile.platform == "wechat"
+    assert sender_profile.platform == "custom"
 
 
 @pytest.mark.asyncio

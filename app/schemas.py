@@ -36,7 +36,7 @@ class AdapterCreateRequest(BaseModel):
     )
 
     id: str = Field(min_length=1, max_length=64, description="Stable adapter id, usually the connector name or self_id.")
-    platform: str = Field(min_length=1, max_length=20, description="Source platform, for example qq or wechat.")
+    platform: str = Field(min_length=1, max_length=20, description="Source platform, for example qq or custom.")
     config_json: str | None = Field(default=None, description="Optional adapter configuration serialized as JSON.")
     status: str = Field(default="gray", min_length=1, max_length=20, description="Display/status flag: green, red, or gray.")
     current_robot_id: str | None = Field(default=None, max_length=64, description="Robot profile currently bound to this adapter.")
@@ -45,7 +45,7 @@ class AdapterCreateRequest(BaseModel):
 class AdapterUpdateRequest(BaseModel):
     """Partial adapter update payload."""
 
-    platform: str | None = Field(default=None, min_length=1, max_length=20, description="Source platform, for example qq or wechat.")
+    platform: str | None = Field(default=None, min_length=1, max_length=20, description="Source platform, for example qq or custom.")
     config_json: str | None = Field(default=None, description="Optional adapter configuration serialized as JSON.")
     status: str | None = Field(default=None, min_length=1, max_length=20, description="Display/status flag: green, red, or gray.")
     current_robot_id: str | None = Field(default=None, max_length=64, description="Robot profile currently bound to this adapter.")
@@ -331,7 +331,7 @@ class MessageIngestRequest(BaseModel):
     )
 
     robot_id: str = Field(min_length=1, max_length=64, description="Robot account id from whose perspective this message is captured.")
-    platform: str = Field(min_length=1, max_length=20, description="Source platform, for example qq or wechat.")
+    platform: str = Field(min_length=1, max_length=20, description="Source platform, for example qq or custom.")
     room_id: str = Field(min_length=1, max_length=64, description="Group id or private peer id.")
     message_type: str = Field(min_length=1, max_length=20, description="group or private.")
     sender_id: str = Field(min_length=1, max_length=64, description="Original sender id.")

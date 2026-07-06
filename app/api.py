@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.wechat_pc import normalize_wechat_event
 from app.config import Settings, get_settings
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
 from app.metrics import metrics_registry
@@ -807,7 +806,7 @@ async def get_runtime_status(settings: Settings = Depends(get_settings)) -> Runt
     response_model=AdapterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create an adapter",
-    description="Register a QQ/NapCat, WeChat, or custom adapter before it starts sending messages.",
+    description="Register a QQ/NapCat or custom adapter before it starts sending messages.",
     responses={409: {"description": "Adapter id already exists"}},
 )
 async def create_adapter(
@@ -1043,104 +1042,7 @@ async def ingest_message(
     )
 
 
-async def _process_wechat_event_payload(
-    payload: dict[str, Any],
-    db: AsyncSession,
-    settings: Settings,
-) -> MessageIngestResponse:
-    normalized = normalize_wechat_event(payload)
-    if normalized is None:
-        raise HTTPException(status_code=422, detail="unsupported wechat message event")
-
-    async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        msg_hash = await MessageService.process_incoming_message(
-            db,
-            robot_id=normalized.robot_id,
-            platform=normalized.platform,
-            msg_data=normalized.msg_data,
-            media_http_client=client,
-            media_storage_root=settings.storage_root,
-            media_public_prefix=settings.public_storage_prefix,
-        )
-
-    await BotProfileService.upsert_bot_profile(
-        db,
-        robot_id=normalized.robot_id,
-        platform=normalized.platform,
-        display_name=payload.get("robot_name") or payload.get("account_name"),
-    )
-    sender_avatar_path = await ProfilePlaceholderService.save_placeholder_avatar(
-        db,
-        profile_type="user",
-        profile_id=normalized.msg_data["sender_id"],
-        display_name=normalized.msg_data.get("nickname"),
-        storage_root=settings.storage_root,
-        public_prefix=settings.public_storage_prefix,
-    )
-    await UserProfileService.upsert_user_profile(
-        db,
-        user_id=normalized.msg_data["sender_id"],
-        platform=normalized.platform,
-        display_name=normalized.msg_data.get("nickname"),
-        avatar_path=sender_avatar_path,
-    )
-    if normalized.msg_data["message_type"] == "group":
-        room_avatar_path = await ProfilePlaceholderService.save_placeholder_avatar(
-            db,
-            profile_type="room",
-            profile_id=normalized.msg_data["room_id"],
-            display_name=payload.get("room_name") or payload.get("group_name"),
-            storage_root=settings.storage_root,
-            public_prefix=settings.public_storage_prefix,
-        )
-        await RoomProfileService.upsert_room_profile(
-            db,
-            room_id=normalized.msg_data["room_id"],
-            platform=normalized.platform,
-            display_name=payload.get("room_name") or payload.get("group_name"),
-            avatar_path=room_avatar_path,
-        )
-    return MessageIngestResponse(
-        msg_hash=msg_hash,
-        skipped=msg_hash is None,
-        skip_reason="capture_policy" if msg_hash is None else None,
-    )
-
-
-@router.post(
-    "/wechat/events",
-    response_model=MessageIngestResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Ingest a WeChat tray event",
-    description="Receive a raw event from the optional WeChat tray adapter and normalize it into the shared message store.",
-)
-async def ingest_wechat_event(
-    payload: dict[str, Any],
-    db: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
-    _: None = Depends(require_admin_role("operator", "admin")),
-) -> MessageIngestResponse:
-    return await _process_wechat_event_payload(payload, db, settings)
-
-
-@router.post(
-    "/receive_external_msg",
-    response_model=MessageIngestResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Ingest a generic external message",
-    description="Compatibility endpoint for third-party collectors that send WeChat-like event payloads.",
-)
-async def receive_external_message(
-    payload: dict[str, Any],
-    db: AsyncSession = Depends(get_db_session),
-    settings: Settings = Depends(get_settings),
-    _: None = Depends(require_admin_role("operator", "admin")),
-) -> MessageIngestResponse:
-    return await _process_wechat_event_payload(payload, db, settings)
-
-
 @router.post("/external/media", response_model=ExternalMediaUploadResponse, status_code=status.HTTP_201_CREATED)
-@router.post("/wechat/media", response_model=ExternalMediaUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_external_media(
     request: Request,
     db: AsyncSession = Depends(get_db_session),
