@@ -68,6 +68,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "imagePreviewModal" in page_bundle
     assert "openImagePreview" in page_bundle
     assert "media-image-button" in page_bundle
+    assert "bubble-media-only" in page_bundle
+    assert "finalizeMessageBubbleLayout" in page_bundle
+    assert "message-link" in page_bundle
+    assert "appendLinkedText" in page_bundle
     assert "media-missing" in page_bundle
     assert "renderMissingMediaChip" in page_bundle
     assert "plainMessagePreview" in page_bundle

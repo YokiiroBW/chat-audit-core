@@ -1325,6 +1325,18 @@
       border-top-left-radius: 8px;
       border-top-right-radius: 2px;
     }
+    .bubble.bubble-media-only {
+      width: fit-content;
+      max-width: min(520px, 100%);
+      padding: 8px;
+      line-height: 1;
+      white-space: normal;
+    }
+    .bubble.bubble-media-only .cq-parts {
+      display: grid;
+      width: fit-content;
+      max-width: 100%;
+    }
     .bubble.bubble-media-mixed {
       width: min(544px, 100%);
     }
@@ -1405,9 +1417,18 @@
       padding: 0;
       background: transparent;
       display: block;
+      width: fit-content;
+      max-width: 100%;
       cursor: zoom-in;
     }
-    .media-img { max-width: min(340px, 100%); border-radius: 6px; display: block; }
+    .media-img {
+      width: auto;
+      max-width: min(420px, 100%);
+      max-height: 720px;
+      object-fit: contain;
+      border-radius: 6px;
+      display: block;
+    }
     .media-video { max-width: min(420px, 100%); border-radius: 6px; display: block; }
     .media-file {
       display: inline-flex;
@@ -1480,6 +1501,18 @@
       white-space: normal;
     }
     .cq-text { white-space: pre-wrap; }
+    .message-link {
+      color: #2563eb;
+      font-weight: 700;
+      text-decoration: none;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .message-link:hover { text-decoration: underline; }
+    .message.mine .message-link {
+      color: #e0f2fe;
+      text-decoration-color: rgba(224, 242, 254, .72);
+    }
     .reply-card {
       width: min(520px, 100%);
       border-left: 3px solid #94a3b8;

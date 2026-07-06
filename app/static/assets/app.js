@@ -140,10 +140,52 @@
     const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
     const isRemoteUrl = (value) => /^https?:\/\//i.test(String(value || ''));
     const fileName = (value) => text(value).split('/').pop() || 'media';
+    const URL_TEXT_PATTERN = /((?:https?:\/\/|www\.)[^\s<>"']+)/ig;
+    const TRAILING_URL_PUNCTUATION = /[),.;:!?，。；：！？、）】》]+$/;
     const decodeHtmlEntities = (value) => {
       const textarea = document.createElement('textarea');
       textarea.innerHTML = value;
       return textarea.value;
+    };
+
+    const normalizeTextUrl = (url) => {
+      const value = String(url || '').trim();
+      if (!value) return '';
+      if (/^https?:\/\//i.test(value)) return value;
+      return `https://${value}`;
+    };
+
+    const appendLinkedText = (container, value, className = 'cq-text') => {
+      const source = String(value || '');
+      if (!source) return null;
+      const wrapper = document.createElement('span');
+      wrapper.className = className;
+      let cursor = 0;
+      let matched = false;
+      let match = null;
+      URL_TEXT_PATTERN.lastIndex = 0;
+      while ((match = URL_TEXT_PATTERN.exec(source)) !== null) {
+        matched = true;
+        const rawMatch = match[0];
+        const trailing = rawMatch.match(TRAILING_URL_PUNCTUATION)?.[0] || '';
+        const clean = trailing ? rawMatch.slice(0, -trailing.length) : rawMatch;
+        wrapper.appendChild(document.createTextNode(source.slice(cursor, match.index)));
+        if (clean) {
+          const link = document.createElement('a');
+          link.className = 'message-link';
+          link.href = normalizeTextUrl(clean);
+          link.target = '_blank';
+          link.rel = 'noreferrer';
+          link.textContent = clean;
+          wrapper.appendChild(link);
+        }
+        if (trailing) wrapper.appendChild(document.createTextNode(trailing));
+        cursor = match.index + rawMatch.length;
+      }
+      wrapper.appendChild(document.createTextNode(source.slice(cursor)));
+      if (!matched) wrapper.textContent = source;
+      container.appendChild(wrapper);
+      return wrapper;
     };
 
     const clearNode = (node) => {
@@ -1103,12 +1145,21 @@
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
         renderMessageContent(bubble, msg.local_message);
+        finalizeMessageBubbleLayout(bubble);
         body.append(meta, bubble);
         row.append(selector, avatar, body);
         bindMessageSelectionEvents(row, msg);
         chat.appendChild(row);
       });
       renderSelectionToolbar();
+    };
+
+    const finalizeMessageBubbleLayout = (container) => {
+      const hasMedia = Boolean(container.querySelector('.media-image-button, .media-video, .media-file, .json-card, .forward-card, audio'));
+      const hasReply = Boolean(container.querySelector('.reply-card'));
+      const hasText = Array.from(container.querySelectorAll('.cq-text, .message-text')).some((node) => node.textContent.trim());
+      container.classList.toggle('bubble-media-only', hasMedia && !hasText && !hasReply);
+      container.classList.toggle('bubble-media-mixed', hasMedia && (hasText || hasReply));
     };
 
     const renderMessageContent = (container, value) => {
@@ -1118,7 +1169,10 @@
       const hasRichMedia = /\[CQ:(image|record|video|file|json|forward),/.test(contentText);
       container.classList.toggle('bubble-cq', contentText.includes('[CQ:'));
       container.classList.toggle('bubble-media-mixed', hasReply && hasRichMedia);
-      if (renderCQParts(container, value)) return;
+      if (renderCQParts(container, value)) {
+        finalizeMessageBubbleLayout(container);
+        return;
+      }
       const cqImage = parseCQSegment(value, 'image');
       if (cqImage && cqImage.url) {
         renderImageLink(container, cqImage.url, cqImage.file || '媒体图片');
@@ -1129,9 +1183,13 @@
         renderCQJsonCard(container, cqJson.data);
         return;
       }
-      if (renderLocalMediaParts(container, value)) return;
+      if (renderLocalMediaParts(container, value)) {
+        finalizeMessageBubbleLayout(container);
+        return;
+      }
       if (!isMedia(value)) {
-        container.textContent = value;
+        appendLinkedText(container, value, 'message-text');
+        finalizeMessageBubbleLayout(container);
         return;
       }
       if (isImg(value)) {
@@ -1190,20 +1248,14 @@
         matched = true;
         const before = value.slice(cursor, match.index);
         if (before.trim()) {
-          const span = document.createElement('span');
-          span.className = 'cq-text';
-          span.textContent = before;
-          wrapper.appendChild(span);
+          appendLinkedText(wrapper, before, 'cq-text');
         }
         renderLocalMediaAsset(wrapper, match[0]);
         cursor = pattern.lastIndex;
       }
       const tail = value.slice(cursor);
       if (tail.trim()) {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = tail;
-        wrapper.appendChild(span);
+        appendLinkedText(wrapper, tail, 'cq-text');
       }
       if (!matched) return false;
       container.appendChild(wrapper);
@@ -1247,10 +1299,7 @@
 
       const appendText = (textValue) => {
         if (!textValue) return;
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = textValue;
-        wrapper.appendChild(span);
+        appendLinkedText(wrapper, textValue, 'cq-text');
       };
 
       let match = null;
@@ -1550,19 +1599,13 @@
 
     const renderOneBotSegment = (container, segment) => {
       if (!segment || typeof segment !== 'object') {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = String(segment || '');
-        container.appendChild(span);
+        appendLinkedText(container, String(segment || ''), 'cq-text');
         return;
       }
       const type = segment.type || segment.kind || '';
       const data = segment.data || segment;
       if (type === 'text') {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = data.text || '';
-        container.appendChild(span);
+        appendLinkedText(container, data.text || '', 'cq-text');
       } else if (type === 'image') {
         const src = data.url || data.path || data.file;
         if (src) {
@@ -1602,10 +1645,7 @@
       } else if (type === 'forward') {
         renderForwardCard(container, data);
       } else if (data.text) {
-        const span = document.createElement('span');
-        span.className = 'cq-text';
-        span.textContent = data.text;
-        container.appendChild(span);
+        appendLinkedText(container, data.text, 'cq-text');
       } else if (data.url || data.file) {
         renderImageLink(container, data.url || data.file, data.summary || data.file || '媒体');
       } else {
