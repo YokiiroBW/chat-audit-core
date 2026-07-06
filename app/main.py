@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -85,6 +86,18 @@ def validate_production_settings(settings: Settings) -> None:
     unsafe_admin_values = {"", "replace-with-admin-api-token"}
     if settings.admin_api_token.strip() in unsafe_admin_values and not _has_configured_admin_tokens(settings):
         raise ValueError("ADMIN_API_TOKEN must be set to a non-default value in production")
+    if "sqlite" in settings.database_url.lower():
+        raise ValueError("DATABASE_URL must use PostgreSQL or another production database in production")
+    unsafe_instance_ids = {"", "chat-audit-core"}
+    if settings.system_instance_id.strip() in unsafe_instance_ids:
+        raise ValueError("SYSTEM_INSTANCE_ID must be unique in production")
+    for name, path in (("STORAGE_ROOT", settings.storage_root), ("BACKUP_ROOT", settings.backup_root)):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            raise ValueError(f"{name} {path} cannot be created: {exc}") from exc
+        if not os.access(path, os.W_OK):
+            raise ValueError(f"{name} {path} is not writable")
 
 
 def create_app(

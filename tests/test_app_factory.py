@@ -7,6 +7,8 @@ from app.config import Settings
 from app.database import LIGHTWEIGHT_MIGRATION_REGISTRY, LIGHTWEIGHT_MIGRATIONS, _table_columns, create_all_tables, create_async_engine_and_sessionmaker, ensure_schema_compatibility
 from app.main import create_app
 
+POSTGRES_TEST_URL = "postgresql+asyncpg://test_user:test_password@localhost:5432/test_db"
+
 
 def test_lightweight_migration_registry_drives_status_order():
     versions = [migration.version for migration in LIGHTWEIGHT_MIGRATION_REGISTRY]
@@ -315,10 +317,11 @@ def test_create_app_accepts_role_tokens_in_production(tmp_path):
     settings = Settings(
         app_env="production",
         app_secret_key="strong-production-secret",
+        system_instance_id="test-instance",
         onebot_access_token="secret-token",
         admin_api_token="",
         admin_api_tokens=json.dumps([{"name": "ops", "role": "operator", "token": "operator-token"}]),
-        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
+        database_url=POSTGRES_TEST_URL,
         storage_root=tmp_path / "storage",
         backup_root=tmp_path / "backups",
     )
@@ -327,6 +330,44 @@ def test_create_app_accepts_role_tokens_in_production(tmp_path):
     app = create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
 
     assert app.title == "chat-audit-core"
+
+
+def test_create_app_rejects_sqlite_database_in_production(tmp_path):
+    settings = Settings(
+        app_env="production",
+        app_secret_key="strong-production-secret",
+        system_instance_id="test-instance",
+        onebot_access_token="secret-token",
+        admin_api_token="admin-token",
+        database_url=f"sqlite+aiosqlite:///{(tmp_path / 'audit.sqlite3').as_posix()}",
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+
+
+def test_create_app_rejects_default_instance_id_in_production(tmp_path):
+    settings = Settings(
+        app_env="production",
+        app_secret_key="strong-production-secret",
+        system_instance_id="chat-audit-core",
+        onebot_access_token="secret-token",
+        admin_api_token="admin-token",
+        database_url=POSTGRES_TEST_URL,
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="SYSTEM_INSTANCE_ID"):
+        create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
 
 
 def test_create_app_rejects_invalid_role_tokens_in_production(tmp_path):
