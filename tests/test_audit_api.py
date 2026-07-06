@@ -7,6 +7,7 @@ from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
 from app.services.adapter_service import AdapterService
+from app.services.audit_log_service import REDACTED_VALUE, AuditLogService
 
 
 @pytest.mark.asyncio
@@ -208,3 +209,36 @@ async def test_database_managed_admin_token_lifecycle(db_session):
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
     assert after_revoke.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_audit_log_sanitization(db_session):
+    log = await AuditLogService.record(
+        db_session,
+        action="sensitive.operation",
+        status="success",
+        detail={
+            "username": "alice",
+            "password": "plain-password",
+            "access_token": "cat_secret_token",
+            "nested": {
+                "apiSecret": "secret-value",
+                "items": [
+                    {"authorization": "Bearer token"},
+                    {"safe": "visible", "private_key": "key-value"},
+                ],
+            },
+        },
+    )
+    detail = json.loads(log.detail_json)
+
+    assert detail["username"] == "alice"
+    assert detail["password"] == REDACTED_VALUE
+    assert detail["access_token"] == REDACTED_VALUE
+    assert detail["nested"]["apiSecret"] == REDACTED_VALUE
+    assert detail["nested"]["items"][0]["authorization"] == REDACTED_VALUE
+    assert detail["nested"]["items"][1]["safe"] == "visible"
+    assert detail["nested"]["items"][1]["private_key"] == REDACTED_VALUE
+    assert "plain-password" not in log.detail_json
+    assert "cat_secret_token" not in log.detail_json
+    assert "secret-value" not in log.detail_json

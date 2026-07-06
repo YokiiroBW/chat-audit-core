@@ -6,6 +6,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditLog
 
+SENSITIVE_DETAIL_KEY_PARTS = ("password", "token", "secret", "key", "authorization")
+REDACTED_VALUE = "***REDACTED***"
+
+
+def sanitize_audit_detail(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if any(part in key_text.lower() for part in SENSITIVE_DETAIL_KEY_PARTS):
+                sanitized[key_text] = REDACTED_VALUE
+            else:
+                sanitized[key_text] = sanitize_audit_detail(item)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_audit_detail(item) for item in value]
+    return value
+
 
 class AuditLogService:
     @staticmethod
@@ -19,13 +37,14 @@ class AuditLogService:
         target: str | None = None,
         detail: dict[str, Any] | None = None,
     ) -> AuditLog:
+        sanitized_detail = sanitize_audit_detail(detail or {})
         log = AuditLog(
             action=action,
             status=status,
             actor=actor,
             ip_address=ip_address,
             target=target,
-            detail_json=json.dumps(detail or {}, ensure_ascii=False, sort_keys=True),
+            detail_json=json.dumps(sanitized_detail, ensure_ascii=False, sort_keys=True),
         )
         db.add(log)
         await db.commit()
