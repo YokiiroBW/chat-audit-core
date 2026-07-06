@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 from dataclasses import dataclass, field
@@ -179,6 +180,8 @@ def _needs_backfill(local_message: str) -> bool:
 
 
 class MediaBackfillService:
+    _backfill_lock = asyncio.Lock()
+
     @staticmethod
     async def backfill_historical_media(
         db: AsyncSession,
@@ -192,8 +195,40 @@ class MediaBackfillService:
         max_bytes: int | None = None,
         forward_payload_loader: ForwardPayloadLoader | None = None,
         finalize_unavailable: bool = False,
+        batch_size: int = 50,
+    ) -> MediaBackfillReport:
+        async with MediaBackfillService._backfill_lock:
+            return await MediaBackfillService._backfill_historical_media_locked(
+                db,
+                limit=limit,
+                dry_run=dry_run,
+                failure_limit=failure_limit,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+                forward_payload_loader=forward_payload_loader,
+                finalize_unavailable=finalize_unavailable,
+                batch_size=batch_size,
+            )
+
+    @staticmethod
+    async def _backfill_historical_media_locked(
+        db: AsyncSession,
+        *,
+        limit: int,
+        dry_run: bool,
+        failure_limit: int,
+        http_client: Any | None,
+        storage_root: str | None,
+        public_prefix: str | None,
+        max_bytes: int | None,
+        forward_payload_loader: ForwardPayloadLoader | None,
+        finalize_unavailable: bool,
+        batch_size: int,
     ) -> MediaBackfillReport:
         report = MediaBackfillReport()
+        normalized_batch_size = max(1, batch_size)
         result = await db.execute(
             select(Message)
             .where(
@@ -210,6 +245,7 @@ class MediaBackfillService:
             .limit(limit)
         )
         messages = list(result.scalars().unique().all())
+        batch_candidates = 0
 
         for message in messages:
             report.scanned += 1
@@ -219,6 +255,7 @@ class MediaBackfillService:
             if dry_run:
                 report.unchanged += 1
                 continue
+            batch_candidates += 1
 
             before = message.local_message
             before_media_urls = set(_find_uncached_media_urls(before))
@@ -282,8 +319,11 @@ class MediaBackfillService:
                     MediaBackfillFailure(message.msg_hash, "forward", forward_id, reason),
                     failure_limit,
                 )
+            if batch_candidates >= normalized_batch_size:
+                await db.commit()
+                batch_candidates = 0
 
-        if not dry_run:
+        if not dry_run and batch_candidates:
             await db.commit()
         return report
 

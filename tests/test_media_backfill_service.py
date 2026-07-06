@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 
@@ -10,6 +11,21 @@ from app.main import app
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.message_service import MessageService
 from tests.test_media_service import StubAsyncClient
+
+
+@pytest.mark.asyncio
+async def test_backfill_historical_media_waits_for_existing_backfill(db_session):
+    await MediaBackfillService._backfill_lock.acquire()
+    task = asyncio.create_task(MediaBackfillService.backfill_historical_media(db_session, dry_run=True))
+    try:
+        await asyncio.sleep(0)
+        assert task.done() is False
+    finally:
+        MediaBackfillService._backfill_lock.release()
+
+    report = await task
+
+    assert report.scanned == 0
 
 
 @pytest.mark.asyncio
