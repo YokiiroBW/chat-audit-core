@@ -8,6 +8,10 @@
 
 本项目源于本人对 QQ 聊天资产本地备份与离线留存的个人需要，由本人提出需求，并安排天才程序员协作开发。开发过程中也使用 Claude、GPT 等 AI 编程助手辅助方案讨论、代码审阅和实现推进。
 
+## 致谢
+
+感谢 [NapCatQQ](https://github.com/NapNeko/NapCatQQ) 团队提供的 NapCat / OneBot 11 协议端框架支持。本项目的 QQ 消息接入能力建立在 NapCat 反向 WebSocket 能力之上。
+
 ## 适合做什么
 
 - 长期备份 QQ 群聊和私聊记录
