@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.metrics import metrics_registry
 
 logger = logging.getLogger(__name__)
 
@@ -533,22 +534,26 @@ class MediaService:
         media_max_bytes = max_bytes if max_bytes is not None else settings.media_max_bytes
         owns_client = http_client is None
         client = http_client or httpx.AsyncClient()
+        download_status = "unknown"
         try:
             try:
                 response = await client.get(url)
             except (httpx.HTTPError, KeyError) as exc:
+                download_status = "request_error"
                 logger.warning(
                     "Media download request failed",
                     extra={"url": url, "media_type": media_type, "error": str(exc)},
                 )
                 return None
             if response.status_code >= 400:
+                download_status = "upstream_error"
                 logger.warning(
                     "Media download rejected by upstream",
                     extra={"url": url, "media_type": media_type, "status_code": response.status_code},
                 )
                 return None
             if not _is_allowed_download_content_type(media_type, response.headers.get("content-type")):
+                download_status = "content_type_rejected"
                 logger.warning(
                     "Media download content type rejected",
                     extra={"url": url, "media_type": media_type, "content_type": response.headers.get("content-type")},
@@ -556,12 +561,14 @@ class MediaService:
                 return None
             content_length = response.headers.get("content-length")
             if content_length is not None and content_length.isdigit() and int(content_length) > media_max_bytes:
+                download_status = "too_large"
                 logger.warning(
                     "Media download content length exceeds limit",
                     extra={"url": url, "media_type": media_type, "content_length": int(content_length), "max_bytes": media_max_bytes},
                 )
                 return None
             if len(response.content) > media_max_bytes:
+                download_status = "too_large"
                 logger.warning(
                     "Media download body exceeds limit",
                     extra={"url": url, "media_type": media_type, "content_length": len(response.content), "max_bytes": media_max_bytes},
@@ -580,7 +587,7 @@ class MediaService:
                 transcode_timeout_seconds=settings.media_transcode_timeout_seconds,
                 max_bytes=media_max_bytes,
             )
-            return await MessageService.save_media_asset(
+            local_path = await MessageService.save_media_asset(
                 db,
                 file_content=content,
                 file_type=media_type,
@@ -588,7 +595,10 @@ class MediaService:
                 storage_root=storage_root,
                 public_prefix=public_prefix,
             )
+            download_status = "success"
+            return local_path
         finally:
+            metrics_registry.record_media_download(media_type=media_type, status=download_status)
             if owns_client:
                 await client.aclose()
 

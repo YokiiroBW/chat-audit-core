@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text as sql_text
@@ -19,6 +19,7 @@ from app.api import public_router as public_api_router, router as api_router
 from app.config import Settings, get_settings
 from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
 from app.logging_config import setup_logging
+from app.metrics import metrics_registry
 from app.schemas import HealthResponse
 from app.services.backup_service import start_auto_backup_scheduler
 from app.services.runtime_service import RuntimeService
@@ -157,6 +158,13 @@ def create_app(
             response = await call_next(request)
         except Exception:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            endpoint = request.scope.get("route").path if request.scope.get("route") else request.url.path
+            metrics_registry.record_http_request(
+                method=request.method,
+                endpoint=endpoint,
+                status_code=500,
+                duration_seconds=duration_ms / 1000,
+            )
             logger.exception(
                 "HTTP request failed",
                 extra={
@@ -168,6 +176,13 @@ def create_app(
             )
             raise
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        endpoint = request.scope.get("route").path if request.scope.get("route") else request.url.path
+        metrics_registry.record_http_request(
+            method=request.method,
+            endpoint=endpoint,
+            status_code=response.status_code,
+            duration_seconds=duration_ms / 1000,
+        )
         logger.info(
             "HTTP request completed",
             extra={
@@ -257,6 +272,10 @@ def create_app(
         if status_value != "ok":
             return JSONResponse(payload, status_code=503)
         return HealthResponse(**payload)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        return Response(content=metrics_registry.render_prometheus(), media_type="text/plain; version=0.0.4")
 
     return app
 

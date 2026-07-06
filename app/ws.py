@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.onebot11 import normalize_message_event
 from app.config import get_settings
 from app.database import AsyncSessionLocal, get_db_session
+from app.metrics import metrics_registry
 from app.models import Message, RoomProfile, UserProfile
 from app.services.bot_profile_service import BotProfileService
 from app.services.capture_policy_service import CapturePolicyService
@@ -209,6 +210,7 @@ async def onebot11_reverse_ws(
         return
 
     await websocket.accept()
+    metrics_registry.websocket_connected()
     adapter_id = websocket.query_params.get("adapter_id") or websocket.headers.get("x-adapter-id")
     background_tasks: set[asyncio.Task] = set()
     connection_id: str | None = None
@@ -290,6 +292,7 @@ async def onebot11_reverse_ws(
             extra={"adapter_id": adapter_id, "robot_id": current_robot_id, "connection_id": connection_id, "error": str(exc)},
         )
     finally:
+        metrics_registry.websocket_disconnected()
         for task in list(background_tasks):
             task.cancel()
         if background_tasks:
