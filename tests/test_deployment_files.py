@@ -60,23 +60,22 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
     services = compose["services"]
     assert set(services) == {"app"}
     assert "8000:8000" in services["app"]["ports"]
-    assert "./data:/app/data" in services["app"]["volumes"]
+    assert "${DATABASE_DATA_PATH:-./data/database}:/app/data/database" in services["app"]["volumes"]
+    assert "${MEDIA_STORAGE_PATH:-./data/storage}:/app/data/storage" in services["app"]["volumes"]
+    assert "${BACKUP_STORAGE_PATH:-./data/backups}:/app/data/backups" in services["app"]["volumes"]
     assert services["app"]["networks"] == ["default", "qqbot_astrbot_network"]
     assert compose["networks"]["qqbot_astrbot_network"] == {"external": True}
-    assert services["app"]["environment"]["DATABASE_URL"] == "${DATABASE_URL:-sqlite+aiosqlite:////app/data/chat_audit.sqlite3}"
+    assert services["app"]["environment"]["DATABASE_URL"] == "${DATABASE_URL:-sqlite+aiosqlite:////app/data/database/chat_audit.sqlite3}"
     assert services["app"]["environment"]["APP_SECRET_KEY"] == "${APP_SECRET_KEY}"
     assert services["app"]["environment"]["SYSTEM_INSTANCE_ID"] == "${SYSTEM_INSTANCE_ID}"
     assert services["app"]["environment"]["ADMIN_API_TOKEN"] == "${ADMIN_API_TOKEN}"
     assert services["app"]["environment"]["ADMIN_API_TOKENS"] == "${ADMIN_API_TOKENS:-}"
     assert services["app"]["environment"]["ONEBOT_ACCESS_TOKEN"] == "${ONEBOT_ACCESS_TOKEN}"
     assert services["app"]["environment"]["LOG_LEVEL"] == "${LOG_LEVEL:-INFO}"
-    assert services["app"]["environment"]["FFMPEG_BIN"] == "ffmpeg"
     assert services["app"]["environment"]["FFMPEG_LIBRARY_PATH"] == "${FFMPEG_LIBRARY_PATH:-}"
     assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"
-    assert services["app"]["environment"]["MEDIA_TRANSCODE_VOICE_EXT"] == "mp3"
-    assert services["app"]["environment"]["MEDIA_TRANSCODE_VIDEO_EXT"] == "mp4"
-    assert services["app"]["environment"]["AUTO_BACKUP_CRON"] == "0 3 * * *"
-    assert services["app"]["environment"]["AUTO_BACKUP_KEEP_LATEST"] == 7
+    assert services["app"]["environment"]["STORAGE_ROOT"] == "/app/data/storage"
+    assert services["app"]["environment"]["BACKUP_ROOT"] == "/app/data/backups"
 
     app_healthcheck = " ".join(services["app"]["healthcheck"]["test"])
     assert "python" in app_healthcheck
@@ -134,6 +133,7 @@ def test_dockerignore_excludes_runtime_and_secret_files():
     assert ".env" in dockerignore
     assert "data/storage/*" in dockerignore
     assert "data/backups/*" in dockerignore
+    assert "data/database/*" in dockerignore
     assert ".git" in dockerignore
 
 
@@ -179,4 +179,3 @@ def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     assert steps["Compile Python modules"] == "python -m compileall app tests"
     assert steps["Run tests"] == "python -m pytest tests -q"
     assert steps["Build Docker image"] == "docker build -t chat-audit-core:ci ."
-
