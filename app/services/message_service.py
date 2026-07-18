@@ -1,19 +1,71 @@
 import hashlib
 from pathlib import Path
+import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models import MediaAsset, Message, RobotMessage
+from app.models import MediaAsset, Message, MessageMediaReference, MessageSourceRecord, RobotMessage
 from app.services.capture_policy_service import CapturePolicyService
+from app.time_utils import utc_now
 
 
 class MessageService:
     @staticmethod
     def generate_md5(content: bytes) -> str:
         return hashlib.md5(content).hexdigest()
+
+    @staticmethod
+    def message_hash(*, platform: str, room_id: str, sender_id: str, event_identity: str) -> str:
+        raw_string = f"{platform}_{room_id}_{sender_id}_{event_identity}"
+        return MessageService.generate_md5(raw_string.encode("utf-8"))
+
+    @staticmethod
+    async def resolve_existing_message(
+        db: AsyncSession,
+        *,
+        platform: str,
+        room_id: str,
+        sender_id: str,
+        event_identity: str,
+    ) -> tuple[str, Message | None]:
+        msg_hash = MessageService.message_hash(
+            platform=platform,
+            room_id=room_id,
+            sender_id=sender_id,
+            event_identity=event_identity,
+        )
+        result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
+        message = result.scalar_one_or_none()
+        if message is None:
+            result = await db.execute(
+                select(Message).where(
+                    Message.platform == platform,
+                    Message.room_id == room_id,
+                    Message.sender_id == sender_id,
+                    Message.external_message_id == event_identity,
+                ).with_for_update()
+            )
+            message = result.scalars().first()
+        if message is None:
+            result = await db.execute(
+                select(Message)
+                .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
+                .where(
+                    Message.platform == platform,
+                    Message.room_id == room_id,
+                    Message.sender_id == sender_id,
+                    or_(
+                        MessageSourceRecord.source_external_message_id == event_identity,
+                        MessageSourceRecord.platform_message_id == event_identity,
+                    ),
+                )
+                .with_for_update()
+            )
+            message = result.scalars().first()
+        return (message.msg_hash if message is not None else msg_hash), message
 
     @staticmethod
     async def save_media_asset(
@@ -74,35 +126,43 @@ class MessageService:
         event_identity = msg_data.get("message_id")
         if event_identity is None:
             event_identity = f"{msg_data['timestamp']}_{raw_message}"
-        raw_string = f"{platform}_{room_id}_{sender_id}_{event_identity}"
-        msg_hash = MessageService.generate_md5(raw_string.encode("utf-8"))
+        msg_hash, existing_msg = await MessageService.resolve_existing_message(
+            db,
+            platform=platform,
+            room_id=room_id,
+            sender_id=sender_id,
+            event_identity=str(event_identity),
+        )
 
-        result = await db.execute(select(Message).where(Message.msg_hash == msg_hash))
-        existing_msg = result.scalar_one_or_none()
-        if existing_msg is None:
-            local_message = msg_data.get("local_message", raw_message)
-            if media_http_client is not None:
-                from app.services.media_service import MediaService
+        local_message = msg_data.get("local_message", raw_message)
+        if media_http_client is not None:
+            from app.services.media_service import MediaService
 
-                local_message = await MediaService.rewrite_cq_media_to_local_paths(
+            local_message = await MediaService.rewrite_cq_media_to_local_paths(
+                db,
+                raw_message=raw_message,
+                http_client=media_http_client,
+                storage_root=media_storage_root,
+                public_prefix=media_public_prefix,
+                allowed_media_types=capture_decision.allowed_media_types,
+            )
+            if forward_payload_loader is not None:
+                local_message = await MediaService.cache_cq_forward_payloads(
                     db,
-                    raw_message=raw_message,
+                    local_message=local_message,
+                    forward_loader=forward_payload_loader,
                     http_client=media_http_client,
                     storage_root=media_storage_root,
                     public_prefix=media_public_prefix,
                     allowed_media_types=capture_decision.allowed_media_types,
+                    forward_depth=get_settings().forward_cache_max_depth,
                 )
-                if forward_payload_loader is not None:
-                    local_message = await MediaService.cache_cq_forward_payloads(
-                        db,
-                        local_message=local_message,
-                        forward_loader=forward_payload_loader,
-                        http_client=media_http_client,
-                        storage_root=media_storage_root,
-                        public_prefix=media_public_prefix,
-                        allowed_media_types=capture_decision.allowed_media_types,
-                        forward_depth=get_settings().forward_cache_max_depth,
-                    )
+
+        if existing_msg is not None:
+            relock_result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
+            existing_msg = relock_result.scalar_one()
+
+        if existing_msg is None:
 
             db.add(
                 Message(
@@ -118,6 +178,15 @@ class MessageService:
                     timestamp=msg_data["timestamp"],
                 )
             )
+        elif MessageService._local_message_score(local_message) > MessageService._local_message_score(existing_msg.local_message):
+            existing_msg.local_message = local_message
+
+        await MessageService._upgrade_structured_media_from_local_message(
+            db,
+            msg_hash=msg_hash,
+            local_message=local_message,
+            public_prefix=media_public_prefix or get_settings().public_storage_prefix,
+        )
 
         assoc_result = await db.execute(
             select(RobotMessage).where(
@@ -145,3 +214,77 @@ class MessageService:
     async def list_media_assets(db: AsyncSession) -> list[MediaAsset]:
         result = await db.execute(select(MediaAsset).order_by(MediaAsset.file_hash.asc()))
         return list(result.scalars().all())
+
+    @staticmethod
+    def _local_message_score(value: str | None) -> tuple[int, int]:
+        text = value or ""
+        return (text.count("/static/storage/"), len(text))
+
+    @staticmethod
+    async def _upgrade_structured_media_from_local_message(
+        db: AsyncSession,
+        *,
+        msg_hash: str,
+        local_message: str,
+        public_prefix: str,
+    ) -> None:
+        paths_by_ordinal = MessageService.local_media_paths_by_ordinal(local_message, public_prefix)
+        local_paths = [path for path in paths_by_ordinal if path]
+        if not local_paths:
+            return
+        reference_result = await db.execute(
+            select(MessageMediaReference)
+            .where(MessageMediaReference.msg_hash == msg_hash)
+            .order_by(MessageMediaReference.ordinal.asc())
+            .with_for_update()
+        )
+        references = list(reference_result.scalars().all())
+        if not references:
+            return
+        asset_result = await db.execute(select(MediaAsset).where(MediaAsset.local_path.in_(local_paths)))
+        asset_by_path = {asset.local_path: asset for asset in asset_result.scalars().all()}
+        now = utc_now()
+        for reference in references:
+            if reference.ordinal >= len(paths_by_ordinal):
+                continue
+            asset = asset_by_path.get(paths_by_ordinal[reference.ordinal] or "")
+            if (
+                asset is None
+                or asset.file_size <= 0
+                or asset.file_type.endswith("_missing")
+                or not MessageService.media_types_compatible(asset.file_type, reference.media_type)
+            ):
+                continue
+            if reference.archive_state == "complete":
+                continue
+            reference.source_state = "downloaded"
+            reference.archive_state = "complete"
+            reference.asset_file_hash = asset.file_hash
+            reference.actual_file_size = asset.file_size
+            reference.failure_code = None
+            reference.failure_detail = None
+            reference.last_checked_at = now
+            reference.archived_at = reference.archived_at or now
+
+    @staticmethod
+    def local_media_paths_by_ordinal(local_message: str | None, public_prefix: str = "/static/storage") -> list[str | None]:
+        from app.services.media_service import _parse_cq_params
+
+        prefix = public_prefix.rstrip("/") + "/"
+        local_path_pattern = rf"{re.escape(prefix)}[^\s\"'<>),\]]+?\.[a-z0-9]+"
+        pattern = re.compile(rf"\[CQ:(?:image|record|video|file),([^\]]*)\]|({local_path_pattern})", re.I)
+        paths: list[str | None] = []
+        for match in pattern.finditer(local_message or ""):
+            if match.group(2):
+                paths.append(match.group(2))
+                continue
+            params = _parse_cq_params(match.group(1) or "")
+            candidate = params.get("local") or params.get("file") or params.get("url")
+            paths.append(candidate if isinstance(candidate, str) and candidate.startswith(prefix) else None)
+        return paths
+
+    @staticmethod
+    def media_types_compatible(asset_type: str, reference_type: str) -> bool:
+        normalized_asset = {"audio": "voice", "record": "voice"}.get(asset_type, asset_type)
+        normalized_reference = {"audio": "voice", "record": "voice"}.get(reference_type, reference_type)
+        return normalized_asset == normalized_reference

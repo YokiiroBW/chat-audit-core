@@ -1,0 +1,275 @@
+from __future__ import annotations
+
+import base64
+import copy
+import hashlib
+from dataclasses import dataclass
+from typing import Any
+
+from collector.media.resolver import MediaResolver
+from collector.media.staging import MediaStagingStore, StagingError
+from collector.parsers.base import GeneratedArtifact, ParsedMediaUpload, ParsedMessage, ParserFailure
+from collector.parsers.card import parse_card_element
+from collector.parsers.file import parse_file_element
+from collector.parsers.forward import parse_forward_element
+from collector.parsers.image import parse_image_element
+from collector.parsers.protobuf import decode_message_payload, json_safe
+from collector.parsers.reply import parse_reply_element
+from collector.parsers.system import parse_system_element
+from collector.parsers.text import parse_face_element, parse_text_element
+from collector.parsers.video import parse_video_element
+from collector.parsers.voice import parse_voice_element
+from collector.qqnt.versions.base import SourceMessageRow
+from collector.sync.queue import CollectorQueue
+from collector.sync.state import CollectorStateStore
+
+
+@dataclass(frozen=True)
+class MessageParserContext:
+    account_id: str
+    qq_version: str | None = None
+    schema_version: str | None = None
+    max_forward_depth: int = 3
+
+
+def _first(raw: dict[str, Any], *names: str) -> Any:
+    lowered = {str(key).lower(): value for key, value in raw.items()}
+    for name in names:
+        if name.lower() in lowered:
+            return lowered[name.lower()]
+    return None
+
+
+def _chat_type(row: SourceMessageRow) -> str:
+    value = row.chat_type.lower()
+    if value in {"group", "private"}:
+        return value
+    table = row.source_table.lower()
+    if "group" in table:
+        return "group"
+    if "c2c" in table or "private" in table or "friend" in table:
+        return "private"
+    return "group" if value in {"2", "guild"} else "private"
+
+
+def _timestamp(value: int) -> int:
+    return value // 1000 if value > 100_000_000_000 else value
+
+
+def _blob_base64(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(value)).decode("ascii")
+    return None
+
+
+def _source_identity(context: MessageParserContext, row: SourceMessageRow, chat_type: str) -> tuple[str, str]:
+    msg_random = str(_first(row.raw_columns, "msgRandom", "msg_random", "random") or 0)
+    identity = (
+        f"qqnt:{context.account_id}:{chat_type}:{row.conversation_id}:"
+        f"{row.msg_id}:{msg_random}:{row.msg_seq}"
+    )
+    return identity, hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _elements(document: Any) -> list[dict[str, Any]] | None:
+    if isinstance(document, list):
+        values = document
+    elif isinstance(document, dict) and isinstance(document.get("elements"), list):
+        values = document["elements"]
+    elif isinstance(document, dict) and document.get("type"):
+        values = [document]
+    else:
+        return None
+    return [value for value in values if isinstance(value, dict)]
+
+
+def parse_source_message(
+    row: SourceMessageRow,
+    context: MessageParserContext,
+    *,
+    resolver: MediaResolver | None = None,
+) -> ParsedMessage:
+    media_resolver = resolver or MediaResolver()
+    decoded = decode_message_payload(row.content)
+    failures: list[ParserFailure] = []
+    uploads: list[ParsedMediaUpload] = []
+    artifacts: list[GeneratedArtifact] = []
+    media_references: list[dict[str, Any]] = []
+    segments: list[str] = []
+    media_ordinal = 0
+
+    element_values = _elements(decoded.document)
+    if element_values is None:
+        source_key_hash = hashlib.sha256(row.source_primary_key.encode("utf-8")).hexdigest()[:16]
+        segments.append(f"[QQNT:unparsed,source_table={row.source_table},source_key_hash={source_key_hash}]")
+        failures.append(
+            ParserFailure(decoded.error_code or "MESSAGE_PARSE_FAILED", "message payload is not a supported JSON/text envelope")
+        )
+    else:
+        for element_index, element in enumerate(element_values):
+            element_type = str(element.get("type") or element.get("element_type") or "unknown").lower()
+            if element_type in {"text", "plain", "emoji_text"}:
+                result = parse_text_element(element)
+            elif element_type in {"face", "emoji", "system_face"}:
+                result = parse_face_element(element)
+            elif element_type in {"image", "imageelement"}:
+                result = parse_image_element(element, ordinal=media_ordinal, resolver=media_resolver)
+                media_ordinal += 1
+            elif element_type in {"voice", "record", "ptt", "voiceelement"}:
+                result = parse_voice_element(element, ordinal=media_ordinal, resolver=media_resolver)
+                media_ordinal += 1
+            elif element_type in {"video", "videoelement"}:
+                result = parse_video_element(element, ordinal=media_ordinal, resolver=media_resolver)
+                media_ordinal += 1
+            elif element_type in {"file", "fileelement"}:
+                result = parse_file_element(element, ordinal=media_ordinal, resolver=media_resolver)
+                media_ordinal += 1
+            elif element_type in {"json", "ark", "json_card"}:
+                result = parse_card_element(element, card_type="json")
+            elif element_type in {"xml", "xml_card"}:
+                result = parse_card_element(element, card_type="xml")
+            elif element_type in {"reply", "quote"}:
+                result = parse_reply_element(element)
+            elif element_type in {"forward", "merged_forward"}:
+                result = parse_forward_element(
+                    element,
+                    ordinal=element_index,
+                    max_depth=context.max_forward_depth,
+                )
+            elif element_type in {"system", "recall", "revoke", "gray_tip"}:
+                result = parse_system_element(element)
+            else:
+                result = parse_system_element({"event_type": f"unknown_element:{element_type}"})
+                result.failures.append(ParserFailure("MESSAGE_PARSE_FAILED", f"unsupported element type: {element_type}"))
+            if result.text:
+                segments.append(result.text)
+            if result.media_reference is not None:
+                media_references.append(result.media_reference)
+            uploads.extend(result.uploads)
+            artifacts.extend(result.artifacts)
+            failures.extend(result.failures)
+
+    raw_message = "".join(segments) or "[QQNT:empty_message]"
+    chat_type = _chat_type(row)
+    source_identity, message_id = _source_identity(context, row, chat_type)
+    raw_columns = json_safe(row.raw_columns)
+    raw_40800 = _blob_base64(_first(row.raw_columns, "raw_40800_protobuf", "40800", "msg_40800"))
+    raw_40900 = _blob_base64(_first(row.raw_columns, "raw_40900_protobuf", "40900", "msg_40900"))
+    nickname = _first(row.raw_columns, "nickname", "sender_name", "send_nick_name")
+    item = {
+        "message": {
+            "robot_id": context.account_id,
+            "platform": "qq",
+            "room_id": row.conversation_id,
+            "message_type": chat_type,
+            "sender_id": row.sender_id,
+            "nickname": str(nickname) if nickname else None,
+            "raw_message": raw_message,
+            "local_message": raw_message,
+            "timestamp": _timestamp(row.msg_time),
+            "message_id": message_id,
+        },
+        "source_record": {
+            "source_table": row.source_table,
+            "source_key": row.source_primary_key,
+            "platform_message_id": row.msg_id or None,
+            "schema_version": context.schema_version,
+            "raw_columns": raw_columns,
+            "raw_40800_protobuf": raw_40800 or decoded.raw_base64,
+            "raw_40900_protobuf": raw_40900,
+            "metadata": {
+                "source_identity": source_identity,
+                "qq_version": context.qq_version,
+                "parser_failures": [failure.error_code for failure in failures],
+            },
+        },
+        "media": media_references,
+    }
+    return ParsedMessage(item, tuple(uploads), tuple(artifacts), tuple(failures))
+
+
+def enqueue_parsed_message(
+    parsed: ParsedMessage,
+    *,
+    source_id: str,
+    queue: CollectorQueue,
+    store: CollectorStateStore,
+    staging: MediaStagingStore,
+) -> str:
+    item = copy.deepcopy(parsed.item)
+    failures = list(parsed.failures)
+    staged_uploads: list[tuple[ParsedMediaUpload, Any]] = []
+    staged_artifacts: list[tuple[GeneratedArtifact, Any]] = []
+    for upload in parsed.uploads:
+        try:
+            staged_uploads.append((upload, staging.stage(upload.path)))
+        except StagingError as exc:
+            reference = next(
+                (entry for entry in item.get("media", []) if entry.get("ordinal") == upload.ordinal),
+                None,
+            )
+            if reference is not None and upload.media_role == "asset":
+                reference.update(
+                    {
+                        "source_state": "downloaded",
+                        "archive_state": "failed",
+                        "failure_code": str(exc) if str(exc).startswith("MEDIA_") else "MEDIA_UPLOAD_FAILED",
+                    }
+                )
+                reference.pop("asset_file_hash", None)
+            elif reference is not None:
+                reference.update({"archive_state": "metadata_only", "failure_code": "MEDIA_UPLOAD_FAILED"})
+                reference.pop("thumbnail_file_hash", None)
+            failures.append(ParserFailure("MEDIA_STAGING_FULL" if "STAGING_FULL" in str(exc) else "MEDIA_UPLOAD_FAILED", str(exc)))
+    for artifact in parsed.artifacts:
+        try:
+            staged_artifacts.append((artifact, staging.stage_bytes(artifact.content, file_name=artifact.file_name)))
+        except StagingError as exc:
+            for field in ("raw_message", "local_message"):
+                item["message"][field] = item["message"][field].replace(artifact.replace_token, artifact.fallback_text)
+            failures.append(ParserFailure("MEDIA_STAGING_FULL" if "STAGING_FULL" in str(exc) else "MEDIA_UPLOAD_FAILED", str(exc)))
+
+    dedupe_key = str(item["source_record"]["metadata"]["source_identity"])
+    message_queue_id = queue.enqueue_message(source_id=source_id, dedupe_key=dedupe_key, payload=item)
+    for upload, staged in staged_uploads:
+        queue.enqueue_media(
+            source_id=source_id,
+            message_queue_id=message_queue_id,
+            ordinal=upload.ordinal,
+            media_role=upload.media_role,
+            media_type=upload.media_type,
+            staging_path=str(staged.path),
+            file_hash=staged.file_hash,
+            file_size=staged.file_size,
+            content_sha256=staged.content_sha256,
+            file_name=upload.file_name,
+        )
+    for artifact, staged in staged_artifacts:
+        queue.enqueue_media(
+            source_id=source_id,
+            message_queue_id=message_queue_id,
+            ordinal=artifact.ordinal,
+            media_role="artifact",
+            media_type="file",
+            staging_path=str(staged.path),
+            file_hash=staged.file_hash,
+            file_size=staged.file_size,
+            content_sha256=staged.content_sha256,
+            file_name=artifact.file_name,
+            payload={
+                "replace_token": artifact.replace_token,
+                "replacement_template": artifact.replacement_template,
+            },
+        )
+    source_key_hash = hashlib.sha256(str(item["source_record"]["source_key"]).encode("utf-8")).hexdigest()
+    for failure in failures:
+        store.record_parser_failure(
+            source_id=source_id,
+            source_table=str(item["source_record"]["source_table"]),
+            source_key_hash=source_key_hash,
+            error_code=failure.error_code,
+            detail=failure.detail,
+        )
+    return message_queue_id

@@ -53,6 +53,11 @@ async def test_dashboard_service_returns_global_summary(db_session, tmp_path):
         "robot_views": 2,
         "media_assets": 1,
         "media_bytes": 12,
+        "not_downloaded_media": 0,
+        "not_downloaded_videos": 0,
+        "thumbnail_only_videos": 0,
+        "source_missing_media": 0,
+        "media_parse_failures": 0,
         "backups": 1,
         "latest_backup": "auto-backup-20260705T030000Z.json",
     }

@@ -98,6 +98,14 @@
             <div class="hint">当前账号下的会话、搜索和抓取配置 · green/red/gray</div>
             <div id="dashboardSummary" class="dashboard-strip"></div>
             <div class="search-row">
+              <select id="mediaStateFilter" aria-label="媒体状态筛选">
+                <option value="all">全部消息</option>
+                <option value="any">全部媒体</option>
+                <option value="complete">完整归档</option>
+                <option value="not_downloaded">未下载媒体</option>
+                <option value="missing">源文件丢失</option>
+                <option value="failed">解析失败</option>
+              </select>
               <input id="searchInput" placeholder="搜索当前机器人视角消息..." />
               <button id="searchButton" class="btn primary">搜索</button>
             </div>
@@ -463,6 +471,21 @@
         <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
         <button id="repairOfflineAuditButton" class="btn">自动修复并复验</button>
         <button id="runOfflineAuditButton" class="btn primary">重新验收</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="messageDetailModal" class="modal-backdrop">
+    <div class="modal message-detail-modal">
+      <div class="modal-header">
+        <strong>消息与媒体详情</strong>
+        <button class="btn" data-close-modal="messageDetailModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="messageDetailReport" class="message-detail-report"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn primary" data-close-modal="messageDetailModal">关闭</button>
       </div>
     </div>
   </div>

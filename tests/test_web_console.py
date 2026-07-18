@@ -35,7 +35,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "<text" in favicon_response.text
     assert ">QQ<" in favicon_response.text
     assert "/assets/favicon.svg" in sw_response.text
-    assert "chat-audit-static-v2" in sw_response.text
+    assert "chat-audit-static-v4" in sw_response.text
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
@@ -55,6 +55,25 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderDashboard" in page_bundle
     assert "/api/rooms" in page_bundle
     assert "/api/messages" in page_bundle
+    assert "mediaStateFilter" in page_bundle
+    assert "media_state" in page_bundle
+    assert "messageDetailModal" in page_bundle
+    assert "renderMediaReference" in page_bundle
+    assert "media-reference-card" in page_bundle
+    assert "未下载视频" in page_bundle
+    assert "视频文件已丢失" in page_bundle
+    assert "视频记录解析失败" in page_bundle
+    assert "reference.source_state" in page_bundle
+    assert "reference.archive_state" in page_bundle
+    assert "msg.media || []" in page_bundle
+    assert "refreshLiveMessages" in page_bundle
+    assert "window.setInterval(refreshLiveMessages, 2000)" in page_bundle
+    assert "mergeMessages([...state.messageList, ...latest])" in page_bundle
+    assert "reference.last_checked_at" in page_bundle
+    assert "reference.archived_at" in page_bundle
+    assert "source.imported_at" in page_bundle
+    assert "source.last_seen_at" in page_bundle
+    assert "document.hidden" in page_bundle
     assert "/api/search" in page_bundle
     assert "performSearch" in page_bundle
     assert "searchResults" in page_bundle

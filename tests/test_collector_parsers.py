@@ -1,0 +1,246 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+
+from collector.media.resolver import MediaResolver
+from collector.media.staging import MediaStagingStore
+from collector.parsers.message import MessageParserContext, enqueue_parsed_message, parse_source_message
+from collector.qqnt.versions.base import SourceMessageRow
+from collector.sync.queue import CollectorQueue
+from collector.sync.state import CollectorStateStore
+
+
+def _row(content, *, msg_id="100", source_key="row-1", table="group_msg_001", raw=None):
+    raw_columns = {
+        "msgId": msg_id,
+        "msgSeq": 7,
+        "msgTime": 1783000000000,
+        "peerUid": "group-a",
+        "senderUid": "user-a",
+        "msgContent": content,
+        "chatType": "group",
+        "msgRandom": 42,
+        "nickname": "Alice",
+    }
+    raw_columns.update(raw or {})
+    return SourceMessageRow(
+        source_table=table,
+        source_primary_key=source_key,
+        msg_time=1783000000000,
+        msg_seq=7,
+        msg_id=msg_id,
+        conversation_id="group-a",
+        sender_id="user-a",
+        chat_type="group",
+        content=content,
+        raw_columns=raw_columns,
+    )
+
+
+def _context():
+    return MessageParserContext(account_id="123456789", qq_version="9.9.test", schema_version="fixture-v1")
+
+
+def _queue(tmp_path):
+    store = CollectorStateStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    store.upsert_source(
+        source_id="source",
+        source_type="qqnt_local_db",
+        account_id="123456789",
+        device_id="pc",
+    )
+    return store, CollectorQueue(store)
+
+
+def test_message_parser_normalizes_text_face_reply_and_cards():
+    content = {
+        "elements": [
+            {"type": "text", "text": "hello"},
+            {"type": "face", "id": 14, "description": "smile"},
+            {"type": "reply", "message_id": "quoted-id", "preview": "quoted"},
+            {"type": "json", "data": {"meta": {"title": "card"}}},
+            {"type": "xml", "data": "<msg action='view'/>"},
+        ]
+    }
+
+    parsed = parse_source_message(_row(content), _context())
+
+    raw = parsed.item["message"]["raw_message"]
+    identity = "qqnt:123456789:group:group-a:100:42:7"
+    assert raw.startswith("hello[CQ:face,id=14,name=smile][CQ:reply,id=quoted-id]quoted")
+    assert "[CQ:json,data=" in raw
+    assert "[CQ:xml,data=" in raw
+    assert parsed.item["message"]["timestamp"] == 1783000000
+    assert parsed.item["message"]["message_id"] == hashlib.sha256(identity.encode()).hexdigest()
+    assert parsed.item["source_record"]["metadata"]["source_identity"] == identity
+    assert parsed.failures == ()
+
+
+def test_video_state_parser_distinguishes_not_downloaded_missing_and_complete(tmp_path):
+    not_downloaded = parse_source_message(
+        _row({"elements": [{"type": "video", "file_name": "never.mp4", "uuid": "video-uuid"}]}),
+        _context(),
+    )
+    reference = not_downloaded.item["media"][0]
+    assert (reference["source_state"], reference["archive_state"]) == ("not_downloaded", "metadata_only")
+    assert not_downloaded.uploads == ()
+
+    missing = parse_source_message(
+        _row(
+            {"elements": [{"type": "video", "file_name": "missing.mp4", "local_path": str(tmp_path / "missing.mp4")}]},
+            msg_id="101",
+            source_key="row-2",
+        ),
+        _context(),
+    )
+    reference = missing.item["media"][0]
+    assert (reference["source_state"], reference["archive_state"]) == ("missing", "metadata_only")
+
+    video_path = tmp_path / "complete.mp4"
+    video_path.write_bytes(b"complete-video")
+    complete = parse_source_message(
+        _row(
+            {
+                "elements": [
+                    {
+                        "type": "video",
+                        "file_name": "complete.mp4",
+                        "local_path": str(video_path),
+                        "file_size": len(b"complete-video"),
+                        "md5": hashlib.md5(b"complete-video").hexdigest(),
+                    }
+                ]
+            },
+            msg_id="102",
+            source_key="row-3",
+        ),
+        _context(),
+    )
+    reference = complete.item["media"][0]
+    assert (reference["source_state"], reference["archive_state"]) == ("downloaded", "complete")
+    assert complete.uploads[0].path == video_path.resolve()
+
+
+def test_enqueue_parser_stages_complete_and_thumbnail_media_before_message(tmp_path):
+    full_path = tmp_path / "full.mp4"
+    full_path.write_bytes(b"full-video")
+    thumbnail_path = tmp_path / "thumb.jpg"
+    thumbnail_path.write_bytes(b"thumbnail")
+    content = {
+        "elements": [
+            {"type": "video", "file_name": "full.mp4", "local_path": str(full_path)},
+            {"type": "video", "file_name": "thumb-only.mp4", "uuid": "thumb-video", "thumbnail_path": str(thumbnail_path)},
+        ]
+    }
+    parsed = parse_source_message(_row(content), _context())
+    store, queue = _queue(tmp_path)
+    staging = MediaStagingStore(tmp_path / "staging", max_bytes=1024)
+
+    message_queue_id = enqueue_parsed_message(parsed, source_id="source", queue=queue, store=store, staging=staging)
+
+    assert queue.lease_ready("message", limit=1) == []
+    media_items = queue.lease_ready("media", limit=10)
+    assert {(item.ordinal, item.media_role) for item in media_items} == {(0, "asset"), (1, "thumbnail")}
+    for item in media_items:
+        uploaded = {"file_hash": item.file_hash, "file_size": item.file_size, "local_path": "/static/storage/file"}
+        queue.patch_message_media(message_queue_id, item.ordinal, uploaded, media_role=item.media_role or "asset")
+        queue.mark_completed(item, uploaded)
+    message = queue.lease_ready("message", limit=1)[0]
+    first, second = message.payload["media"]
+    assert (first["source_state"], first["archive_state"], first["asset_file_hash"]) == (
+        "downloaded",
+        "complete",
+        media_items[0].file_hash,
+    )
+    assert second["archive_state"] == "thumbnail_only"
+    assert second["thumbnail_file_hash"]
+
+
+def test_forward_payload_is_staged_as_real_json_and_patched_into_message(tmp_path):
+    content = {
+        "elements": [
+            {
+                "type": "forward",
+                "forward_id": "forward-1",
+                "nodes": [{"sender_id": "a", "timestamp": 1, "raw_message": "hello"}],
+            }
+        ]
+    }
+    parsed = parse_source_message(_row(content), _context())
+    assert parsed.artifacts[0].content.startswith(b'{"forward_id":"forward-1"')
+    store, queue = _queue(tmp_path)
+    staging = MediaStagingStore(tmp_path / "staging", max_bytes=4096)
+
+    message_queue_id = enqueue_parsed_message(parsed, source_id="source", queue=queue, store=store, staging=staging)
+    artifact_item = queue.lease_ready("media", limit=1)[0]
+    assert artifact_item.media_role == "artifact"
+    uploaded = {
+        "file_hash": artifact_item.file_hash,
+        "file_size": artifact_item.file_size,
+        "local_path": "/static/storage/forward.json",
+        "replace_token": artifact_item.payload["replace_token"],
+        "replacement": artifact_item.payload["replacement_template"].format(
+            local_path="/static/storage/forward.json"
+        ),
+    }
+    queue.patch_message_media(message_queue_id, artifact_item.ordinal or 0, uploaded, media_role="artifact")
+    queue.mark_completed(artifact_item, uploaded)
+    message = queue.lease_ready("message", limit=1)[0]
+    assert message.payload["message"]["local_message"] == (
+        "[CQ:forward,id=forward-1,local=/static/storage/forward.json]"
+    )
+    assert message.payload["media"] == []
+
+
+def test_unparsed_protobuf_is_preserved_and_failure_is_replayable(tmp_path):
+    raw_protobuf = b"\x08\xff\x10\x80"
+    parsed = parse_source_message(_row(raw_protobuf), _context())
+    assert parsed.item["message"]["raw_message"].startswith("[QQNT:unparsed")
+    assert parsed.item["source_record"]["raw_40800_protobuf"] == base64.b64encode(raw_protobuf).decode()
+    assert parsed.failures[0].error_code == "PROTOBUF_PARSE_FAILED"
+
+    store, queue = _queue(tmp_path)
+    enqueue_parsed_message(
+        parsed,
+        source_id="source",
+        queue=queue,
+        store=store,
+        staging=MediaStagingStore(tmp_path / "staging", max_bytes=1024),
+    )
+    enqueue_parsed_message(
+        parsed,
+        source_id="source",
+        queue=queue,
+        store=store,
+        staging=MediaStagingStore(tmp_path / "staging", max_bytes=1024),
+    )
+    assert store.status_snapshot()["unresolved_parser_failures"] == 1
+    assert queue.counts()["messages"] == {"pending": 1}
+
+
+def test_staging_full_does_not_create_fake_asset_or_invalid_complete_reference(tmp_path):
+    video_path = tmp_path / "large.mp4"
+    video_path.write_bytes(b"x" * 128)
+    parsed = parse_source_message(
+        _row({"elements": [{"type": "video", "file_name": "large.mp4", "local_path": str(video_path)}]}),
+        _context(),
+    )
+    store, queue = _queue(tmp_path)
+
+    enqueue_parsed_message(
+        parsed,
+        source_id="source",
+        queue=queue,
+        store=store,
+        staging=MediaStagingStore(tmp_path / "staging", max_bytes=64),
+    )
+
+    assert queue.counts()["media"] == {}
+    message = queue.lease_ready("message", limit=1)[0]
+    reference = message.payload["media"][0]
+    assert (reference["source_state"], reference["archive_state"]) == ("downloaded", "failed")
+    assert "asset_file_hash" not in reference
+    assert store.status_snapshot()["unresolved_parser_failures"] == 1

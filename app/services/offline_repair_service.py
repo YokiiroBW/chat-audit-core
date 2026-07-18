@@ -18,14 +18,9 @@ class OfflineRepairReport:
     repaired_media_files: int = 0
     repaired_file_sizes: int = 0
     repaired_profile_avatars: int = 0
+    unrepaired_media_files: int = 0
+    media_hash_mismatches: int = 0
     repaired_paths: list[str] = field(default_factory=list)
-
-
-_ONE_PIXEL_GIF = (
-    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!"
-    b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
-    b"\x00\x02\x02D\x01\x00;"
-)
 
 
 class OfflineRepairService:
@@ -69,21 +64,27 @@ class OfflineRepairService:
         assets = list(asset_result.scalars().all())
         asset_by_path = {asset.local_path: asset for asset in assets}
         used_hashes = {asset.file_hash for asset in assets}
+        unrepaired_paths: set[str] = set()
+        hash_mismatch_paths: set[str] = set()
 
         for local_path in sorted(local_paths):
             file_path = BackupService._local_media_file_path(local_path, root, public_storage_prefix)
             if file_path is None:
                 continue
             if not file_path.exists():
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_bytes(OfflineRepairService._placeholder_bytes_for(local_path))
-                report.repaired_media_files += 1
-                report.repaired_paths.append(local_path)
+                unrepaired_paths.add(local_path)
+                continue
 
             content = file_path.read_bytes()
+            if not content:
+                unrepaired_paths.add(local_path)
+                continue
             asset = asset_by_path.get(local_path)
             if asset is None:
-                file_hash = OfflineRepairService._file_hash_for(local_path, content, used_hashes)
+                file_hash = OfflineRepairService._file_hash_for(content)
+                if file_hash in used_hashes:
+                    unrepaired_paths.add(local_path)
+                    continue
                 used_hashes.add(file_hash)
                 asset = MediaAsset(
                     file_hash=file_hash,
@@ -96,6 +97,9 @@ class OfflineRepairService:
                 report.repaired_media_assets += 1
                 if local_path not in report.repaired_paths:
                     report.repaired_paths.append(local_path)
+            elif not OfflineRepairService._content_matches_asset_hash(asset.file_hash, content):
+                hash_mismatch_paths.add(local_path)
+                unrepaired_paths.add(local_path)
             elif asset.file_size != len(content):
                 asset.file_size = len(content)
                 report.repaired_file_sizes += 1
@@ -107,11 +111,16 @@ class OfflineRepairService:
             if file_path is None:
                 continue
             if not file_path.exists():
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_bytes(OfflineRepairService._placeholder_bytes_for(asset.local_path))
-                report.repaired_media_files += 1
-                if asset.local_path not in report.repaired_paths:
-                    report.repaired_paths.append(asset.local_path)
+                unrepaired_paths.add(asset.local_path)
+                continue
+            content = file_path.read_bytes()
+            if not content:
+                unrepaired_paths.add(asset.local_path)
+                continue
+            if not OfflineRepairService._content_matches_asset_hash(asset.file_hash, content):
+                hash_mismatch_paths.add(asset.local_path)
+                unrepaired_paths.add(asset.local_path)
+                continue
             file_size = file_path.stat().st_size
             if asset.file_size != file_size:
                 asset.file_size = file_size
@@ -119,6 +128,8 @@ class OfflineRepairService:
                 if asset.local_path not in report.repaired_paths:
                     report.repaired_paths.append(asset.local_path)
 
+        report.unrepaired_media_files = len(unrepaired_paths)
+        report.media_hash_mismatches = len(hash_mismatch_paths)
         await db.commit()
         return report
 
@@ -223,14 +234,18 @@ class OfflineRepairService:
         return svg.encode("utf-8")
 
     @staticmethod
-    def _file_hash_for(local_path: str, content: bytes, used_hashes: set[str]) -> str:
-        stem = Path(local_path).stem.lower()
-        if len(stem) == 32 and all(char in "0123456789abcdef" for char in stem) and stem not in used_hashes:
-            return stem
-        candidate = hashlib.md5(content).hexdigest()
-        if candidate not in used_hashes:
-            return candidate
-        return hashlib.md5(f"{local_path}\n".encode("utf-8") + content).hexdigest()
+    def _file_hash_for(content: bytes) -> str:
+        return hashlib.md5(content).hexdigest()
+
+    @staticmethod
+    def _content_matches_asset_hash(file_hash: str, content: bytes) -> bool:
+        if not all(char in "0123456789abcdefABCDEF" for char in file_hash):
+            return True
+        if len(file_hash) == 32:
+            return hashlib.md5(content).hexdigest().lower() == file_hash.lower()
+        if len(file_hash) == 64:
+            return hashlib.sha256(content).hexdigest().lower() == file_hash.lower()
+        return True
 
     @staticmethod
     def _file_type_for(local_path: str) -> str:
@@ -246,14 +261,3 @@ class OfflineRepairService:
         if suffix == "json":
             return "forward"
         return "file"
-
-    @staticmethod
-    def _placeholder_bytes_for(local_path: str) -> bytes:
-        suffix = Path(local_path).suffix.lstrip(".").lower()
-        if suffix == "html":
-            return b'<!doctype html><meta charset="utf-8"><title>missing local asset</title><p>missing local asset placeholder</p>'
-        if suffix == "svg":
-            return b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#e2e8f0"/></svg>'
-        if suffix in {"png", "jpg", "jpeg", "gif", "webp", "bmp"}:
-            return _ONE_PIXEL_GIF
-        return b"missing local asset placeholder\n"

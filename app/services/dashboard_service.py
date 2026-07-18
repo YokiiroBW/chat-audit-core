@@ -3,7 +3,7 @@ from pathlib import Path
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import BotProfile, MediaAsset, Message, RobotMessage
+from app.models import BotProfile, MediaAsset, Message, MessageMediaReference, RobotMessage
 
 
 class DashboardService:
@@ -15,6 +15,35 @@ class DashboardService:
         bots = await DashboardService._scalar_int(db, select(func.count(BotProfile.id)))
         media_assets = await DashboardService._scalar_int(db, select(func.count(MediaAsset.file_hash)))
         media_bytes = await DashboardService._scalar_int(db, select(func.coalesce(func.sum(MediaAsset.file_size), 0)))
+        not_downloaded_media = await DashboardService._scalar_int(
+            db,
+            select(func.count(MessageMediaReference.id)).where(MessageMediaReference.source_state == "not_downloaded"),
+        )
+        not_downloaded_videos = await DashboardService._scalar_int(
+            db,
+            select(func.count(MessageMediaReference.id)).where(
+                MessageMediaReference.media_type == "video",
+                MessageMediaReference.source_state == "not_downloaded",
+            ),
+        )
+        thumbnail_only_videos = await DashboardService._scalar_int(
+            db,
+            select(func.count(MessageMediaReference.id)).where(
+                MessageMediaReference.media_type == "video",
+                MessageMediaReference.archive_state == "thumbnail_only",
+            ),
+        )
+        source_missing_media = await DashboardService._scalar_int(
+            db,
+            select(func.count(MessageMediaReference.id)).where(MessageMediaReference.source_state == "missing"),
+        )
+        media_parse_failures = await DashboardService._scalar_int(
+            db,
+            select(func.count(MessageMediaReference.id)).where(
+                MessageMediaReference.source_state == "unknown",
+                MessageMediaReference.archive_state == "failed",
+            ),
+        )
 
         backups_count = 0
         latest_backup: str | None = None
@@ -34,6 +63,11 @@ class DashboardService:
             "robot_views": robot_views,
             "media_assets": media_assets,
             "media_bytes": media_bytes,
+            "not_downloaded_media": not_downloaded_media,
+            "not_downloaded_videos": not_downloaded_videos,
+            "thumbnail_only_videos": thumbnail_only_videos,
+            "source_missing_media": source_missing_media,
+            "media_parse_failures": media_parse_failures,
             "backups": backups_count,
             "latest_backup": latest_backup,
         }

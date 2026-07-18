@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 from app.time_utils import utc_now
@@ -130,6 +130,168 @@ class MediaAsset(Base):
     file_size = Column(Integer, nullable=False)
     local_path = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class ImportSource(Base):
+    """A stable collector/source-device identity."""
+
+    __tablename__ = "import_sources"
+
+    id = Column(String(64), primary_key=True)
+    source_type = Column(String(32), nullable=False)
+    platform = Column(String(20), nullable=False)
+    account_id = Column(String(64), nullable=False, index=True)
+    device_id = Column(String(128), nullable=False)
+    device_name = Column(String(128), nullable=True)
+    qq_version = Column(String(64), nullable=True)
+    schema_version = Column(String(64), nullable=True)
+    status = Column(String(20), default="active", nullable=False, index=True)
+    first_seen_at = Column(DateTime, default=utc_now, nullable=False)
+    last_seen_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+    metadata_json = Column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("source_type", "account_id", "device_id", name="uq_import_source_device"),
+        Index("idx_import_source_account_status", "account_id", "status"),
+        CheckConstraint("status IN ('active','needs_key','disabled','error')", name="ck_import_source_status"),
+    )
+
+
+class ImportBatch(Base):
+    """One initial, incremental, reconciliation, or media-rescan run."""
+
+    __tablename__ = "import_batches"
+
+    id = Column(String(64), primary_key=True)
+    source_id = Column(String(64), ForeignKey("import_sources.id"), nullable=False, index=True)
+    mode = Column(String(20), nullable=False)
+    status = Column(String(20), default="running", nullable=False, index=True)
+    started_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    scanned_messages = Column(Integer, default=0, nullable=False)
+    inserted_messages = Column(Integer, default=0, nullable=False)
+    updated_messages = Column(Integer, default=0, nullable=False)
+    skipped_messages = Column(Integer, default=0, nullable=False)
+    uploaded_media = Column(Integer, default=0, nullable=False)
+    not_downloaded_media = Column(Integer, default=0, nullable=False)
+    missing_media = Column(Integer, default=0, nullable=False)
+    failed_media = Column(Integer, default=0, nullable=False)
+    detail_json = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_import_batch_source_status_started", "source_id", "status", "started_at"),
+        CheckConstraint("mode IN ('initial','incremental','reconcile','media_rescan')", name="ck_import_batch_mode"),
+        CheckConstraint("status IN ('running','completed','partial','failed','cancelled')", name="ck_import_batch_status"),
+        CheckConstraint(
+            "scanned_messages >= 0 AND inserted_messages >= 0 AND updated_messages >= 0 AND skipped_messages >= 0 "
+            "AND uploaded_media >= 0 AND not_downloaded_media >= 0 AND missing_media >= 0 AND failed_media >= 0",
+            name="ck_import_batch_nonnegative_counts",
+        ),
+    )
+
+
+class ImportBatchChunk(Base):
+    """Cached response for an exact batch payload replay."""
+
+    __tablename__ = "import_batch_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(64), ForeignKey("import_batches.id"), nullable=False, index=True)
+    request_hash = Column(String(64), nullable=False)
+    response_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "request_hash", name="uq_import_batch_chunk_request"),
+    )
+
+
+class MessageSourceRecord(Base):
+    """Replayable raw source record associated with a canonical message."""
+
+    __tablename__ = "message_source_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    msg_hash = Column(String(64), ForeignKey("messages.msg_hash"), nullable=False, index=True)
+    source_id = Column(String(64), ForeignKey("import_sources.id"), nullable=False, index=True)
+    batch_id = Column(String(64), ForeignKey("import_batches.id"), nullable=True, index=True)
+    source_table = Column(String(128), nullable=False)
+    source_primary_key = Column(String(512), nullable=False)
+    source_external_message_id = Column(String(64), nullable=True, index=True)
+    platform_message_id = Column(String(64), nullable=True, index=True)
+    schema_version = Column(String(64), nullable=True)
+    raw_columns_json = Column(Text, nullable=True)
+    raw_40800_protobuf = Column(Text, nullable=True)
+    raw_40900_protobuf = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    imported_at = Column(DateTime, default=utc_now, nullable=False)
+    last_seen_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("source_id", "source_table", "source_primary_key", name="uq_message_source_record"),
+        Index("idx_message_source_msg_source", "msg_hash", "source_id"),
+    )
+
+
+class MessageMediaReference(Base):
+    """Media metadata/state independent from a physically archived asset."""
+
+    __tablename__ = "message_media_references"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    msg_hash = Column(String(64), ForeignKey("messages.msg_hash"), nullable=False, index=True)
+    ordinal = Column(Integer, default=0, nullable=False)
+    media_type = Column(String(20), nullable=False, index=True)
+    source_state = Column(String(20), nullable=False, index=True)
+    archive_state = Column(String(20), nullable=False, index=True)
+    asset_file_hash = Column(String(64), ForeignKey("media_assets.file_hash"), nullable=True, index=True)
+    thumbnail_file_hash = Column(String(64), ForeignKey("media_assets.file_hash"), nullable=True, index=True)
+    file_name = Column(String(512), nullable=True)
+    file_ext = Column(String(32), nullable=True)
+    declared_file_size = Column(Integer, nullable=True)
+    actual_file_size = Column(Integer, nullable=True)
+    source_md5 = Column(String(128), nullable=True, index=True)
+    source_sha1 = Column(String(128), nullable=True)
+    source_uuid = Column(String(255), nullable=True, index=True)
+    source_local_path = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    failure_code = Column(String(64), nullable=True)
+    failure_detail = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    first_seen_at = Column(DateTime, default=utc_now, nullable=False)
+    last_checked_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+    archived_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("msg_hash", "ordinal", name="uq_message_media_ordinal"),
+        Index("idx_message_media_state", "source_state", "archive_state"),
+        CheckConstraint("ordinal >= 0", name="ck_message_media_ordinal"),
+        CheckConstraint("source_state IN ('downloaded','not_downloaded','missing','unknown')", name="ck_message_media_source_state"),
+        CheckConstraint("archive_state IN ('complete','thumbnail_only','metadata_only','failed')", name="ck_message_media_archive_state"),
+        CheckConstraint(
+            "(source_state = 'downloaded' AND archive_state IN ('complete','failed')) "
+            "OR (source_state = 'not_downloaded' AND archive_state IN ('metadata_only','thumbnail_only')) "
+            "OR (source_state = 'missing' AND archive_state IN ('metadata_only','thumbnail_only')) "
+            "OR (source_state = 'unknown' AND archive_state = 'failed')",
+            name="ck_message_media_state_combination",
+        ),
+        CheckConstraint(
+            "(archive_state != 'complete' OR asset_file_hash IS NOT NULL) "
+            "AND (archive_state != 'thumbnail_only' OR thumbnail_file_hash IS NOT NULL) "
+            "AND (source_state != 'not_downloaded' OR asset_file_hash IS NULL)",
+            name="ck_message_media_asset_requirements",
+        ),
+        CheckConstraint(
+            "(declared_file_size IS NULL OR declared_file_size >= 0) "
+            "AND (actual_file_size IS NULL OR actual_file_size >= 0) "
+            "AND (duration_ms IS NULL OR duration_ms >= 0) "
+            "AND (width IS NULL OR width >= 0) "
+            "AND (height IS NULL OR height >= 0)",
+            name="ck_message_media_nonnegative_metadata",
+        ),
+    )
 
 
 class AuditLog(Base):

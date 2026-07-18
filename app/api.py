@@ -43,6 +43,13 @@ from app.schemas import (
     ExternalMediaUploadResponse,
     ImportResultResponse,
     ImportValidationResponse,
+    ImportBatchCreateRequest,
+    ImportBatchFinishRequest,
+    ImportBatchMessagesRequest,
+    ImportBatchMessagesResponse,
+    ImportBatchResponse,
+    ImportSourceCreateRequest,
+    ImportSourceResponse,
     MediaBackfillResponse,
     MessageIngestRequest,
     MessageIngestResponse,
@@ -65,6 +72,15 @@ from app.services.dashboard_service import DashboardService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.media_service import MediaService, _build_cq_segment, _parse_cq_params
 from app.services.message_service import MessageService
+from app.services.import_service import (
+    ImportConflictError,
+    ImportNotFoundError,
+    ImportService,
+    ImportServiceError,
+    ImportStateError,
+    import_batch_to_dict,
+    import_source_to_dict,
+)
 from app.services.offline_audit_service import OfflineAuditService
 from app.services.offline_repair_service import OfflineRepairService
 from app.services.onebot_rpc_service import OneBotRPCService
@@ -942,6 +958,7 @@ async def list_messages(
     room_id: str = Query(..., min_length=1),
     before_timestamp: int | None = Query(default=None),
     around_message_id: str | None = Query(default=None, min_length=1),
+    media_state: str | None = Query(default=None, pattern="^(all|any|complete|not_downloaded|missing|failed)$"),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
@@ -952,6 +969,7 @@ async def list_messages(
         room_id=room_id,
         before_timestamp=before_timestamp,
         around_message_id=around_message_id,
+        media_state=media_state,
         limit=limit,
     )
     if await _hydrate_missing_message_sender_profiles(db, messages=messages, settings=settings):
@@ -961,6 +979,7 @@ async def list_messages(
             room_id=room_id,
             before_timestamp=before_timestamp,
             around_message_id=around_message_id,
+            media_state=media_state,
             limit=limit,
         )
     return [MessageResponse.model_validate(message) for message in messages]
@@ -1042,6 +1061,167 @@ async def ingest_message(
     )
 
 
+def _raise_import_http_error(exc: ImportServiceError) -> None:
+    if isinstance(exc, ImportNotFoundError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if isinstance(exc, (ImportConflictError, ImportStateError)):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post(
+    "/import/sources",
+    response_model=ImportSourceResponse,
+    summary="Register or refresh a Collector import source",
+)
+async def upsert_import_source(
+    payload: ImportSourceCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> ImportSourceResponse:
+    try:
+        source, created = await ImportService.upsert_source(db, payload)
+    except ImportServiceError as exc:
+        _raise_import_http_error(exc)
+    await _audit(
+        db,
+        request,
+        action="import.source.upsert",
+        status_="success",
+        target=source.id,
+        detail={"created": created, "source_type": source.source_type, "platform": source.platform},
+    )
+    return ImportSourceResponse.model_validate(import_source_to_dict(source))
+
+
+@router.post(
+    "/import/batches",
+    response_model=ImportBatchResponse,
+    summary="Create or replay a Collector import batch",
+)
+async def create_import_batch(
+    payload: ImportBatchCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> ImportBatchResponse:
+    try:
+        batch, created = await ImportService.create_batch(db, payload)
+    except ImportServiceError as exc:
+        _raise_import_http_error(exc)
+    await _audit(
+        db,
+        request,
+        action="import.batch.create",
+        status_="success",
+        target=batch.id,
+        detail={"created": created, "mode": batch.mode, "status": batch.status},
+    )
+    return ImportBatchResponse.model_validate(import_batch_to_dict(batch))
+
+
+@router.post(
+    "/import/batches/{batch_id}/messages",
+    response_model=ImportBatchMessagesResponse,
+    summary="UPSERT a Collector message chunk",
+)
+async def import_batch_messages(
+    batch_id: str,
+    payload: ImportBatchMessagesRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> ImportBatchMessagesResponse:
+    try:
+        result = await ImportService.import_batch_messages(db, batch_id=batch_id, payload=payload)
+    except ImportServiceError as exc:
+        _raise_import_http_error(exc)
+    await _audit(
+        db,
+        request,
+        action="import.batch.messages",
+        status_="partial" if result.failed else "success",
+        target=batch_id,
+        detail={
+            "inserted": result.inserted,
+            "updated": result.updated,
+            "unchanged": result.unchanged,
+            "failed": result.failed,
+            "replayed": result.replayed,
+        },
+    )
+    return result
+
+
+@router.post(
+    "/import/batches/{batch_id}/complete",
+    response_model=ImportBatchResponse,
+    summary="Complete a Collector import batch",
+)
+async def complete_import_batch(
+    batch_id: str,
+    payload: ImportBatchFinishRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> ImportBatchResponse:
+    try:
+        batch = await ImportService.finish_batch(
+            db,
+            batch_id=batch_id,
+            failed=False,
+            partial=payload.partial,
+            detail=payload.detail,
+        )
+    except ImportServiceError as exc:
+        _raise_import_http_error(exc)
+    await _audit(
+        db,
+        request,
+        action="import.batch.complete",
+        status_="success",
+        target=batch_id,
+        detail={"status": batch.status},
+    )
+    return ImportBatchResponse.model_validate(import_batch_to_dict(batch))
+
+
+@router.post(
+    "/import/batches/{batch_id}/fail",
+    response_model=ImportBatchResponse,
+    summary="Fail a Collector import batch",
+)
+async def fail_import_batch(
+    batch_id: str,
+    payload: ImportBatchFinishRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    _: None = Depends(require_admin_role("operator", "admin")),
+) -> ImportBatchResponse:
+    try:
+        batch = await ImportService.finish_batch(
+            db,
+            batch_id=batch_id,
+            failed=True,
+            partial=payload.partial,
+            detail=payload.detail,
+            error_code=payload.error_code,
+            error_detail=payload.error_detail,
+        )
+    except ImportServiceError as exc:
+        _raise_import_http_error(exc)
+    await _audit(
+        db,
+        request,
+        action="import.batch.fail",
+        status_="success",
+        target=batch_id,
+        detail={"status": batch.status, "error_code": payload.error_code},
+    )
+    return ImportBatchResponse.model_validate(import_batch_to_dict(batch))
+
+
 @router.post("/external/media", response_model=ExternalMediaUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_external_media(
     request: Request,
@@ -1091,6 +1271,7 @@ async def search_messages(
     sender_id: str | None = Query(default=None),
     start_timestamp: int | None = Query(default=None),
     end_timestamp: int | None = Query(default=None),
+    media_state: str | None = Query(default=None, pattern="^(all|any|complete|not_downloaded|missing|failed)$"),
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[MessageResponse]:
@@ -1102,6 +1283,7 @@ async def search_messages(
         sender_id=sender_id,
         start_timestamp=start_timestamp,
         end_timestamp=end_timestamp,
+        media_state=media_state,
         limit=limit,
     )
     return [MessageResponse.model_validate(message) for message in messages]
@@ -1188,6 +1370,12 @@ async def audit_offline_readiness(
         missing_profile_avatars=report.missing_profile_avatars,
         missing_media_assets=report.missing_media_assets,
         missing_media_files=report.missing_media_files,
+        not_downloaded_media=report.not_downloaded_media,
+        not_downloaded_videos=report.not_downloaded_videos,
+        thumbnail_only_videos=report.thumbnail_only_videos,
+        source_missing_media=report.source_missing_media,
+        media_parse_failures=report.media_parse_failures,
+        media_hash_mismatches=report.media_hash_mismatches,
         reason_summary=report.reason_summary,
         issues=[issue.__dict__ for issue in report.issues],
     )
@@ -1222,6 +1410,8 @@ async def repair_offline_media_integrity(
             "limit": limit,
             "repaired_media_assets": report.repaired_media_assets,
             "repaired_media_files": report.repaired_media_files,
+            "unrepaired_media_files": report.unrepaired_media_files,
+            "media_hash_mismatches": report.media_hash_mismatches,
             "repaired_profile_avatars": report.repaired_profile_avatars,
         },
     )
@@ -1231,6 +1421,8 @@ async def repair_offline_media_integrity(
         repaired_media_files=report.repaired_media_files,
         repaired_file_sizes=report.repaired_file_sizes,
         repaired_profile_avatars=report.repaired_profile_avatars,
+        unrepaired_media_files=report.unrepaired_media_files,
+        media_hash_mismatches=report.media_hash_mismatches,
         repaired_paths=report.repaired_paths,
     )
 
@@ -1314,7 +1506,7 @@ def _rewrite_forward_segment_with_local_path(local_message: str, forward_id: str
         200: {
             "description": "Backup package as JSON or gzip",
             "content": {
-                "application/json": {"example": {"manifest": {"schema": "chat-audit-core.backup.v1"}, "messages": []}},
+                "application/json": {"example": {"manifest": {"schema": "chat-audit-core.backup.v2"}, "messages": []}},
                 "application/gzip": {"schema": {"type": "string", "format": "binary"}},
             },
         }
@@ -1394,6 +1586,7 @@ async def validate_import_data(
 @router.post(
     "/import",
     response_model=ImportResultResponse,
+    response_model_exclude_defaults=True,
     summary="Import a backup package",
     description="Import a JSON or gzip backup package. Requires admin role because existing records may be updated.",
     responses={400: {"description": "Package validation failed"}, 403: {"description": "Admin role required"}},
@@ -1407,6 +1600,8 @@ async def import_data(
     action = "import.run"
     _enforce_high_risk_rate_limit(request, action, settings)
     package = await _read_import_package_request(request)
+    manifest = package.get("manifest") if isinstance(package.get("manifest"), dict) else {}
+    package_schema = manifest.get("schema")
     try:
         result = await BackupService.import_package(
             db,
@@ -1416,8 +1611,9 @@ async def import_data(
             signing_key=settings.app_secret_key,
         )
     except ValueError as exc:
-        BackupService.write_failure_log(settings.backup_root, event="import", error=str(exc), context={"schema": (package.get("manifest") or {}).get("schema")})
-        await _audit(db, request, action=action, status_="failed", detail={"error": str(exc), "schema": (package.get("manifest") or {}).get("schema")})
+        await db.rollback()
+        BackupService.write_failure_log(settings.backup_root, event="import", error=str(exc), context={"schema": package_schema})
+        await _audit(db, request, action=action, status_="failed", detail={"error": str(exc), "schema": package_schema})
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _audit(db, request, action=action, status_="success", detail={"messages": result["messages"], "robot_messages": result["robot_messages"], "media_assets": result["media_assets"]})
     return ImportResultResponse(**result)

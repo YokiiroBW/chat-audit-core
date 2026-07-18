@@ -1,6 +1,17 @@
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.import_contract import (
+    IMPORT_BATCH_MODES,
+    IMPORT_SOURCE_STATUSES,
+    MEDIA_ARCHIVE_STATES,
+    MEDIA_SOURCE_STATES,
+    SQL_INTEGER_MAX,
+    SQL_INTEGER_MIN,
+    validate_media_reference_assets,
+)
 
 
 class HealthResponse(BaseModel):
@@ -123,6 +134,11 @@ class DashboardResponse(BaseModel):
     robot_views: int
     media_assets: int
     media_bytes: int
+    not_downloaded_media: int = 0
+    not_downloaded_videos: int = 0
+    thumbnail_only_videos: int = 0
+    source_missing_media: int = 0
+    media_parse_failures: int = 0
     backups: int
     latest_backup: str | None = None
 
@@ -298,6 +314,7 @@ class MessageResponse(BaseModel):
     room_id: str
     message_type: str
     external_message_id: str | None = None
+    external_message_aliases: list[str] = Field(default_factory=list)
     sender_id: str
     sender_display_name: str | None = None
     sender_avatar_path: str | None = None
@@ -307,6 +324,8 @@ class MessageResponse(BaseModel):
     timestamp: int
     reply_to_message_id: str | None = None
     reply_preview_text: str | None = None
+    media: list["MessageMediaReferenceResponse"] = Field(default_factory=list)
+    import_sources: list["MessageImportSourceResponse"] = Field(default_factory=list)
 
 
 class MessageIngestRequest(BaseModel):
@@ -338,7 +357,11 @@ class MessageIngestRequest(BaseModel):
     nickname: str | None = Field(default=None, max_length=128, description="Sender display name when available.")
     raw_message: str = Field(min_length=1, description="Raw message content, including CQ segments if present.")
     local_message: str | None = Field(default=None, description="Optional already-localized message content.")
-    timestamp: int = Field(description="Message timestamp in Unix seconds.")
+    timestamp: int = Field(
+        ge=SQL_INTEGER_MIN,
+        le=SQL_INTEGER_MAX,
+        description="Message timestamp in Unix seconds.",
+    )
     message_id: str | None = Field(default=None, max_length=64, description="Source-platform message id used for reply jumps and deduplication.")
 
 
@@ -346,6 +369,199 @@ class MessageIngestResponse(BaseModel):
     msg_hash: str | None = None
     skipped: bool = False
     skip_reason: str | None = None
+
+
+class MessageImportSourceResponse(BaseModel):
+    source_id: str
+    source_type: str
+    device_name: str | None = None
+    qq_version: str | None = None
+    schema_version: str | None = None
+    imported_at: datetime
+    last_seen_at: datetime
+
+
+class MessageMediaReferenceRequest(BaseModel):
+    ordinal: int = Field(default=0, ge=0, le=SQL_INTEGER_MAX)
+    media_type: str = Field(min_length=1, max_length=20)
+    source_state: str
+    archive_state: str
+    asset_file_hash: str | None = Field(default=None, max_length=64)
+    thumbnail_file_hash: str | None = Field(default=None, max_length=64)
+    file_name: str | None = Field(default=None, max_length=512)
+    file_ext: str | None = Field(default=None, max_length=32)
+    declared_file_size: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
+    actual_file_size: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
+    source_md5: str | None = Field(default=None, max_length=128)
+    source_sha1: str | None = Field(default=None, max_length=128)
+    source_uuid: str | None = Field(default=None, max_length=255)
+    source_local_path: str | None = None
+    duration_ms: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
+    width: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
+    height: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
+    failure_code: str | None = Field(default=None, max_length=64)
+    failure_detail: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_contract(self):
+        if self.source_state not in MEDIA_SOURCE_STATES:
+            raise ValueError(f"unsupported source_state: {self.source_state}")
+        if self.archive_state not in MEDIA_ARCHIVE_STATES:
+            raise ValueError(f"unsupported archive_state: {self.archive_state}")
+        validate_media_reference_assets(
+            source_state=self.source_state,
+            archive_state=self.archive_state,
+            asset_file_hash=self.asset_file_hash,
+            thumbnail_file_hash=self.thumbnail_file_hash,
+        )
+        return self
+
+
+class MessageMediaReferenceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ordinal: int
+    media_type: str
+    source_state: str
+    archive_state: str
+    asset_file_hash: str | None = None
+    thumbnail_file_hash: str | None = None
+    asset_local_path: str | None = None
+    thumbnail_local_path: str | None = None
+    file_name: str | None = None
+    file_ext: str | None = None
+    declared_file_size: int | None = None
+    actual_file_size: int | None = None
+    source_md5: str | None = None
+    source_sha1: str | None = None
+    source_uuid: str | None = None
+    duration_ms: int | None = None
+    width: int | None = None
+    height: int | None = None
+    failure_code: str | None = None
+    failure_detail: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    first_seen_at: datetime
+    last_checked_at: datetime
+    archived_at: datetime | None = None
+
+
+class ImportSourceCreateRequest(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=64)
+    source_type: str = Field(default="qqnt_local_db", min_length=1, max_length=32)
+    platform: str = Field(default="qq", min_length=1, max_length=20)
+    account_id: str = Field(min_length=1, max_length=64)
+    device_id: str = Field(min_length=1, max_length=128)
+    device_name: str | None = Field(default=None, max_length=128)
+    qq_version: str | None = Field(default=None, max_length=64)
+    schema_version: str | None = Field(default=None, max_length=64)
+    status: str = Field(default="active")
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_status(self):
+        if self.status not in IMPORT_SOURCE_STATUSES:
+            raise ValueError(f"unsupported import source status: {self.status}")
+        return self
+
+
+class ImportSourceResponse(BaseModel):
+    id: str
+    source_type: str
+    platform: str
+    account_id: str
+    device_id: str
+    device_name: str | None = None
+    qq_version: str | None = None
+    schema_version: str | None = None
+    status: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportBatchCreateRequest(BaseModel):
+    id: str | None = Field(default=None, min_length=1, max_length=64)
+    source_id: str = Field(min_length=1, max_length=64)
+    mode: str
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode not in IMPORT_BATCH_MODES:
+            raise ValueError(f"unsupported import batch mode: {self.mode}")
+        return self
+
+
+class ImportBatchFinishRequest(BaseModel):
+    detail: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = Field(default=None, max_length=64)
+    error_detail: str | None = None
+    partial: bool = False
+
+
+class ImportBatchResponse(BaseModel):
+    id: str
+    source_id: str
+    mode: str
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    scanned_messages: int
+    inserted_messages: int
+    updated_messages: int
+    skipped_messages: int
+    uploaded_media: int
+    not_downloaded_media: int
+    missing_media: int
+    failed_media: int
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class MessageSourceRecordRequest(BaseModel):
+    source_table: str = Field(min_length=1, max_length=128)
+    source_key: str = Field(min_length=1, max_length=512)
+    platform_message_id: str | None = Field(default=None, min_length=1, max_length=64)
+    schema_version: str | None = Field(default=None, max_length=64)
+    raw_columns: dict[str, Any] = Field(default_factory=dict)
+    raw_40800_protobuf: str | None = None
+    raw_40900_protobuf: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportMessageItemRequest(BaseModel):
+    message: MessageIngestRequest
+    source_record: MessageSourceRecordRequest
+    media: list[MessageMediaReferenceRequest] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def require_stable_message_id(self):
+        if not self.message.message_id:
+            raise ValueError("Collector batch messages require a stable message.message_id")
+        return self
+
+
+class ImportBatchMessagesRequest(BaseModel):
+    messages: list[ImportMessageItemRequest] = Field(min_length=1, max_length=500)
+
+
+class ImportBatchItemResponse(BaseModel):
+    index: int
+    message_id: str | None = None
+    msg_hash: str | None = None
+    status: str
+    error: str | None = None
+
+
+class ImportBatchMessagesResponse(BaseModel):
+    inserted: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    failed: int = 0
+    replayed: bool = False
+    items: list[ImportBatchItemResponse] = Field(default_factory=list)
 
 
 class ExternalMediaUploadResponse(BaseModel):
@@ -384,6 +600,7 @@ class OfflineAuditIssueResponse(BaseModel):
     msg_hash: str | None = None
     label: str | None = None
     action: str | None = None
+    severity: str = "error"
 
 
 class OfflineAuditResponse(BaseModel):
@@ -397,6 +614,12 @@ class OfflineAuditResponse(BaseModel):
     missing_profile_avatars: int
     missing_media_assets: int
     missing_media_files: int
+    not_downloaded_media: int = 0
+    not_downloaded_videos: int = 0
+    thumbnail_only_videos: int = 0
+    source_missing_media: int = 0
+    media_parse_failures: int = 0
+    media_hash_mismatches: int = 0
     reason_summary: dict[str, int] = Field(default_factory=dict)
     issues: list[OfflineAuditIssueResponse]
 
@@ -407,6 +630,8 @@ class OfflineRepairResponse(BaseModel):
     repaired_media_files: int
     repaired_file_sizes: int
     repaired_profile_avatars: int
+    unrepaired_media_files: int = 0
+    media_hash_mismatches: int = 0
     repaired_paths: list[str]
 
 
@@ -414,6 +639,10 @@ class ImportResultResponse(BaseModel):
     messages: int
     robot_messages: int
     media_assets: int
+    import_sources: int = 0
+    import_batches: int = 0
+    message_source_records: int = 0
+    message_media_references: int = 0
 
 
 class ImportValidationResponse(BaseModel):

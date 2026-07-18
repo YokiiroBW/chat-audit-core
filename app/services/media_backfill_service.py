@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Message, RobotMessage
+from app.models import Message, MessageMediaReference, RobotMessage
 from app.services.media_service import (
     MediaService,
     _CQ_PATTERN,
@@ -16,6 +16,7 @@ from app.services.media_service import (
     _looks_like_media_url,
     _looks_like_card_page_url,
     _parse_cq_params,
+    _parse_cq_media_segments_with_ordinals,
     _sort_card_page_candidates,
     parse_cq_media_segments,
 )
@@ -169,8 +170,20 @@ def _find_uncached_forward_ids(local_message: str) -> list[str]:
     return forward_ids
 
 
-def _find_uncached_media_urls(local_message: str) -> list[str]:
-    urls = [segment.url for segment in parse_cq_media_segments(local_message)]
+def _find_uncached_media_urls(
+    local_message: str,
+    *,
+    skip_media_ordinals: set[int] | None = None,
+    public_prefix: str | None = None,
+) -> list[str]:
+    if skip_media_ordinals is None:
+        urls = [segment.url for segment in parse_cq_media_segments(local_message)]
+    else:
+        urls = [
+            segment.url
+            for ordinal, segment in _parse_cq_media_segments_with_ordinals(local_message, public_prefix)
+            if ordinal not in skip_media_ordinals
+        ]
     urls.extend(_find_card_media_urls(local_message))
     return urls
 
@@ -248,6 +261,15 @@ class MediaBackfillService:
             .limit(limit)
         )
         messages = list(result.scalars().unique().all())
+        structured_media_ordinals: dict[str, set[int]] = {}
+        if messages:
+            structured_result = await db.execute(
+                select(MessageMediaReference.msg_hash, MessageMediaReference.ordinal)
+                .where(MessageMediaReference.msg_hash.in_([message.msg_hash for message in messages]))
+            )
+            for msg_hash, ordinal in structured_result.all():
+                structured_media_ordinals.setdefault(str(msg_hash), set()).add(int(ordinal))
+        structured_message_hashes = set(structured_media_ordinals)
         batch_candidates = 0
 
         for message in messages:
@@ -261,7 +283,14 @@ class MediaBackfillService:
             batch_candidates += 1
 
             before = message.local_message
-            before_media_urls = set(_find_uncached_media_urls(before))
+            skip_media_ordinals = structured_media_ordinals.get(message.msg_hash)
+            before_media_urls = set(
+                _find_uncached_media_urls(
+                    before,
+                    skip_media_ordinals=skip_media_ordinals,
+                    public_prefix=public_prefix,
+                )
+            )
             before_card_page_urls = set(_find_uncached_card_page_urls(before))
             before_forward_ids = set(_find_uncached_forward_ids(before))
 
@@ -273,6 +302,7 @@ class MediaBackfillService:
                 public_prefix=public_prefix,
                 max_bytes=max_bytes,
                 unavailable_placeholders=finalize_unavailable,
+                skip_media_ordinals=skip_media_ordinals,
             )
             if before_forward_ids and forward_payload_loader is not None:
                 robot_ids = await MediaBackfillService._robot_ids_for_message(db, message.msg_hash)
@@ -286,6 +316,7 @@ class MediaBackfillService:
                     public_prefix=public_prefix,
                     max_bytes=max_bytes,
                     unavailable_placeholders=finalize_unavailable,
+                    allowed_media_types=set() if message.msg_hash in structured_message_hashes else None,
                     forward_depth=forward_depth,
                 )
             if before_forward_ids and finalize_unavailable:
@@ -302,7 +333,13 @@ class MediaBackfillService:
             else:
                 report.unchanged += 1
 
-            after_media_urls = set(_find_uncached_media_urls(rewritten))
+            after_media_urls = set(
+                _find_uncached_media_urls(
+                    rewritten,
+                    skip_media_ordinals=skip_media_ordinals,
+                    public_prefix=public_prefix,
+                )
+            )
             for url in sorted(before_media_urls & after_media_urls):
                 report.add_failure(
                     MediaBackfillFailure(message.msg_hash, "media", url, "download_failed_or_expired"),

@@ -48,6 +48,31 @@ async def _add_performance_indexes(conn) -> None:
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_robot_message_robot_msg_hash ON robot_messages (robot_id, msg_hash)")
 
 
+_QQNT_IMPORT_TABLES = (
+    "import_sources",
+    "import_batches",
+    "import_batch_chunks",
+    "message_source_records",
+    "message_media_references",
+)
+
+
+async def _create_qqnt_import_tables(conn) -> None:
+    def create_tables(sync_conn) -> None:
+        for table_name in _QQNT_IMPORT_TABLES:
+            Base.metadata.tables[table_name].create(bind=sync_conn, checkfirst=True)
+
+    await conn.run_sync(create_tables)
+
+
+async def _rollback_qqnt_import_tables(conn) -> None:
+    def drop_tables(sync_conn) -> None:
+        for table_name in reversed(_QQNT_IMPORT_TABLES):
+            Base.metadata.tables[table_name].drop(bind=sync_conn, checkfirst=True)
+
+    await conn.run_sync(drop_tables)
+
+
 async def _drop_column_if_exists(conn, table_name: str, column_name: str) -> None:
     table_columns = await _table_columns(conn, table_name)
     if column_name in table_columns:
@@ -81,6 +106,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_007_admin_users_sessions", "Create admin_users and admin_sessions tables", _noop_migration),
     LightweightMigration("20260705_008_capture_target_policies", "Create capture_target_policies table", _noop_migration),
     LightweightMigration("20260705_009_performance_indexes", "Create performance indexes", _add_performance_indexes, _rollback_performance_indexes),
+    LightweightMigration("20260705_010_qqnt_import_models", "Create QQNT import and media reference tables", _create_qqnt_import_tables, _rollback_qqnt_import_tables),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}

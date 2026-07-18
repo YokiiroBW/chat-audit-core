@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+import hashlib
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Callable, Iterable
+
+from collector.app.config import CollectorConfig
+from collector.media.indexer import MediaFileIndex
+from collector.media.resolver import MediaResolver
+from collector.media.staging import MediaStagingStore
+from collector.parsers.message import MessageParserContext, enqueue_parsed_message, parse_source_message
+from collector.qqnt.discovery import discover_qqnt_data
+from collector.qqnt.key_provider import SQLiteKeyValidator
+from collector.qqnt.reader import QQNTReader, ReadOnlySQLiteDatabase
+from collector.qqnt.snapshot import DatabaseSnapshot, DatabaseSnapshotManager
+from collector.qqnt.versions import select_adapter
+from collector.sync.cursor import CursorRepository, IncrementalCursor
+from collector.sync.queue import CollectorQueue
+from collector.sync.state import CollectorStateStore
+
+
+MODE_OVERLAP_SECONDS = {
+    "initial": 0,
+    "incremental": 3600,
+    "reconcile": 86400,
+}
+
+
+@dataclass(frozen=True)
+class ScanIssue:
+    database: str
+    error_code: str
+    detail: str
+
+
+@dataclass
+class ScanResult:
+    mode: str
+    discovered_databases: int = 0
+    scanned_databases: int = 0
+    scanned_tables: int = 0
+    scanned_messages: int = 0
+    enqueued_messages: int = 0
+    parser_failures: int = 0
+    media_indexed_files: int = 0
+    cursors_updated: int = 0
+    has_more: bool = False
+    issues: list[ScanIssue] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        value = asdict(self)
+        value["partial"] = bool(self.issues)
+        return value
+
+
+def _database_cursor_name(database_path: Path, table_name: str) -> str:
+    normalized = str(database_path.resolve()).casefold()
+    database_id = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"{database_path.name}:{database_id}:{table_name}"
+
+
+def _database_paths(config: CollectorConfig, explicit: Iterable[str | Path] | None) -> tuple[Path, ...]:
+    if explicit:
+        paths = [Path(path).expanduser().resolve() for path in explicit]
+    else:
+        paths = [
+            database.path
+            for data_set in discover_qqnt_data(
+                configured_root=config.qq.data_root,
+                account_id=config.collector.account_id,
+            )
+            for database in data_set.databases
+            if database.role in {"group_message", "private_message", "message"}
+        ]
+    return tuple(dict.fromkeys(paths))
+
+
+def _media_roots(config: CollectorConfig, database_paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    if config.qq.data_root is not None and config.qq.data_root.expanduser().is_dir():
+        roots.append(config.qq.data_root.expanduser().resolve())
+    roots.extend(path.parent for path in database_paths)
+    return tuple(dict.fromkeys(roots))
+
+
+class QQNTScanner:
+    def __init__(
+        self,
+        config: CollectorConfig,
+        store: CollectorStateStore,
+        queue: CollectorQueue,
+        *,
+        source_id: str,
+        credential_getter: Callable[[str], str | None] | None = None,
+    ) -> None:
+        self.config = config
+        self.store = store
+        self.queue = queue
+        self.source_id = source_id
+        self.credential_getter = credential_getter or (lambda _name: None)
+
+    def _resolver(self, database_paths: tuple[Path, ...], result: ScanResult) -> MediaResolver:
+        roots = _media_roots(self.config, database_paths)
+        if not roots:
+            return MediaResolver()
+        index = MediaFileIndex(roots)
+        result.media_indexed_files = index.build()
+        return MediaResolver(index)
+
+    def _database_key(self, database_path: Path) -> tuple[str | None, str | None, str | None]:
+        validator = SQLiteKeyValidator()
+        validation = validator.validate(database_path, None)
+        key = None
+        if validation.error_code == "DB_KEY_INVALID":
+            key = self.credential_getter("qqnt_database_key")
+            validation = validator.validate(database_path, key)
+        if not validation.usable:
+            return None, validation.error_code or "DB_OPEN_FAILED", validation.detail or "database is not usable"
+        return key if validation.status == "valid" else None, None, None
+
+    def scan(
+        self,
+        *,
+        mode: str = "incremental",
+        database_paths: Iterable[str | Path] | None = None,
+        max_messages: int | None = None,
+    ) -> ScanResult:
+        if mode not in MODE_OVERLAP_SECONDS:
+            raise ValueError(f"unsupported scan mode: {mode}")
+        if max_messages is not None and max_messages <= 0:
+            raise ValueError("max_messages must be positive")
+
+        paths = _database_paths(self.config, database_paths)
+        result = ScanResult(mode=mode, discovered_databases=len(paths))
+        resolver = self._resolver(paths, result)
+        staging = MediaStagingStore(
+            self.config.paths.staging_dir,
+            max_bytes=self.config.collector.staging_max_gb * 1024 * 1024 * 1024,
+        )
+        cursors = CursorRepository(self.store, self.source_id)
+        snapshot_manager = DatabaseSnapshotManager(self.config.paths.root / "snapshots")
+        page_size = min(
+            1000,
+            self.config.collector.initial_import_batch_size
+            if mode == "initial"
+            else self.config.collector.incremental_batch_size,
+        )
+
+        for source_path in paths:
+            if max_messages is not None and result.scanned_messages >= max_messages:
+                result.has_more = True
+                break
+            key, error_code, detail = self._database_key(source_path)
+            if error_code:
+                result.issues.append(ScanIssue(str(source_path), error_code, detail or error_code))
+                continue
+
+            snapshot: DatabaseSnapshot | None = None
+            target_path = source_path
+            try:
+                if self.config.qq.read_mode == "snapshot_copy":
+                    snapshot = snapshot_manager.create(source_path)
+                    target_path = snapshot.database_path
+                database = ReadOnlySQLiteDatabase(target_path, immutable=snapshot is not None, key=key)
+                reader = QQNTReader(database)
+                report = reader.probe()
+                adapter = select_adapter(report)
+                context = MessageParserContext(
+                    account_id=self.config.collector.account_id,
+                    schema_version=report.fingerprint,
+                )
+                result.scanned_databases += 1
+
+                for candidate in adapter.candidates(report):
+                    if max_messages is not None and result.scanned_messages >= max_messages:
+                        result.has_more = True
+                        break
+                    result.scanned_tables += 1
+                    cursor_name = _database_cursor_name(source_path, candidate.table)
+                    saved_cursor = cursors.load_table(cursor_name)
+                    page_cursor = saved_cursor
+                    first_page = True
+                    while True:
+                        remaining = (
+                            page_size
+                            if max_messages is None
+                            else min(page_size, max_messages - result.scanned_messages)
+                        )
+                        if remaining <= 0:
+                            result.has_more = True
+                            break
+                        page = adapter.read_page(
+                            database,
+                            candidate,
+                            page_cursor,
+                            limit=remaining,
+                            overlap_seconds=MODE_OVERLAP_SECONDS[mode] if first_page else 0,
+                        )
+                        first_page = False
+                        if not page.rows:
+                            break
+                        for row in page.rows:
+                            parsed = parse_source_message(row, context, resolver=resolver)
+                            enqueue_parsed_message(
+                                parsed,
+                                source_id=self.source_id,
+                                queue=self.queue,
+                                store=self.store,
+                                staging=staging,
+                            )
+                            result.scanned_messages += 1
+                            result.enqueued_messages += 1
+                            result.parser_failures += len(parsed.failures)
+                        page_cursor = page.next_cursor
+                        if adapter.cursor_after(database, candidate, page_cursor, saved_cursor):
+                            saved_cursor = page_cursor
+                            cursors.save_table(cursor_name, saved_cursor)
+                            result.cursors_updated += 1
+                        if len(page.rows) < remaining:
+                            break
+            except Exception as exc:
+                error_code = getattr(exc, "error_code", "COLLECTOR_SCAN_FAILED")
+                result.issues.append(ScanIssue(str(source_path), str(error_code), str(exc)))
+            finally:
+                if snapshot is not None:
+                    snapshot_manager.cleanup(snapshot)
+        return result
+
+
+__all__ = ["MODE_OVERLAP_SECONDS", "QQNTScanner", "ScanIssue", "ScanResult"]

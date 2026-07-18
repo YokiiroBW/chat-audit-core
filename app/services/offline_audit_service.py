@@ -1,16 +1,26 @@
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaAsset, Message, RobotMessage, RoomProfile, UserProfile
+from app.models import (
+    MediaAsset,
+    Message,
+    MessageMediaReference,
+    MessageSourceRecord,
+    RobotMessage,
+    RoomProfile,
+    UserProfile,
+)
 from app.services.backup_service import BackupService
 from app.services.media_backfill_service import (
     _find_uncached_card_page_urls,
     _find_uncached_forward_ids,
     _find_uncached_media_urls,
 )
+from app.services.media_service import parse_cq_media_segments
 
 OFFLINE_ISSUE_DETAILS = {
     "message_still_references_remote_media": (
@@ -41,6 +51,12 @@ OFFLINE_ISSUE_DETAILS = {
         "媒体索引对应文件丢失",
         "运行离线修复创建缺失占位文件，或重新回填原始媒体。",
     ),
+    "media_asset_hash_mismatch": ("媒体文件哈希不一致", "从可信备份恢复原始文件，禁止生成占位文件。"),
+    "media_asset_empty": ("媒体文件为空", "重新归档真实媒体文件，零字节文件不能视为完整资产。"),
+    "source_media_missing": ("源媒体文件已丢失", "源记录显示文件曾存在，但当前源设备文件不可用。"),
+    "media_parse_failed": ("媒体记录解析失败", "保留原始记录并在解析器升级后重新处理。"),
+    "media_archive_failed": ("媒体归档失败", "检查源文件读取、校验和 NAS 上传错误后重试。"),
+    "media_reference_asset_missing": ("媒体引用资产不存在", "检查上传确认和媒体引用绑定流程。"),
 }
 
 
@@ -52,6 +68,8 @@ class OfflineAuditIssue:
     msg_hash: str | None = None
     label: str | None = None
     action: str | None = None
+    severity: str = "error"
+    affects_readiness: bool = True
 
     def __post_init__(self) -> None:
         if self.label is not None and self.action is not None:
@@ -75,11 +93,18 @@ class OfflineAuditReport:
     missing_profile_avatars: int = 0
     missing_media_assets: int = 0
     missing_media_files: int = 0
+    not_downloaded_media: int = 0
+    not_downloaded_videos: int = 0
+    thumbnail_only_videos: int = 0
+    source_missing_media: int = 0
+    media_parse_failures: int = 0
+    media_hash_mismatches: int = 0
     reason_summary: dict[str, int] = field(default_factory=dict)
     issues: list[OfflineAuditIssue] = field(default_factory=list)
 
     def add_issue(self, issue: OfflineAuditIssue, issue_limit: int) -> None:
-        self.offline_ready = False
+        if issue.affects_readiness:
+            self.offline_ready = False
         self.reason_summary[issue.reason] = self.reason_summary.get(issue.reason, 0) + 1
         if len(self.issues) < issue_limit:
             self.issues.append(issue)
@@ -107,7 +132,24 @@ class OfflineAuditService:
 
         result = await db.execute(stmt)
         messages = list(result.scalars().unique().all())
+        msg_hashes = [message.msg_hash for message in messages]
+        references_by_message: dict[str, list[MessageMediaReference]] = {msg_hash: [] for msg_hash in msg_hashes}
+        source_record_messages: set[str] = set()
+        if msg_hashes:
+            reference_result = await db.execute(
+                select(MessageMediaReference)
+                .where(MessageMediaReference.msg_hash.in_(msg_hashes))
+                .order_by(MessageMediaReference.msg_hash.asc(), MessageMediaReference.ordinal.asc())
+            )
+            for reference in reference_result.scalars().all():
+                references_by_message[reference.msg_hash].append(reference)
+            source_record_result = await db.execute(
+                select(MessageSourceRecord.msg_hash).where(MessageSourceRecord.msg_hash.in_(msg_hashes)).distinct()
+            )
+            source_record_messages = set(source_record_result.scalars().all())
+
         local_paths: set[str] = set()
+        referenced_asset_hashes: set[str] = set()
         group_room_ids: set[str] = set()
         user_ids: set[str] = set()
 
@@ -118,7 +160,16 @@ class OfflineAuditService:
             elif message.message_type == "private":
                 user_ids.add(message.room_id)
             user_ids.add(message.sender_id)
+            references = references_by_message.get(message.msg_hash, [])
             remote_media_urls = _find_uncached_media_urls(message.local_message)
+            if references and remote_media_urls:
+                cq_media_segments = parse_cq_media_segments(message.local_message)
+                covered_urls = {
+                    cq_media_segments[reference.ordinal].url
+                    for reference in references
+                    if 0 <= reference.ordinal < len(cq_media_segments)
+                }
+                remote_media_urls = [url for url in remote_media_urls if url not in covered_urls]
             card_page_urls = _find_uncached_card_page_urls(message.local_message)
             forward_ids = _find_uncached_forward_ids(message.local_message)
 
@@ -134,6 +185,76 @@ class OfflineAuditService:
             for forward_id in forward_ids:
                 report.add_issue(OfflineAuditIssue("forward", forward_id, "forward_payload_not_cached", message.msg_hash), issue_limit)
 
+            for reference in references:
+                if reference.source_state == "not_downloaded":
+                    report.not_downloaded_media += 1
+                    if reference.media_type == "video":
+                        report.not_downloaded_videos += 1
+                if reference.media_type == "video" and reference.archive_state == "thumbnail_only":
+                    report.thumbnail_only_videos += 1
+                if reference.source_state == "missing":
+                    report.source_missing_media += 1
+                    report.add_issue(
+                        OfflineAuditIssue(
+                            "source_media",
+                            f"{message.msg_hash}:{reference.ordinal}",
+                            "source_media_missing",
+                            message.msg_hash,
+                        ),
+                        issue_limit,
+                    )
+                if reference.archive_state == "failed":
+                    if reference.source_state == "unknown":
+                        report.media_parse_failures += 1
+                        replayable = message.msg_hash in source_record_messages
+                        report.add_issue(
+                            OfflineAuditIssue(
+                                "media_parse",
+                                f"{message.msg_hash}:{reference.ordinal}",
+                                "media_parse_failed",
+                                message.msg_hash,
+                                severity="warning" if replayable else "error",
+                                affects_readiness=not replayable,
+                            ),
+                            issue_limit,
+                        )
+                    else:
+                        report.add_issue(
+                            OfflineAuditIssue(
+                                "media_archive",
+                                f"{message.msg_hash}:{reference.ordinal}",
+                                "media_archive_failed",
+                                message.msg_hash,
+                            ),
+                            issue_limit,
+                        )
+                if reference.asset_file_hash:
+                    referenced_asset_hashes.add(reference.asset_file_hash)
+                if reference.thumbnail_file_hash:
+                    referenced_asset_hashes.add(reference.thumbnail_file_hash)
+                if reference.archive_state == "complete" and not reference.asset_file_hash:
+                    report.missing_media_assets += 1
+                    report.add_issue(
+                        OfflineAuditIssue(
+                            "media_reference",
+                            f"{message.msg_hash}:{reference.ordinal}",
+                            "media_reference_asset_missing",
+                            message.msg_hash,
+                        ),
+                        issue_limit,
+                    )
+                if reference.archive_state == "thumbnail_only" and not reference.thumbnail_file_hash:
+                    report.missing_media_assets += 1
+                    report.add_issue(
+                        OfflineAuditIssue(
+                            "media_reference",
+                            f"{message.msg_hash}:{reference.ordinal}:thumbnail",
+                            "media_reference_asset_missing",
+                            message.msg_hash,
+                        ),
+                        issue_limit,
+                    )
+
         await OfflineAuditService._audit_profile_avatars(
             db,
             report=report,
@@ -144,10 +265,30 @@ class OfflineAuditService:
             public_storage_prefix=public_storage_prefix,
         )
 
-        asset_result = await db.execute(select(MediaAsset).order_by(MediaAsset.local_path.asc()))
+        asset_stmt = select(MediaAsset)
+        if robot_id is not None or room_id is not None:
+            legacy_asset_paths = set(local_paths)
+            conditions = []
+            if referenced_asset_hashes:
+                conditions.append(MediaAsset.file_hash.in_(referenced_asset_hashes))
+            if legacy_asset_paths:
+                conditions.append(MediaAsset.local_path.in_(legacy_asset_paths))
+            if conditions:
+                from sqlalchemy import or_
+
+                asset_stmt = asset_stmt.where(or_(*conditions))
+            else:
+                asset_stmt = asset_stmt.where(MediaAsset.file_hash == "")
+        asset_result = await db.execute(asset_stmt.order_by(MediaAsset.local_path.asc()))
         assets = list(asset_result.scalars().all())
         asset_by_path = {asset.local_path: asset for asset in assets}
+        asset_by_hash = {asset.file_hash: asset for asset in assets}
         report.media_assets_checked = len(assets)
+
+        for file_hash in sorted(referenced_asset_hashes):
+            if file_hash not in asset_by_hash:
+                report.missing_media_assets += 1
+                report.add_issue(OfflineAuditIssue("media_asset", file_hash, "media_reference_asset_missing"), issue_limit)
 
         for local_path in sorted(local_paths):
             if local_path not in asset_by_path:
@@ -161,6 +302,18 @@ class OfflineAuditService:
                 if file_path is None or not file_path.exists():
                     report.missing_media_files += 1
                     report.add_issue(OfflineAuditIssue("media_file", asset.local_path, "media_asset_file_missing"), issue_limit)
+                    continue
+                content = file_path.read_bytes()
+                if not content:
+                    report.missing_media_files += 1
+                    report.add_issue(OfflineAuditIssue("media_file", asset.local_path, "media_asset_empty"), issue_limit)
+                    continue
+                is_hex_hash = all(char in "0123456789abcdefABCDEF" for char in asset.file_hash)
+                if is_hex_hash and len(asset.file_hash) in {32, 64}:
+                    actual_hash = hashlib.md5(content).hexdigest() if len(asset.file_hash) == 32 else hashlib.sha256(content).hexdigest()
+                    if actual_hash.lower() != asset.file_hash.lower():
+                        report.media_hash_mismatches += 1
+                        report.add_issue(OfflineAuditIssue("media_file", asset.local_path, "media_asset_hash_mismatch"), issue_limit)
 
         return report
 

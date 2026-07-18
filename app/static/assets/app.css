@@ -305,6 +305,7 @@
     }
     .search-row { display: flex; gap: 8px; margin-top: 12px; }
     .search-row input { flex: 1; }
+    .search-row select { flex: 0 0 132px; min-width: 0; }
     .rooms, .search-results, .adapter-list, .chat-scroll { overflow: auto; }
     .rooms { flex: 1; }
     .settings {
@@ -1301,9 +1302,22 @@
     }
     .message.mine .message-body { align-items: flex-end; }
     .message-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
       color: var(--muted);
       font-size: 12px;
       margin-bottom: 5px;
+    }
+    .message-detail-button {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
     .bubble {
       display: inline-block;
@@ -1453,6 +1467,49 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .media-reference-card {
+      display: grid;
+      gap: 7px;
+      width: min(390px, 100%);
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      white-space: normal;
+    }
+    .media-reference-card.is-not-downloaded {
+      border-color: color-mix(in srgb, var(--warn) 48%, var(--line));
+      background: color-mix(in srgb, var(--warn) 9%, var(--panel));
+    }
+    .media-reference-card.is-missing,
+    .media-reference-card.is-failed {
+      border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+      background: color-mix(in srgb, var(--danger) 7%, var(--panel));
+    }
+    .media-reference-thumbnail .media-img { max-height: 220px; }
+    .media-reference-title { color: var(--ink); font-size: 14px; }
+    .media-reference-description { color: var(--text); font-size: 12px; line-height: 1.5; }
+    .media-reference-meta { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .message-detail-modal { width: min(720px, calc(100vw - 32px)); }
+    .message-detail-report { display: grid; gap: 14px; }
+    .message-detail-section {
+      display: grid;
+      gap: 7px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+    }
+    .message-detail-section h3 { margin: 0 0 3px; color: var(--ink); font-size: 14px; }
+    .message-detail-row {
+      display: grid;
+      grid-template-columns: minmax(110px, 30%) minmax(0, 1fr);
+      gap: 12px;
+      font-size: 12px;
+    }
+    .message-detail-row strong { color: var(--muted); }
+    .message-detail-row span { color: var(--text); overflow-wrap: anywhere; }
     .json-card {
       display: grid;
       grid-template-columns: 72px minmax(0, 1fr);

@@ -150,6 +150,31 @@ data/
 - 对外网开放前请先配置强密码和反向代理访问控制
 - 请遵守聊天平台规则和当地法律法规
 
+## Windows QQNT Collector（Q6 框架）
+
+仓库中的 `collector/` 已提供 Windows Collector 的基础框架，包括：
+
+- TOML 配置与敏感字段拦截；
+- Windows DPAPI 凭据存储；
+- 本地 SQLite 状态库、上传队列、退避重试和 dead-letter；
+- 媒体 staging 与两阶段上传；
+- 调度器、CLI 状态页和模拟消息导入。
+
+快速验证：
+
+```powershell
+Copy-Item collector\collector.example.toml collector.toml
+python -m collector --config collector.toml credential set api_token
+python -m collector --config collector.toml simulate
+python -m collector --config collector.toml status
+python -m collector --config collector.toml run-once
+python -m collector --config collector.toml discover
+```
+
+Q7 已提供数据目录发现、WAL 一致性快照、只读 SQLite 连接、密钥验证接口、
+schema probe、复合增量游标和基础字段版本适配。读取始终使用只读事务，
+不会修改或修复 QQNT 数据库。真实消息正文和媒体 protobuf 解析属于 Q8。
+
 ## 当前状态
 
 `v1.0.0` 是第一个稳定版本，主线功能已经围绕 QQ / NapCat 聊天记录备份、浏览、搜索、导出和离线留存闭环。
