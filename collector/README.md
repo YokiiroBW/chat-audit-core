@@ -21,6 +21,13 @@ the Collector does not extract `pskey` values or inject code into QQ.
 
 ## Quick start
 
+For normal Windows use, launch `chat-audit-qq-collector-gui.exe`. The tray app
+provides first-run setup, database compatibility checks, queue status, sync
+controls, simulated connection testing, dead-letter retry and diagnostics.
+Closing its window keeps it running in the notification area.
+
+The CLI remains available for automation and advanced diagnostics:
+
 ```powershell
 Copy-Item collector\collector.example.toml collector.toml
 python -m collector --config collector.toml credential set api_token

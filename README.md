@@ -150,7 +150,19 @@ data/
 - 对外网开放前请先配置强密码和反向代理访问控制
 - 请遵守聊天平台规则和当地法律法规
 
-## Windows QQNT Collector（Q6 框架）
+## Windows QQNT Collector
+
+普通 Windows 用户可以直接运行托盘界面：
+
+```powershell
+.\dist\chat-audit-qq-collector-gui.exe
+```
+
+首次启动在“设置”页填写 QQ 账号、QQNT 数据目录、服务器地址和 API Token。
+关闭窗口后程序继续在系统托盘运行。界面提供数据库兼容检测、同步控制、
+模拟上传测试、队列状态、失败重试和脱敏诊断包。
+
+命令行工具继续用于自动化和高级诊断。
 
 仓库中的 `collector/` 已提供 Windows Collector 的基础框架，包括：
 
@@ -171,9 +183,10 @@ python -m collector --config collector.toml run-once
 python -m collector --config collector.toml discover
 ```
 
-Q7 已提供数据目录发现、WAL 一致性快照、只读 SQLite 连接、密钥验证接口、
-schema probe、复合增量游标和基础字段版本适配。读取始终使用只读事务，
-不会修改或修复 QQNT 数据库。真实消息正文和媒体 protobuf 解析属于 Q8。
+Collector 已提供数据目录发现、WAL 一致性快照、只读 SQLite 连接、复合
+增量游标、消息和媒体解析、持久上传队列及 Windows 打包。读取始终使用
+只读事务，不会修改或修复 QQNT 数据库。真实 `SQLite header 3 / QQ_NT DB`
+数据库在缺少兼容 NT VFS 时会明确显示不兼容，不会伪报同步成功。
 
 ## 当前状态
 

@@ -16,11 +16,17 @@
 游标、日志和待上传队列位于 `%LOCALAPPDATA%\ChatAuditQQCollector`，升级时
 不会覆盖现有 `collector.toml`。
 
+构建会生成两个程序：
+
+- `chat-audit-qq-collector-gui.exe`：普通用户使用的托盘窗口；
+- `chat-audit-qq-collector.exe`：自动化和高级诊断用命令行工具。
+
 ## 首次配置
 
-1. 编辑 `%LOCALAPPDATA%\ChatAuditQQCollector\collector.toml`，设置 QQ 号、
-   设备标识、QQNT 数据目录和 Chat Audit Core 地址。
-2. 在命令行安全写入 API Token；不要把 Token 或数据库密钥写进 TOML。
+普通用户直接启动托盘软件，按“设置”页完成 QQ 账号、数据目录、服务器
+地址和 API Token 配置。Token 通过 DPAPI 加密，不写入 TOML。
+
+也可以使用命令行配置：
 
 ```powershell
 chat-audit-qq-collector.exe --config "$env:LOCALAPPDATA\ChatAuditQQCollector\collector.toml" credential set api_token
