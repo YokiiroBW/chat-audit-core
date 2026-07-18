@@ -29,11 +29,22 @@ def sqlite_header(path: str | Path) -> bytes:
         return file.read(16)
 
 
-def is_plain_sqlite(path: str | Path) -> bool:
+def detect_database_format(path: str | Path) -> str:
     try:
-        return sqlite_header(path) == b"SQLite format 3\x00"
+        source = Path(path)
+        with source.open("rb") as file:
+            header = file.read(64)
     except OSError:
-        return False
+        return "missing"
+    if header[:16] == b"SQLite format 3\x00":
+        return "sqlite"
+    if header[:16] == b"SQLite header 3\x00" and b"QQ_NT DB" in header[16:64]:
+        return "qqnt_custom_vfs"
+    return "unknown"
+
+
+def is_plain_sqlite(path: str | Path) -> bool:
+    return detect_database_format(path) == "sqlite"
 
 
 class DatabaseSnapshotManager:

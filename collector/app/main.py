@@ -18,7 +18,7 @@ from collector.app.logging import configure_logging
 from collector.qqnt.discovery import discover_qqnt_data
 from collector.qqnt.key_provider import SQLiteKeyValidator
 from collector.qqnt.reader import QQNTReader, ReadOnlyDatabaseError, ReadOnlySQLiteDatabase
-from collector.qqnt.snapshot import DatabaseSnapshotManager, SnapshotError
+from collector.qqnt.snapshot import DatabaseSnapshotManager, SnapshotError, detect_database_format
 from collector.qqnt.versions import select_adapter
 from collector.qqnt.versions.base import SchemaAdapterError
 from collector.sync.queue import CollectorQueue
@@ -300,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
                             "path": str(database.path),
                             "role": database.role,
                             "size": database.size,
+                            "format": detect_database_format(database.path),
                             "has_wal": database.wal_path is not None,
                             "has_shm": database.shm_path is not None,
                         }
@@ -318,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
                     for database in data_set["databases"]:
                         print(
                             f"  {database['role']}: {database['path']} "
-                            f"({database['size']} bytes, wal={database['has_wal']})"
+                            f"({database['size']} bytes, format={database['format']}, wal={database['has_wal']})"
                         )
             return 0
         if args.command == "scan":

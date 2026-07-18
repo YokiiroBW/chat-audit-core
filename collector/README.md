@@ -15,6 +15,9 @@ Implemented:
 
 Unknown private QQNT protobuf layouts are preserved as replayable raw Base64
 records. They are not guessed or presented as successfully decoded messages.
+Databases with the real `SQLite header 3` / `QQ_NT DB` header are reported as
+`DB_VFS_UNSUPPORTED` until a version-compatible NT VFS runtime is available;
+the Collector does not extract `pskey` values or inject code into QQ.
 
 ## Quick start
 

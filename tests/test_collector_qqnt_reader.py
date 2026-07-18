@@ -10,6 +10,7 @@ from collector.qqnt.key_provider import SQLiteKeyValidator
 from collector.qqnt.reader import ReadOnlyDatabaseError, ReadOnlySQLiteDatabase
 from collector.qqnt.schema_probe import probe_schema
 from collector.qqnt.snapshot import DatabaseSnapshotManager
+from collector.qqnt.snapshot import detect_database_format
 from collector.qqnt.versions import select_adapter
 from collector.sync.cursor import CursorRepository, IncrementalCursor
 from collector.sync.state import CollectorStateStore
@@ -218,6 +219,13 @@ def test_database_key_validation_and_cursor_repository(tmp_path):
     encrypted = tmp_path / "encrypted.db"
     encrypted.write_bytes(b"not-a-sqlite-header")
     assert SQLiteKeyValidator().validate(encrypted, "configured-key").status == "unsupported"
+
+    qqnt_custom = tmp_path / "nt_msg.db"
+    qqnt_custom.write_bytes(b"SQLite header 3\x00" + b"\x00" * 16 + b"QQ_NT DB" + b"\x00" * 32)
+    qqnt_result = SQLiteKeyValidator().validate(qqnt_custom, "unused")
+    assert detect_database_format(qqnt_custom) == "qqnt_custom_vfs"
+    assert qqnt_result.status == "unsupported"
+    assert qqnt_result.error_code == "DB_VFS_UNSUPPORTED"
 
     store = CollectorStateStore(tmp_path / "state.sqlite3")
     store.initialize()

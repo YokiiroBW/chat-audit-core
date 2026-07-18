@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from collector.qqnt.snapshot import is_plain_sqlite
+from collector.qqnt.snapshot import detect_database_format, is_plain_sqlite
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,13 @@ class SQLiteKeyValidator:
         path = Path(database_path).expanduser().resolve()
         if not path.is_file():
             return KeyValidationResult("invalid", "DB_OPEN_FAILED", "database file does not exist")
+        database_format = detect_database_format(path)
+        if database_format == "qqnt_custom_vfs":
+            return KeyValidationResult(
+                "unsupported",
+                "DB_VFS_UNSUPPORTED",
+                "QQNT custom database header detected; a compatible NT VFS/SQLCipher runtime is required",
+            )
         if is_plain_sqlite(path):
             try:
                 uri = f"file:{path.as_posix()}?mode=ro"

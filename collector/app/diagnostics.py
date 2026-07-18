@@ -14,6 +14,7 @@ from collector import __version__
 from collector.app.config import CollectorConfig
 from collector.app.logging import redact
 from collector.qqnt.discovery import discover_qqnt_data
+from collector.qqnt.snapshot import detect_database_format
 from collector.sync.state import CollectorStateStore
 
 
@@ -67,6 +68,7 @@ def create_diagnostic_bundle(
                     {
                         "name": database.path.name,
                         "role": database.role,
+                        "format": detect_database_format(database.path),
                         "size": database.size,
                         "has_wal": database.wal_path is not None,
                         "has_shm": database.shm_path is not None,
