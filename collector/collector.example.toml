@@ -1,0 +1,31 @@
+[collector]
+account_id = "123456789"
+device_id = "main-pc"
+device_name = "Main-PC"
+sync_interval_minutes = 10
+reconcile_interval_hours = 24
+staging_max_gb = 20
+initial_import_batch_size = 200
+incremental_batch_size = 100
+# data_dir = "C:\\Users\\User\\AppData\\Local\\ChatAuditQQCollector"
+
+[qq]
+data_root = "C:\\Users\\User\\Documents\\Tencent Files\\123456789"
+read_mode = "direct_readonly"
+enable_vss_fallback = true
+
+[server]
+base_url = "https://chat-audit.example.local"
+# source_id = "qqnt-local-main-pc"
+request_timeout_seconds = 60
+verify_tls = true
+
+[media]
+copy_before_upload = true
+validate_video_with_ffprobe = true
+upload_thumbnails = true
+rescan_not_downloaded_days = 30
+
+# API Token and QQNT database keys are intentionally absent.
+# Store them with: python -m collector credential set api_token
+# and: python -m collector credential set qqnt_database_key

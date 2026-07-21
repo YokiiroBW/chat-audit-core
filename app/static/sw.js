@@ -1,9 +1,9 @@
-const CACHE_NAME = 'chat-audit-static-v2';
+const CACHE_NAME = 'chat-audit-static-v9';
 const STATIC_ASSETS = [
   '/',
   '/assets/favicon.svg',
-  '/assets/app.min.css',
-  '/assets/app.min.js',
+  '/assets/app.min.css?v=20260721-3',
+  '/assets/app.min.js?v=20260721-3',
 ];
 
 self.addEventListener('install', (event) => {

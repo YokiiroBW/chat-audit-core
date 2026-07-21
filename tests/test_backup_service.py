@@ -67,7 +67,7 @@ async def test_backup_service_exports_filtered_messages_and_manifest(db_session)
         end_timestamp=150,
     )
 
-    assert package["manifest"]["schema"] == "chat-audit-core.backup.v1"
+    assert package["manifest"]["schema"] == "chat-audit-core.backup.v2"
     assert package["manifest"]["filters"] == {
         "robot_id": "robot-a",
         "room_id": "room-1",
@@ -332,7 +332,7 @@ async def test_backup_service_writes_auto_backup_file_and_prunes_old_files(db_se
     assert backup_path.suffix == ".json"
     assert __import__("re").fullmatch(r"auto-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.json", backup_path.name)
     package = __import__("json").loads(backup_path.read_text(encoding="utf-8"))
-    assert package["manifest"]["schema"] == "chat-audit-core.backup.v1"
+    assert package["manifest"]["schema"] == "chat-audit-core.backup.v2"
     assert package["manifest"]["backup_type"] == "auto"
     assert package["messages"][0]["raw_message"] == "auto backup payload"
     remaining = sorted(path.name for path in tmp_path.glob("auto-backup-*.json"))
@@ -531,7 +531,7 @@ async def test_import_validate_api_reports_valid_package_without_writing(db_sess
     assert response.status_code == 200
     report = response.json()
     assert report["valid"] is True
-    assert report["schema"] == "chat-audit-core.backup.v1"
+    assert report["schema"] == "chat-audit-core.backup.v2"
     assert report["checksum_valid"] is True
     assert report["errors"] == []
     assert report["counts"] == {
@@ -541,6 +541,10 @@ async def test_import_validate_api_reports_valid_package_without_writing(db_sess
         "media_files": 0,
         "room_profiles": 0,
         "user_profiles": 0,
+        "import_sources": 0,
+        "import_batches": 0,
+        "message_source_records": 0,
+        "message_media_references": 0,
     }
 
 

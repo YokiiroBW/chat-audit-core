@@ -31,6 +31,8 @@ def format_utc_z(value: dt.datetime) -> str:
 
 
 def parse_utc_datetime(value: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise ValueError("datetime value must be a string")
     normalized = value.strip()
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"

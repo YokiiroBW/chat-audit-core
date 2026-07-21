@@ -44,6 +44,8 @@ logs/
 Thumbs.db
 
 # Secrets / credentials
+collector.toml
+*.dpapi
 *.pem
 *.key
 *.crt

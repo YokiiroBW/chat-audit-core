@@ -12,13 +12,34 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import MediaAsset, Message, RobotMessage, RoomProfile, UserProfile
-from app.time_utils import format_utc_z, to_utc_naive, utc_now
+from app.import_contract import (
+    IMPORT_BATCH_MODES,
+    IMPORT_BATCH_STATUSES,
+    IMPORT_SOURCE_STATUSES,
+    SQL_INTEGER_MAX,
+    SQL_INTEGER_MIN,
+)
+from app.models import (
+    ImportBatch,
+    ImportSource,
+    MediaAsset,
+    Message,
+    MessageMediaReference,
+    MessageSourceRecord,
+    RobotMessage,
+    RoomProfile,
+    UserProfile,
+)
+from app.schemas import MessageMediaReferenceRequest
+from app.services.import_service import ImportService
+from app.time_utils import format_utc_z, parse_utc_datetime, to_utc_naive, utc_now
 
-BACKUP_SCHEMA = "chat-audit-core.backup.v1"
+BACKUP_SCHEMA = "chat-audit-core.backup.v2"
+LEGACY_BACKUP_SCHEMAS = frozenset({"chat-audit-core.backup.v1"})
+SUPPORTED_BACKUP_SCHEMAS = frozenset({BACKUP_SCHEMA, *LEGACY_BACKUP_SCHEMAS})
 BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
 logger = logging.getLogger(__name__)
 
@@ -32,11 +53,139 @@ class BackupService:
         "room_profiles": ("room_id", "platform"),
         "user_profiles": ("user_id", "platform"),
     }
+    _V2_REQUIRED_FIELDS = {
+        "import_sources": ("id", "source_type", "platform", "account_id", "device_id", "status", "first_seen_at", "last_seen_at"),
+        "import_batches": ("id", "source_id", "mode", "status", "started_at"),
+        "message_source_records": ("msg_hash", "source_id", "source_table", "source_primary_key", "imported_at", "last_seen_at"),
+        "message_media_references": ("msg_hash", "ordinal", "media_type", "source_state", "archive_state", "first_seen_at", "last_checked_at"),
+    }
+    _REQUIRED_FIELD_TYPES = {
+        "messages": {
+            "msg_hash": str,
+            "platform": str,
+            "room_id": str,
+            "message_type": str,
+            "sender_id": str,
+            "raw_message": str,
+            "local_message": str,
+            "timestamp": int,
+        },
+        "robot_messages": {"robot_id": str, "msg_hash": str},
+        "media_assets": {"file_hash": str, "file_type": str, "file_size": int, "local_path": str},
+        "media_files": {"local_path": str, "file_size": int, "file_checksum": dict, "content_base64": str},
+        "room_profiles": {"room_id": str, "platform": str},
+        "user_profiles": {"user_id": str, "platform": str},
+        "import_sources": {
+            "id": str,
+            "source_type": str,
+            "platform": str,
+            "account_id": str,
+            "device_id": str,
+            "status": str,
+            "first_seen_at": str,
+            "last_seen_at": str,
+        },
+        "import_batches": {"id": str, "source_id": str, "mode": str, "status": str, "started_at": str},
+        "message_source_records": {
+            "msg_hash": str,
+            "source_id": str,
+            "source_table": str,
+            "source_primary_key": str,
+            "imported_at": str,
+            "last_seen_at": str,
+        },
+        "message_media_references": {
+            "msg_hash": str,
+            "ordinal": int,
+            "media_type": str,
+            "source_state": str,
+            "archive_state": str,
+            "first_seen_at": str,
+            "last_checked_at": str,
+        },
+    }
+    _OPTIONAL_FIELD_TYPES = {
+        "messages": {"external_message_id": str, "nickname": str, "source_sequence": int},
+        "media_assets": {"file_checksum": dict},
+        "room_profiles": {"display_name": str, "avatar_path": str},
+        "user_profiles": {"display_name": str, "avatar_path": str},
+        "import_sources": {
+            "device_name": str,
+            "qq_version": str,
+            "schema_version": str,
+            "metadata": dict,
+        },
+        "import_batches": {
+            "completed_at": str,
+            "scanned_messages": int,
+            "inserted_messages": int,
+            "updated_messages": int,
+            "skipped_messages": int,
+            "uploaded_media": int,
+            "not_downloaded_media": int,
+            "missing_media": int,
+            "failed_media": int,
+            "detail": dict,
+        },
+        "message_source_records": {
+            "batch_id": str,
+            "source_external_message_id": str,
+            "platform_message_id": str,
+            "schema_version": str,
+            "raw_columns": dict,
+            "raw_40800_protobuf": str,
+            "raw_40900_protobuf": str,
+            "metadata": dict,
+        },
+        "message_media_references": {"archived_at": str},
+    }
+    _DATETIME_FIELDS = {
+        "import_sources": ("first_seen_at", "last_seen_at"),
+        "import_batches": ("started_at", "completed_at"),
+        "message_source_records": ("imported_at", "last_seen_at"),
+        "message_media_references": ("first_seen_at", "last_checked_at", "archived_at"),
+    }
+    _INTEGER_FIELDS = {
+        "messages": ("timestamp",),
+        "media_assets": ("file_size",),
+        "media_files": ("file_size",),
+        "import_batches": (
+            "scanned_messages",
+            "inserted_messages",
+            "updated_messages",
+            "skipped_messages",
+            "uploaded_media",
+            "not_downloaded_media",
+            "missing_media",
+            "failed_media",
+        ),
+        "message_media_references": (
+            "ordinal",
+            "declared_file_size",
+            "actual_file_size",
+            "duration_ms",
+            "width",
+            "height",
+        ),
+    }
+
+    @staticmethod
+    def _section_list(package: dict[str, Any], section: str) -> list[Any]:
+        value = package.get(section, [])
+        return value if isinstance(value, list) else []
+
+    @staticmethod
+    def _field_type_matches(value: Any, expected_type: type) -> bool:
+        if expected_type is int:
+            return isinstance(value, int) and not isinstance(value, bool)
+        return isinstance(value, expected_type)
 
     @staticmethod
     def calculate_package_checksum(package: dict[str, Any]) -> str:
         canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
-        manifest = canonical_package.setdefault("manifest", {})
+        manifest = canonical_package.get("manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be an object")
         manifest.pop("checksum", None)
         manifest.pop("signature", None)
         payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -45,7 +194,9 @@ class BackupService:
     @staticmethod
     def calculate_package_signature(package: dict[str, Any], signing_key: str) -> str:
         canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
-        manifest = canonical_package.setdefault("manifest", {})
+        manifest = canonical_package.get("manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be an object")
         manifest.pop("checksum", None)
         manifest.pop("signature", None)
         payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -78,24 +229,38 @@ class BackupService:
 
     @staticmethod
     def validate_package_checksum(package: dict[str, Any]) -> None:
-        checksum = (package.get("manifest") or {}).get("checksum")
+        manifest = package.get("manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be an object")
+        checksum = manifest.get("checksum")
         if checksum is None:
             return
+        if not isinstance(checksum, dict):
+            raise ValueError("backup package checksum must be an object")
         if checksum.get("algorithm") != "sha256":
             raise ValueError(f"unsupported checksum algorithm: {checksum.get('algorithm')!r}")
         expected = checksum.get("value")
+        if not isinstance(expected, str):
+            raise ValueError("backup package checksum value must be a string")
         actual = BackupService.calculate_package_checksum(package)
         if expected != actual:
             raise ValueError("backup package checksum mismatch")
 
     @staticmethod
     def validate_package_signature(package: dict[str, Any], signing_key: str) -> None:
-        signature = (package.get("manifest") or {}).get("signature")
+        manifest = package.get("manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be an object")
+        signature = manifest.get("signature")
         if signature is None:
             raise ValueError("backup package signature missing")
+        if not isinstance(signature, dict):
+            raise ValueError("backup package signature must be an object")
         if signature.get("algorithm") != BACKUP_SIGNATURE_ALGORITHM:
             raise ValueError(f"unsupported signature algorithm: {signature.get('algorithm')!r}")
         expected = signature.get("value")
+        if not isinstance(expected, str):
+            raise ValueError("backup package signature value must be a string")
         actual = BackupService.calculate_package_signature(package, signing_key)
         if not hmac.compare_digest(str(expected or ""), actual):
             raise ValueError("backup package signature mismatch")
@@ -113,6 +278,7 @@ class BackupService:
             "raw_message": message.raw_message,
             "local_message": message.local_message,
             "timestamp": message.timestamp,
+            "source_sequence": message.source_sequence,
         }
 
     @staticmethod
@@ -131,6 +297,101 @@ class BackupService:
                     "value": hashlib.sha256(file_path.read_bytes()).hexdigest(),
                 }
         return item
+
+    @staticmethod
+    def _json_object(value: str | None) -> dict[str, Any]:
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _import_source_to_dict(source: ImportSource) -> dict[str, Any]:
+        return {
+            "id": source.id,
+            "source_type": source.source_type,
+            "platform": source.platform,
+            "account_id": source.account_id,
+            "device_id": source.device_id,
+            "device_name": source.device_name,
+            "qq_version": source.qq_version,
+            "schema_version": source.schema_version,
+            "status": source.status,
+            "first_seen_at": format_utc_z(source.first_seen_at),
+            "last_seen_at": format_utc_z(source.last_seen_at),
+            "metadata": BackupService._json_object(source.metadata_json),
+        }
+
+    @staticmethod
+    def _import_batch_to_dict(batch: ImportBatch) -> dict[str, Any]:
+        return {
+            "id": batch.id,
+            "source_id": batch.source_id,
+            "mode": batch.mode,
+            "status": batch.status,
+            "started_at": format_utc_z(batch.started_at),
+            "completed_at": format_utc_z(batch.completed_at) if batch.completed_at else None,
+            "scanned_messages": batch.scanned_messages,
+            "inserted_messages": batch.inserted_messages,
+            "updated_messages": batch.updated_messages,
+            "skipped_messages": batch.skipped_messages,
+            "uploaded_media": batch.uploaded_media,
+            "not_downloaded_media": batch.not_downloaded_media,
+            "missing_media": batch.missing_media,
+            "failed_media": batch.failed_media,
+            "detail": BackupService._json_object(batch.detail_json),
+        }
+
+    @staticmethod
+    def _message_source_record_to_dict(record: MessageSourceRecord) -> dict[str, Any]:
+        return {
+            "msg_hash": record.msg_hash,
+            "source_id": record.source_id,
+            "batch_id": record.batch_id,
+            "source_table": record.source_table,
+            "source_primary_key": record.source_primary_key,
+            "source_external_message_id": record.source_external_message_id,
+            "platform_message_id": record.platform_message_id,
+            "schema_version": record.schema_version,
+            "raw_columns": BackupService._json_object(record.raw_columns_json),
+            "raw_40800_protobuf": record.raw_40800_protobuf,
+            "raw_40900_protobuf": record.raw_40900_protobuf,
+            "metadata": BackupService._json_object(record.metadata_json),
+            "imported_at": format_utc_z(record.imported_at),
+            "last_seen_at": format_utc_z(record.last_seen_at),
+        }
+
+    @staticmethod
+    def _message_media_reference_to_dict(reference: MessageMediaReference) -> dict[str, Any]:
+        return {
+            "msg_hash": reference.msg_hash,
+            "ordinal": reference.ordinal,
+            "media_type": reference.media_type,
+            "source_state": reference.source_state,
+            "archive_state": reference.archive_state,
+            "asset_file_hash": reference.asset_file_hash,
+            "thumbnail_file_hash": reference.thumbnail_file_hash,
+            "file_name": reference.file_name,
+            "file_ext": reference.file_ext,
+            "declared_file_size": reference.declared_file_size,
+            "actual_file_size": reference.actual_file_size,
+            "source_md5": reference.source_md5,
+            "source_sha1": reference.source_sha1,
+            "source_uuid": reference.source_uuid,
+            "source_local_path": reference.source_local_path,
+            "duration_ms": reference.duration_ms,
+            "width": reference.width,
+            "height": reference.height,
+            "failure_code": reference.failure_code,
+            "failure_detail": reference.failure_detail,
+            "metadata": BackupService._json_object(reference.metadata_json),
+            "first_seen_at": format_utc_z(reference.first_seen_at),
+            "last_checked_at": format_utc_z(reference.last_checked_at),
+            "archived_at": format_utc_z(reference.archived_at) if reference.archived_at else None,
+        }
 
     @staticmethod
     def _room_profile_to_dict(profile: RoomProfile) -> dict[str, Any]:
@@ -224,6 +485,42 @@ class BackupService:
                 for assoc in assoc_result.scalars().all()
             ]
 
+        message_source_records: list[dict[str, Any]] = []
+        message_media_references: list[dict[str, Any]] = []
+        import_sources: list[dict[str, Any]] = []
+        import_batches: list[dict[str, Any]] = []
+        referenced_media_hashes: set[str] = set()
+        if msg_hashes:
+            source_record_result = await db.execute(
+                select(MessageSourceRecord)
+                .where(MessageSourceRecord.msg_hash.in_(msg_hashes))
+                .order_by(MessageSourceRecord.msg_hash.asc(), MessageSourceRecord.source_id.asc(), MessageSourceRecord.id.asc())
+            )
+            source_record_models = list(source_record_result.scalars().all())
+            message_source_records = [BackupService._message_source_record_to_dict(record) for record in source_record_models]
+            source_ids = sorted({record.source_id for record in source_record_models})
+            batch_ids = sorted({record.batch_id for record in source_record_models if record.batch_id})
+            if source_ids:
+                source_result = await db.execute(select(ImportSource).where(ImportSource.id.in_(source_ids)).order_by(ImportSource.id.asc()))
+                import_sources = [BackupService._import_source_to_dict(source) for source in source_result.scalars().all()]
+            if batch_ids:
+                batch_result = await db.execute(select(ImportBatch).where(ImportBatch.id.in_(batch_ids)).order_by(ImportBatch.started_at.asc(), ImportBatch.id.asc()))
+                import_batches = [BackupService._import_batch_to_dict(batch) for batch in batch_result.scalars().all()]
+
+            reference_result = await db.execute(
+                select(MessageMediaReference)
+                .where(MessageMediaReference.msg_hash.in_(msg_hashes))
+                .order_by(MessageMediaReference.msg_hash.asc(), MessageMediaReference.ordinal.asc())
+            )
+            reference_models = list(reference_result.scalars().all())
+            message_media_references = [BackupService._message_media_reference_to_dict(reference) for reference in reference_models]
+            referenced_media_hashes = {
+                file_hash
+                for reference in reference_models
+                for file_hash in (reference.asset_file_hash, reference.thumbnail_file_hash)
+                if file_hash
+            }
+
         room_profiles: list[dict[str, Any]] = []
         user_profiles: list[dict[str, Any]] = []
         profile_media_paths: set[str] = set()
@@ -249,8 +546,13 @@ class BackupService:
         )
         media_assets: list[dict[str, Any]] = []
         media_files: list[dict[str, Any]] = []
-        if media_paths:
-            media_result = await db.execute(select(MediaAsset).where(MediaAsset.local_path.in_(media_paths)).order_by(MediaAsset.file_hash.asc()))
+        if media_paths or referenced_media_hashes:
+            media_conditions = []
+            if media_paths:
+                media_conditions.append(MediaAsset.local_path.in_(media_paths))
+            if referenced_media_hashes:
+                media_conditions.append(MediaAsset.file_hash.in_(referenced_media_hashes))
+            media_result = await db.execute(select(MediaAsset).where(or_(*media_conditions)).order_by(MediaAsset.file_hash.asc()))
             assets = list(media_result.scalars().all())
             media_assets = [
                 BackupService._media_asset_to_dict(asset, storage_root=storage_root, public_storage_prefix=public_storage_prefix)
@@ -280,6 +582,10 @@ class BackupService:
                     "media_files": len(media_files),
                     "room_profiles": len(room_profiles),
                     "user_profiles": len(user_profiles),
+                    "import_sources": len(import_sources),
+                    "import_batches": len(import_batches),
+                    "message_source_records": len(message_source_records),
+                    "message_media_references": len(message_media_references),
                 },
             },
             "messages": [BackupService._message_to_dict(message) for message in messages],
@@ -288,6 +594,10 @@ class BackupService:
             "media_files": media_files,
             "room_profiles": room_profiles,
             "user_profiles": user_profiles,
+            "import_sources": import_sources,
+            "import_batches": import_batches,
+            "message_source_records": message_source_records,
+            "message_media_references": message_media_references,
         }
         BackupService.attach_package_checksum(package)
         if system_id and signing_key:
@@ -402,7 +712,9 @@ class BackupService:
         return candidate
 
     @staticmethod
-    def _local_media_file_path(local_path: str, storage_root: Path, public_storage_prefix: str) -> Path | None:
+    def _local_media_file_path(local_path: Any, storage_root: Path, public_storage_prefix: str) -> Path | None:
+        if not isinstance(local_path, str) or not local_path:
+            return None
         prefix = public_storage_prefix.rstrip("/") + "/"
         if not local_path.startswith(prefix):
             return None
@@ -415,18 +727,27 @@ class BackupService:
 
     @staticmethod
     def _decode_embedded_media_file(media_file: dict[str, Any]) -> bytes:
+        content_base64 = media_file.get("content_base64")
+        if not isinstance(content_base64, str):
+            raise ValueError(f"invalid embedded media content: {media_file.get('local_path')}")
         try:
-            content = base64.b64decode(media_file.get("content_base64") or "", validate=True)
+            content = base64.b64decode(content_base64, validate=True)
         except (ValueError, TypeError) as exc:
             raise ValueError(f"invalid embedded media content: {media_file.get('local_path')}") from exc
 
         expected_size = media_file.get("file_size")
+        if not isinstance(expected_size, int) or isinstance(expected_size, bool) or expected_size < 0:
+            raise ValueError(f"invalid embedded media size: {media_file.get('local_path')}")
         if expected_size is not None and len(content) != expected_size:
             raise ValueError(f"embedded media size mismatch: {media_file.get('local_path')}")
 
         checksum = media_file.get("file_checksum") or {}
+        if not isinstance(checksum, dict):
+            raise ValueError(f"invalid embedded media checksum: {media_file.get('local_path')}")
         if checksum.get("algorithm") != "sha256":
             raise ValueError(f"unsupported embedded media checksum algorithm: {checksum.get('algorithm')!r}")
+        if not isinstance(checksum.get("value"), str):
+            raise ValueError(f"invalid embedded media checksum value: {media_file.get('local_path')}")
         actual = hashlib.sha256(content).hexdigest()
         if actual != checksum.get("value"):
             raise ValueError(f"embedded media checksum mismatch: {media_file.get('local_path')}")
@@ -436,11 +757,13 @@ class BackupService:
     @staticmethod
     def _embedded_media_files_by_path(package: dict[str, Any], errors: list[str] | None = None) -> dict[str, dict[str, Any]]:
         embedded: dict[str, dict[str, Any]] = {}
-        for media_file in package.get("media_files", []) or []:
+        for media_file in BackupService._section_list(package, "media_files"):
+            if not isinstance(media_file, dict):
+                continue
             local_path = media_file.get("local_path")
-            if not local_path:
+            if not isinstance(local_path, str) or not local_path:
                 if errors is not None:
-                    errors.append("embedded media file missing local_path")
+                    errors.append("embedded media file has an invalid local_path")
                 continue
             try:
                 BackupService._decode_embedded_media_file(media_file)
@@ -452,9 +775,15 @@ class BackupService:
         return embedded
 
     @staticmethod
-    def _validate_required_package_fields(package: dict[str, Any], errors: list[str]) -> None:
-        for section, required_fields in BackupService._REQUIRED_FIELDS.items():
-            items = package.get(section, []) or []
+    def _validate_required_package_fields(package: dict[str, Any], errors: list[str], *, schema: str | None = None) -> None:
+        required_sections = dict(BackupService._REQUIRED_FIELDS)
+        if schema == BACKUP_SCHEMA:
+            required_sections.update(BackupService._V2_REQUIRED_FIELDS)
+        for section, required_fields in required_sections.items():
+            if schema == BACKUP_SCHEMA and section in BackupService._V2_REQUIRED_FIELDS and section not in package:
+                errors.append(f"{section} section is required for {BACKUP_SCHEMA}")
+                continue
+            items = package.get(section, [])
             if not isinstance(items, list):
                 errors.append(f"{section} must be a list")
                 continue
@@ -466,6 +795,131 @@ class BackupService:
                 missing = [field for field in required_fields if field not in item]
                 if missing:
                     errors.append(f"{section}[{index}] missing required field(s): {', '.join(missing)}")
+                required_types = BackupService._REQUIRED_FIELD_TYPES.get(section, {})
+                optional_types = BackupService._OPTIONAL_FIELD_TYPES.get(section, {})
+                for field, expected_type in required_types.items():
+                    if field in item and not BackupService._field_type_matches(item[field], expected_type):
+                        errors.append(f"{section}[{index}].{field} must be a {expected_type.__name__}")
+                for field, expected_type in optional_types.items():
+                    value = item.get(field)
+                    if value is not None and not BackupService._field_type_matches(value, expected_type):
+                        errors.append(f"{section}[{index}].{field} must be a {expected_type.__name__} or null")
+                for field in BackupService._DATETIME_FIELDS.get(section, ()):
+                    value = item.get(field)
+                    if value is None:
+                        continue
+                    if not isinstance(value, str):
+                        continue
+                    try:
+                        parse_utc_datetime(value)
+                    except (TypeError, ValueError):
+                        errors.append(f"{section}[{index}].{field} must be an ISO-8601 datetime")
+                for field in BackupService._INTEGER_FIELDS.get(section, ()):
+                    value = item.get(field)
+                    if value is None or not isinstance(value, int) or isinstance(value, bool):
+                        continue
+                    if not SQL_INTEGER_MIN <= value <= SQL_INTEGER_MAX:
+                        errors.append(
+                            f"{section}[{index}].{field} must fit a signed 32-bit SQL integer"
+                        )
+
+                if section == "import_sources":
+                    status = item.get("status")
+                    if not isinstance(status, str) or status not in IMPORT_SOURCE_STATUSES:
+                        errors.append(f"import_sources[{index}].status is not supported")
+                if section == "import_batches":
+                    mode = item.get("mode")
+                    status = item.get("status")
+                    if not isinstance(mode, str) or mode not in IMPORT_BATCH_MODES:
+                        errors.append(f"import_batches[{index}].mode is not supported")
+                    if not isinstance(status, str) or status not in IMPORT_BATCH_STATUSES:
+                        errors.append(f"import_batches[{index}].status is not supported")
+                    for field in (
+                        "scanned_messages",
+                        "inserted_messages",
+                        "updated_messages",
+                        "skipped_messages",
+                        "uploaded_media",
+                        "not_downloaded_media",
+                        "missing_media",
+                        "failed_media",
+                    ):
+                        value = item.get(field)
+                        if isinstance(value, int) and not isinstance(value, bool) and value < 0:
+                            errors.append(f"import_batches[{index}].{field} must be non-negative")
+                if section in {"media_assets", "media_files"}:
+                    file_size = item.get("file_size")
+                    if isinstance(file_size, int) and not isinstance(file_size, bool) and file_size < 0:
+                        errors.append(f"{section}[{index}].file_size must be non-negative")
+
+    @staticmethod
+    def _validate_v2_references(package: dict[str, Any], errors: list[str]) -> None:
+        messages = [item for item in BackupService._section_list(package, "messages") if isinstance(item, dict)]
+        sources = [item for item in BackupService._section_list(package, "import_sources") if isinstance(item, dict)]
+        batches = [item for item in BackupService._section_list(package, "import_batches") if isinstance(item, dict)]
+        assets = [item for item in BackupService._section_list(package, "media_assets") if isinstance(item, dict)]
+        source_records = [item for item in BackupService._section_list(package, "message_source_records") if isinstance(item, dict)]
+        media_references = [item for item in BackupService._section_list(package, "message_media_references") if isinstance(item, dict)]
+        message_hashes = {item.get("msg_hash") for item in messages if isinstance(item.get("msg_hash"), str)}
+        source_ids = {item.get("id") for item in sources if isinstance(item.get("id"), str)}
+        batch_ids = {item.get("id") for item in batches if isinstance(item.get("id"), str)}
+        asset_by_hash = {
+            item.get("file_hash"): item
+            for item in assets
+            if isinstance(item.get("file_hash"), str)
+        }
+        asset_hashes = set(asset_by_hash)
+        for index, batch in enumerate(batches):
+            source_id = batch.get("source_id")
+            if not isinstance(source_id, str) or source_id not in source_ids:
+                errors.append(f"import_batches[{index}] references an unknown import source")
+        for index, record in enumerate(source_records):
+            msg_hash = record.get("msg_hash")
+            source_id = record.get("source_id")
+            batch_id = record.get("batch_id")
+            if not isinstance(msg_hash, str) or msg_hash not in message_hashes:
+                errors.append(f"message_source_records[{index}] references an unknown message")
+            if not isinstance(source_id, str) or source_id not in source_ids:
+                errors.append(f"message_source_records[{index}] references an unknown import source")
+            if batch_id is not None and (not isinstance(batch_id, str) or batch_id not in batch_ids):
+                errors.append(f"message_source_records[{index}] references an unknown import batch")
+        for index, reference in enumerate(media_references):
+            try:
+                MessageMediaReferenceRequest.model_validate(reference)
+            except ValueError as exc:
+                errors.append(f"message_media_references[{index}] violates the media state contract: {exc}")
+            msg_hash = reference.get("msg_hash")
+            if not isinstance(msg_hash, str) or msg_hash not in message_hashes:
+                errors.append(f"message_media_references[{index}] references an unknown message")
+            for field in ("asset_file_hash", "thumbnail_file_hash"):
+                file_hash = reference.get(field)
+                if file_hash is not None and not isinstance(file_hash, str):
+                    errors.append(f"message_media_references[{index}].{field} must be a str or null")
+                    continue
+                if file_hash and file_hash not in asset_hashes:
+                    errors.append(f"message_media_references[{index}].{field} references an unknown media asset")
+                elif file_hash:
+                    try:
+                        asset_size = int(asset_by_hash[file_hash].get("file_size") or 0)
+                    except (TypeError, ValueError):
+                        errors.append(f"media asset {file_hash} has an invalid file_size")
+                    else:
+                        if asset_size <= 0:
+                            errors.append(f"message_media_references[{index}].{field} references an empty media asset")
+
+    @staticmethod
+    def _validate_core_references(package: dict[str, Any], errors: list[str]) -> None:
+        message_hashes = {
+            item.get("msg_hash")
+            for item in BackupService._section_list(package, "messages")
+            if isinstance(item, dict) and isinstance(item.get("msg_hash"), str)
+        }
+        for index, robot_message in enumerate(BackupService._section_list(package, "robot_messages")):
+            if not isinstance(robot_message, dict):
+                continue
+            msg_hash = robot_message.get("msg_hash")
+            if not isinstance(msg_hash, str) or msg_hash not in message_hashes:
+                errors.append(f"robot_messages[{index}] references an unknown message")
 
     @staticmethod
     def _validate_media_files(
@@ -479,17 +933,28 @@ class BackupService:
         if storage_root is None:
             return media_files
 
-        for asset in package.get("media_assets", []) or []:
+        for asset in BackupService._section_list(package, "media_assets"):
+            if not isinstance(asset, dict):
+                continue
             checksum = asset.get("file_checksum")
             if checksum is None:
                 continue
             media_files["checked"] += 1
+            if not isinstance(checksum, dict):
+                media_files["mismatch"] += 1
+                errors.append(f"invalid media checksum for {asset.get('local_path')}")
+                continue
             if checksum.get("algorithm") != "sha256":
                 media_files["mismatch"] += 1
                 errors.append(f"unsupported media checksum algorithm for {asset.get('local_path')}: {checksum.get('algorithm')!r}")
                 continue
+            if not isinstance(checksum.get("value"), str):
+                media_files["mismatch"] += 1
+                errors.append(f"invalid media checksum value for {asset.get('local_path')}")
+                continue
 
-            local_path = asset.get("local_path") or ""
+            local_path_value = asset.get("local_path")
+            local_path = local_path_value if isinstance(local_path_value, str) else ""
             file_path = BackupService._local_media_file_path(local_path, storage_root, public_storage_prefix)
             if file_path is None or not file_path.exists():
                 if local_path not in embedded:
@@ -541,16 +1006,22 @@ class BackupService:
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
     ) -> dict[str, Any]:
-        manifest = package.get("manifest") or {}
+        manifest_value = package.get("manifest")
+        manifest = manifest_value if isinstance(manifest_value, dict) else {}
         schema = manifest.get("schema")
         errors: list[str] = []
+        if not isinstance(manifest_value, dict):
+            errors.append("manifest must be an object")
         checksum_valid: bool | None = None
         signature_valid: bool | None = None
 
-        if schema != BACKUP_SCHEMA:
+        if not isinstance(schema, str) or schema not in SUPPORTED_BACKUP_SCHEMAS:
             errors.append(f"unsupported backup schema: {schema!r}")
 
-        BackupService._validate_required_package_fields(package, errors)
+        BackupService._validate_required_package_fields(package, errors, schema=schema)
+        BackupService._validate_core_references(package, errors)
+        if schema == BACKUP_SCHEMA:
+            BackupService._validate_v2_references(package, errors)
 
         checksum = manifest.get("checksum")
         if checksum is not None:
@@ -563,7 +1034,9 @@ class BackupService:
 
         signature = manifest.get("signature")
         if signature is not None:
-            if signing_key:
+            if not isinstance(signature, dict):
+                errors.append("backup package signature must be an object")
+            elif signing_key:
                 try:
                     BackupService.validate_package_signature(package, signing_key)
                     signature_valid = True
@@ -575,22 +1048,30 @@ class BackupService:
         elif signing_key:
             signature_valid = None
 
+        source = manifest.get("source")
+        if source is not None and not isinstance(source, dict):
+            errors.append("manifest.source must be an object or null")
+
         counts = {
-            "messages": len(package.get("messages", []) or []),
-            "robot_messages": len(package.get("robot_messages", []) or []),
-            "media_assets": len(package.get("media_assets", []) or []),
-            "media_files": len(package.get("media_files", []) or []),
-            "room_profiles": len(package.get("room_profiles", []) or []),
-            "user_profiles": len(package.get("user_profiles", []) or []),
+            "messages": len(BackupService._section_list(package, "messages")),
+            "robot_messages": len(BackupService._section_list(package, "robot_messages")),
+            "media_assets": len(BackupService._section_list(package, "media_assets")),
+            "media_files": len(BackupService._section_list(package, "media_files")),
+            "room_profiles": len(BackupService._section_list(package, "room_profiles")),
+            "user_profiles": len(BackupService._section_list(package, "user_profiles")),
+            "import_sources": len(BackupService._section_list(package, "import_sources")) if schema == BACKUP_SCHEMA else 0,
+            "import_batches": len(BackupService._section_list(package, "import_batches")) if schema == BACKUP_SCHEMA else 0,
+            "message_source_records": len(BackupService._section_list(package, "message_source_records")) if schema == BACKUP_SCHEMA else 0,
+            "message_media_references": len(BackupService._section_list(package, "message_media_references")) if schema == BACKUP_SCHEMA else 0,
         }
         media_files = BackupService._validate_media_files(package, storage_root, public_storage_prefix, errors)
 
         return {
             "valid": not errors,
-            "schema": schema,
+            "schema": schema if isinstance(schema, str) else None,
             "checksum_valid": checksum_valid,
             "signature_valid": signature_valid,
-            "source": manifest.get("source"),
+            "source": source if isinstance(source, dict) else None,
             "errors": errors,
             "counts": counts,
             "media_files": media_files,
@@ -600,7 +1081,7 @@ class BackupService:
     def _message_matches_existing(existing: Message, item: dict[str, Any]) -> bool:
         return all(
             getattr(existing, key) == item.get(key)
-            for key in ("platform", "room_id", "message_type", "external_message_id", "sender_id", "nickname", "raw_message", "local_message", "timestamp")
+            for key in ("platform", "room_id", "message_type", "external_message_id", "sender_id", "nickname", "raw_message", "local_message", "timestamp", "source_sequence")
         )
 
     @staticmethod
@@ -624,9 +1105,17 @@ class BackupService:
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
         )
+        schema = report.get("schema")
+        if not report["valid"]:
+            report["diff"] = {}
+            return report
         message_diff = {"new": 0, "update": 0, "unchanged": 0}
         robot_message_diff = {"new": 0, "existing": 0}
         media_asset_diff = {"new": 0, "update": 0, "unchanged": 0}
+        import_source_diff = {"new": 0, "update": 0, "unchanged": 0}
+        import_batch_diff = {"new": 0, "update": 0, "unchanged": 0}
+        source_record_diff = {"new": 0, "update": 0, "unchanged": 0}
+        media_reference_diff = {"new": 0, "update": 0, "unchanged": 0}
 
         for item in package.get("messages", []) or []:
             result = await db.execute(select(Message).where(Message.msg_hash == item.get("msg_hash")))
@@ -660,10 +1149,81 @@ class BackupService:
             else:
                 media_asset_diff["update"] += 1
 
+        for item in (package.get("import_sources", []) or []) if schema == BACKUP_SCHEMA else []:
+            identity_result = await db.execute(
+                select(ImportSource.id).where(
+                    ImportSource.source_type == item.get("source_type"),
+                    ImportSource.account_id == item.get("account_id"),
+                    ImportSource.device_id == item.get("device_id"),
+                    ImportSource.id != item.get("id"),
+                )
+            )
+            if identity_result.scalar_one_or_none() is not None:
+                report["valid"] = False
+                report["errors"].append(
+                    f"import source {item.get('id')} conflicts with an existing source identity"
+                )
+            existing = await db.get(ImportSource, item.get("id"))
+            if existing is None:
+                import_source_diff["new"] += 1
+            elif all(getattr(existing, key) == item.get(key) for key in ("source_type", "platform", "account_id", "device_id", "device_name", "qq_version", "schema_version", "status")):
+                import_source_diff["unchanged"] += 1
+            else:
+                import_source_diff["update"] += 1
+
+        for item in (package.get("import_batches", []) or []) if schema == BACKUP_SCHEMA else []:
+            existing = await db.get(ImportBatch, item.get("id"))
+            if existing is None:
+                import_batch_diff["new"] += 1
+            elif all(getattr(existing, key) == item.get(key) for key in ("source_id", "mode", "status")):
+                import_batch_diff["unchanged"] += 1
+            else:
+                import_batch_diff["update"] += 1
+
+        for item in (package.get("message_source_records", []) or []) if schema == BACKUP_SCHEMA else []:
+            result = await db.execute(
+                select(MessageSourceRecord).where(
+                    MessageSourceRecord.source_id == item.get("source_id"),
+                    MessageSourceRecord.source_table == item.get("source_table"),
+                    MessageSourceRecord.source_primary_key == item.get("source_primary_key"),
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                source_record_diff["new"] += 1
+            elif existing.msg_hash == item.get("msg_hash"):
+                source_record_diff["unchanged"] += 1
+            else:
+                source_record_diff["update"] += 1
+
+        for item in (package.get("message_media_references", []) or []) if schema == BACKUP_SCHEMA else []:
+            result = await db.execute(
+                select(MessageMediaReference).where(
+                    MessageMediaReference.msg_hash == item.get("msg_hash"),
+                    MessageMediaReference.ordinal == item.get("ordinal"),
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                media_reference_diff["new"] += 1
+            elif (existing.source_state, existing.archive_state, existing.asset_file_hash, existing.thumbnail_file_hash) == (
+                item.get("source_state"),
+                item.get("archive_state"),
+                item.get("asset_file_hash"),
+                item.get("thumbnail_file_hash"),
+            ):
+                media_reference_diff["unchanged"] += 1
+            else:
+                media_reference_diff["update"] += 1
+
         report["diff"] = {
             "messages": message_diff,
             "robot_messages": robot_message_diff,
             "media_assets": media_asset_diff,
+            "import_sources": import_source_diff,
+            "import_batches": import_batch_diff,
+            "message_source_records": source_record_diff,
+            "message_media_references": media_reference_diff,
         }
         return report
 
@@ -689,9 +1249,10 @@ class BackupService:
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
     ) -> dict[str, int]:
-        manifest = package.get("manifest") or {}
+        manifest_value = package.get("manifest")
+        manifest = manifest_value if isinstance(manifest_value, dict) else {}
         schema = manifest.get("schema")
-        if schema != BACKUP_SCHEMA:
+        if not isinstance(schema, str) or schema not in SUPPORTED_BACKUP_SCHEMAS:
             raise ValueError(f"unsupported backup schema: {schema!r}")
         report = BackupService.validate_import_package(
             package,
@@ -701,7 +1262,62 @@ class BackupService:
         )
         if not report["valid"]:
             raise ValueError("; ".join(report["errors"]))
-        BackupService._restore_embedded_media_files(package, storage_root, public_storage_prefix)
+
+        import_source_count = 0
+        for item in (package.get("import_sources", []) or []) if schema == BACKUP_SCHEMA else []:
+            source = await db.get(ImportSource, item["id"])
+            identity_result = await db.execute(
+                select(ImportSource.id).where(
+                    ImportSource.source_type == item["source_type"],
+                    ImportSource.account_id == item["account_id"],
+                    ImportSource.device_id == item["device_id"],
+                    ImportSource.id != item["id"],
+                )
+            )
+            if identity_result.scalar_one_or_none() is not None:
+                raise ValueError("backup import source identity conflicts with an existing source id")
+            if source is None:
+                source = ImportSource(id=item["id"])
+                db.add(source)
+            source.source_type = item["source_type"]
+            source.platform = item["platform"]
+            source.account_id = item["account_id"]
+            source.device_id = item["device_id"]
+            source.device_name = item.get("device_name")
+            source.qq_version = item.get("qq_version")
+            source.schema_version = item.get("schema_version")
+            source.status = item["status"]
+            source.first_seen_at = parse_utc_datetime(item["first_seen_at"])
+            source.last_seen_at = parse_utc_datetime(item["last_seen_at"])
+            source.metadata_json = json.dumps(item.get("metadata") or {}, ensure_ascii=False, sort_keys=True)
+            import_source_count += 1
+        await db.flush()
+
+        import_batch_count = 0
+        for item in (package.get("import_batches", []) or []) if schema == BACKUP_SCHEMA else []:
+            batch = await db.get(ImportBatch, item["id"])
+            if batch is None:
+                batch = ImportBatch(id=item["id"])
+                db.add(batch)
+            batch.source_id = item["source_id"]
+            batch.mode = item["mode"]
+            batch.status = item["status"]
+            batch.started_at = parse_utc_datetime(item["started_at"])
+            batch.completed_at = parse_utc_datetime(item["completed_at"]) if item.get("completed_at") else None
+            for field in (
+                "scanned_messages",
+                "inserted_messages",
+                "updated_messages",
+                "skipped_messages",
+                "uploaded_media",
+                "not_downloaded_media",
+                "missing_media",
+                "failed_media",
+            ):
+                setattr(batch, field, int(item.get(field) or 0))
+            batch.detail_json = json.dumps(item.get("detail") or {}, ensure_ascii=False, sort_keys=True)
+            import_batch_count += 1
+        await db.flush()
 
         message_count = 0
         for item in package.get("messages", []):
@@ -720,6 +1336,7 @@ class BackupService:
                         raw_message=item["raw_message"],
                         local_message=item["local_message"],
                         timestamp=item["timestamp"],
+                        source_sequence=item.get("source_sequence"),
                     )
                 )
             else:
@@ -732,6 +1349,8 @@ class BackupService:
                 message.raw_message = item["raw_message"]
                 message.local_message = item["local_message"]
                 message.timestamp = item["timestamp"]
+                if item.get("source_sequence") is not None:
+                    message.source_sequence = item["source_sequence"]
             message_count += 1
 
         robot_message_count = 0
@@ -766,6 +1385,68 @@ class BackupService:
                 asset.local_path = item["local_path"]
             media_asset_count += 1
 
+        await db.flush()
+
+        message_source_record_count = 0
+        for item in (package.get("message_source_records", []) or []) if schema == BACKUP_SCHEMA else []:
+            result = await db.execute(
+                select(MessageSourceRecord).where(
+                    MessageSourceRecord.source_id == item["source_id"],
+                    MessageSourceRecord.source_table == item["source_table"],
+                    MessageSourceRecord.source_primary_key == item["source_primary_key"],
+                )
+            )
+            record = result.scalar_one_or_none()
+            imported_at = parse_utc_datetime(item["imported_at"])
+            last_seen_at = parse_utc_datetime(item["last_seen_at"])
+            if record is None:
+                record = MessageSourceRecord(
+                    msg_hash=item["msg_hash"],
+                    source_id=item["source_id"],
+                    source_table=item["source_table"],
+                    source_primary_key=item["source_primary_key"],
+                    imported_at=imported_at,
+                    last_seen_at=last_seen_at,
+                )
+                db.add(record)
+            elif record.msg_hash != item["msg_hash"]:
+                raise ValueError("backup source record is bound to a different canonical message")
+            else:
+                record.imported_at = min(record.imported_at, imported_at)
+                record.last_seen_at = max(record.last_seen_at, last_seen_at)
+            record.batch_id = item.get("batch_id")
+            record.source_external_message_id = item.get("source_external_message_id")
+            record.platform_message_id = item.get("platform_message_id")
+            record.schema_version = item.get("schema_version")
+            record.raw_columns_json = json.dumps(item.get("raw_columns") or {}, ensure_ascii=False, sort_keys=True)
+            record.raw_40800_protobuf = item.get("raw_40800_protobuf")
+            record.raw_40900_protobuf = item.get("raw_40900_protobuf")
+            record.metadata_json = json.dumps(item.get("metadata") or {}, ensure_ascii=False, sort_keys=True)
+            message_source_record_count += 1
+
+        message_media_reference_count = 0
+        for item in (package.get("message_media_references", []) or []) if schema == BACKUP_SCHEMA else []:
+            reference_request = MessageMediaReferenceRequest.model_validate(item)
+            await ImportService._upsert_media_reference(
+                db,
+                msg_hash=item["msg_hash"],
+                reference=reference_request,
+            )
+            result = await db.execute(
+                select(MessageMediaReference).where(
+                    MessageMediaReference.msg_hash == item["msg_hash"],
+                    MessageMediaReference.ordinal == item["ordinal"],
+                )
+            )
+            reference = result.scalar_one()
+            incoming_first_seen = parse_utc_datetime(item["first_seen_at"])
+            incoming_last_checked = parse_utc_datetime(item["last_checked_at"])
+            reference.first_seen_at = min(reference.first_seen_at, incoming_first_seen)
+            reference.last_checked_at = max(reference.last_checked_at, incoming_last_checked)
+            if item.get("archived_at") and reference.archived_at is None:
+                reference.archived_at = parse_utc_datetime(item["archived_at"])
+            message_media_reference_count += 1
+
         for item in package.get("room_profiles", []) or []:
             profile = await db.get(RoomProfile, item["room_id"])
             if profile is None:
@@ -798,12 +1479,23 @@ class BackupService:
                 profile.display_name = item.get("display_name")
                 profile.avatar_path = item.get("avatar_path")
 
+        BackupService._restore_embedded_media_files(package, storage_root, public_storage_prefix)
         await db.commit()
-        return {
+        result = {
             "messages": message_count,
             "robot_messages": robot_message_count,
             "media_assets": media_asset_count,
         }
+        if schema == BACKUP_SCHEMA:
+            result.update(
+                {
+                    "import_sources": import_source_count,
+                    "import_batches": import_batch_count,
+                    "message_source_records": message_source_record_count,
+                    "message_media_references": message_media_reference_count,
+                }
+            )
+        return result
 
 async def _auto_backup_loop(settings, sessionmaker) -> None:
     from app.services.backup_config_service import BackupConfigService

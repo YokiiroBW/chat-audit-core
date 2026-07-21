@@ -331,6 +331,43 @@ def parse_cq_media_segments(raw_message: str) -> list[CQMediaSegment]:
     return segments
 
 
+def _parse_cq_media_segments_with_ordinals(
+    raw_message: str,
+    public_prefix: str | None = None,
+) -> list[tuple[int, CQMediaSegment]]:
+    """Parse remote CQ media using the same ordinal slots as local message media."""
+
+    prefix = (public_prefix or get_settings().public_storage_prefix).rstrip("/") + "/"
+    local_path_pattern = rf"{re.escape(prefix)}[^\s\"'<>),\]]+?\.[a-z0-9]+"
+    ordinal_pattern = re.compile(
+        rf"\[CQ:(?P<kind>image|record|video|file),(?P<params>[^\]]*)\]|(?P<local>{local_path_pattern})",
+        re.I,
+    )
+    segments: list[tuple[int, CQMediaSegment]] = []
+    ordinal = 0
+    for match in ordinal_pattern.finditer(raw_message):
+        if match.group("local") is None:
+            cq_type = (match.group("kind") or "").lower()
+            media_type = _SUPPORTED_MEDIA_TYPES[cq_type]
+            params = _parse_cq_params(match.group("params") or "")
+            url = params.get("url")
+            if url:
+                file_name = params.get("file")
+                segments.append(
+                    (
+                        ordinal,
+                        CQMediaSegment(
+                            raw=match.group(0),
+                            media_type=media_type,
+                            url=url,
+                            ext=_guess_ext(url, file_name, media_type),
+                        ),
+                    )
+                )
+        ordinal += 1
+    return segments
+
+
 class MediaService:
     @staticmethod
     def _target_transcode_ext(media_type: str, voice_ext: str, video_ext: str) -> str | None:
@@ -832,11 +869,25 @@ class MediaService:
         max_bytes: int | None = None,
         unavailable_placeholders: bool = False,
         allowed_media_types: set[str] | None = None,
+        skip_media_ordinals: set[int] | None = None,
     ) -> str:
         rewritten = raw_message
 
-        for segment in parse_cq_media_segments(raw_message):
+        if skip_media_ordinals is None:
+            ordinal_segments = list(enumerate(parse_cq_media_segments(raw_message)))
+        else:
+            ordinal_segments = _parse_cq_media_segments_with_ordinals(raw_message, public_prefix)
+        search_start = 0
+        for ordinal, segment in ordinal_segments:
+            segment_start = rewritten.find(segment.raw, search_start)
+            if segment_start < 0:
+                continue
+            segment_end = segment_start + len(segment.raw)
+            if skip_media_ordinals is not None and ordinal in skip_media_ordinals:
+                search_start = segment_end
+                continue
             if allowed_media_types is not None and segment.media_type not in allowed_media_types:
+                search_start = segment_end
                 continue
             local_path = await MediaService.download_url_to_local_path(
                 db,
@@ -858,7 +909,11 @@ class MediaService:
                     public_prefix=public_prefix,
                 )
             if local_path:
-                rewritten = rewritten.replace(segment.raw, f"\n{local_path}\n", 1)
+                replacement = f"\n{local_path}\n"
+                rewritten = rewritten[:segment_start] + replacement + rewritten[segment_end:]
+                search_start = segment_start + len(replacement)
+            else:
+                search_start = segment_end
 
         for match in list(_CQ_PATTERN.finditer(rewritten)):
             cq_type = match.group("kind")

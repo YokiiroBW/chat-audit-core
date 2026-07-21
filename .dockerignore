@@ -16,6 +16,8 @@ htmlcov
 *.db
 *.sqlite
 *.sqlite3
+collector.toml
+*.dpapi
 *.log
 logs
 data/storage/*

@@ -94,3 +94,20 @@ async def test_lightweight_migration_without_rollback_is_rejected(tmp_path):
         assert "does not support rollback" in str(exc)
     else:
         raise AssertionError("rollback should fail for migrations without rollback support")
+
+
+async def test_lightweight_qqnt_import_migration_can_drop_new_tables(tmp_path):
+    engine, _sessionmaker = create_async_engine_and_sessionmaker(f"sqlite+aiosqlite:///{(tmp_path / 'rollback-import.sqlite3').as_posix()}")
+    await create_all_tables(engine)
+    await ensure_schema_compatibility(engine)
+
+    async with engine.connect() as conn:
+        before = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+    assert {"import_sources", "import_batches", "import_batch_chunks", "message_source_records", "message_media_references"} <= before
+
+    await rollback_lightweight_migration("20260705_010_qqnt_import_models", engine)
+
+    async with engine.connect() as conn:
+        after = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+    assert not ({"import_sources", "import_batches", "import_batch_chunks", "message_source_records", "message_media_references"} & after)
+    await engine.dispose()

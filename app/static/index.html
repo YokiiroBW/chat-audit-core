@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QQ社交资产审计平台</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
-  <link rel="stylesheet" href="/assets/app.min.css" />
+  <link rel="stylesheet" href="/assets/app.min.css?v=20260721-3" />
 </head>
 <body>
   <div class="app">
     <aside class="rail">
       <div>
         <div class="brand">AUDIT V4</div>
+        <div class="brand-subtitle">CHAT EVIDENCE CONSOLE</div>
         <div id="accountList" class="account-stack"></div>
       </div>
       <div class="rail-footer">
@@ -98,6 +99,14 @@
             <div class="hint">当前账号下的会话、搜索和抓取配置 · green/red/gray</div>
             <div id="dashboardSummary" class="dashboard-strip"></div>
             <div class="search-row">
+              <select id="mediaStateFilter" aria-label="媒体状态筛选">
+                <option value="all">全部消息</option>
+                <option value="any">全部媒体</option>
+                <option value="complete">完整归档</option>
+                <option value="not_downloaded">未下载媒体</option>
+                <option value="missing">源文件丢失</option>
+                <option value="failed">解析失败</option>
+              </select>
               <input id="searchInput" placeholder="搜索当前机器人视角消息..." />
               <button id="searchButton" class="btn primary">搜索</button>
             </div>
@@ -467,11 +476,26 @@
     </div>
   </div>
 
+  <div id="messageDetailModal" class="modal-backdrop">
+    <div class="modal message-detail-modal">
+      <div class="modal-header">
+        <strong>消息与媒体详情</strong>
+        <button class="btn" data-close-modal="messageDetailModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="messageDetailReport" class="message-detail-report"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn primary" data-close-modal="messageDetailModal">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop">
     <div class="image-preview">
       <button class="btn image-preview-close" data-close-modal="imagePreviewModal">关闭</button>
       <div id="imagePreviewStage" class="image-preview-stage">
-        <img id="imagePreviewImg" alt="" draggable="false" />
+        <img id="imagePreviewImg" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="" draggable="false" />
       </div>
       <div id="imagePreviewCaption" class="image-preview-caption"></div>
     </div>
@@ -493,10 +517,10 @@
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(() => {});
+        navigator.serviceWorker.register('/sw.js?v=20260721-3', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});
       });
     }
   </script>
-  <script src="/assets/app.min.js" defer></script>
+  <script src="/assets/app.min.js?v=20260721-3" defer></script>
 </body>
 </html>

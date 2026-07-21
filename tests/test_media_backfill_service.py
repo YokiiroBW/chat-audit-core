@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
+from app.models import MessageMediaReference
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.message_service import MessageService
 from tests.test_media_service import StubAsyncClient
@@ -135,6 +136,117 @@ async def test_backfill_historical_media_can_finalize_expired_url_with_placehold
     assert messages[0].local_message.startswith("/static/storage/")
     assert messages[0].local_message.endswith(".svg")
     assert assets[0].file_type == "image_missing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prefix", "structured_ordinal"),
+    [
+        ("", 0),
+        ("/static/storage/already-local.jpg\n", 1),
+    ],
+)
+async def test_backfill_historical_media_skips_only_structured_media_ordinal(
+    db_session,
+    tmp_path,
+    prefix,
+    structured_ordinal,
+):
+    structured_url = "http://media.local/not-downloaded.mp4"
+    unstructured_url = "http://media.local/extra.jpg"
+    raw = (
+        f"{prefix}[CQ:video,file=missing.mp4,url={structured_url}]"
+        f"[CQ:image,file=extra.jpg,url={unstructured_url}]"
+    )
+    msg_hash = await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-mixed",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": raw,
+            "timestamp": 1783000000,
+        },
+    )
+    db_session.add(
+        MessageMediaReference(
+            msg_hash=msg_hash,
+            ordinal=structured_ordinal,
+            media_type="video",
+            source_state="not_downloaded",
+            archive_state="metadata_only",
+        )
+    )
+    await db_session.commit()
+    client = StubAsyncClient({unstructured_url: b"extra image"})
+
+    report = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        finalize_unavailable=True,
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    assets = await MessageService.list_media_assets(db_session)
+
+    assert client.requested_urls == [unstructured_url]
+    assert report.updated == 1
+    assert report.failed == 0
+    assert structured_url in messages[0].local_message
+    assert unstructured_url not in messages[0].local_message
+    assert len(assets) == 1
+    assert assets[0].file_type == "image"
+    assert assets[0].file_size > 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_historical_media_preserves_skipped_duplicate_segment(db_session, tmp_path):
+    shared_url = "http://media.local/shared.mp4"
+    segment = f"[CQ:video,file=shared.mp4,url={shared_url}]"
+    raw = segment + segment
+    msg_hash = await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-duplicate",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": raw,
+            "timestamp": 1783000001,
+        },
+    )
+    db_session.add(
+        MessageMediaReference(
+            msg_hash=msg_hash,
+            ordinal=0,
+            media_type="video",
+            source_state="not_downloaded",
+            archive_state="metadata_only",
+        )
+    )
+    await db_session.commit()
+    client = StubAsyncClient({shared_url: b"video"})
+
+    report = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        finalize_unavailable=True,
+    )
+
+    messages = await MessageService.list_messages(db_session)
+    assert report.updated == 1
+    assert client.requested_urls == [shared_url]
+    assert messages[0].local_message.count(shared_url) == 1
+    assert messages[0].local_message.count("/static/storage/") == 1
 
 
 @pytest.mark.asyncio

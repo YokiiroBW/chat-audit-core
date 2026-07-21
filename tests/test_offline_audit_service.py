@@ -2,6 +2,7 @@ import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.config import Settings, get_settings
 from app.database import get_db_session
@@ -258,7 +259,7 @@ async def test_offline_repair_creates_missing_media_asset_index(db_session, tmp_
 
 
 @pytest.mark.asyncio
-async def test_offline_repair_creates_missing_media_asset_file(db_session, tmp_path):
+async def test_offline_repair_does_not_create_fake_missing_media_asset_file(db_session, tmp_path):
     local_path = "/static/storage/missing-file.gif"
     db_session.add(MediaAsset(file_hash="missing-file", file_type="image", file_size=999, local_path=local_path))
     await MessageService.process_incoming_message(
@@ -289,13 +290,44 @@ async def test_offline_repair_creates_missing_media_asset_file(db_session, tmp_p
         public_storage_prefix="/static/storage",
     )
 
-    assert repair.repaired_media_files == 1
-    assert repair.repaired_file_sizes == 1
+    assert repair.repaired_media_files == 0
+    assert repair.repaired_file_sizes == 0
     assert repair.repaired_profile_avatars == 0
-    assert local_path in repair.repaired_paths
-    assert (tmp_path / "missing-file.gif").exists()
-    assert report.offline_ready is True
-    assert report.missing_media_files == 0
+    assert repair.unrepaired_media_files == 1
+    assert local_path not in repair.repaired_paths
+    assert not (tmp_path / "missing-file.gif").exists()
+    assert report.offline_ready is False
+    assert report.missing_media_files == 1
+
+
+@pytest.mark.asyncio
+async def test_offline_repair_does_not_index_zero_byte_media(db_session, tmp_path):
+    local_path = "/static/storage/zero-byte.mp4"
+    (tmp_path / "zero-byte.mp4").write_bytes(b"")
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-zero",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "zero byte",
+            "local_message": local_path,
+            "timestamp": 1783000000,
+        },
+    )
+
+    repair = await OfflineRepairService.repair_local_media_integrity(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert repair.repaired_media_assets == 0
+    assert repair.unrepaired_media_files == 1
+    assert (await db_session.execute(select(MediaAsset).where(MediaAsset.local_path == local_path))).scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio
