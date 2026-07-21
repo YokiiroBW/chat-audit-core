@@ -3,8 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
+import sys
 import threading
+try:
+    import winreg
+except ImportError:
+    winreg = None
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +28,7 @@ from collector.app.main import (
     _upsert_local_source,
 )
 from collector.qqnt.discovery import candidate_data_roots, discover_qqnt_data
+from collector.qqnt.key_provider import SQLiteKeyValidator
 from collector.qqnt.snapshot import detect_database_format
 from collector.sync.scheduler import CollectorScheduler
 from collector.sync.state import CollectorStateStore
@@ -42,9 +49,18 @@ class GuiSettings:
     device_name: str
     data_root: str
     server_url: str
+    qq_install_dir: str = ""
     api_token: str = ""
+    qqnt_database_key: str = ""
     sync_interval_minutes: int = 10
+    sync_interval_seconds: int | None = None
     verify_tls: bool = True
+    collector_data_dir: str = ""
+    autostart: bool = False
+
+
+def _powershell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 @dataclass(frozen=True)
@@ -73,6 +89,24 @@ class CollectorGuiController:
         self._stop_event: asyncio.Event | None = None
         self._stop_requested = threading.Event()
         self._lock = threading.Lock()
+        self._recover_interrupted_runs()
+
+    def _recover_interrupted_runs(self) -> None:
+        if not self.configured:
+            return
+        try:
+            config = load_config(self.config_path)
+            config.paths.ensure()
+            store = CollectorStateStore(config.paths.state_db)
+            store.initialize()
+            recovered = store.recover_interrupted_runs()
+            if recovered:
+                self.event_callback(
+                    "scheduler.recovered",
+                    f"recovered {recovered} interrupted sync run(s)",
+                )
+        except Exception:
+            return
 
     @property
     def configured(self) -> bool:
@@ -94,14 +128,86 @@ class CollectorGuiController:
             device_name=config.collector.device_name,
             data_root=str(config.qq.data_root or ""),
             server_url=config.server.base_url,
+            qq_install_dir=str(config.qq.install_dir or ""),
             sync_interval_minutes=config.collector.sync_interval_minutes,
+            sync_interval_seconds=config.collector.sync_interval_seconds,
             verify_tls=config.server.verify_tls,
+            collector_data_dir=str(config.paths.root),
+            autostart=config.collector.autostart,
         )
+
+    @staticmethod
+    def _is_runtime_lock(name: str) -> bool:
+        return name.startswith("collector-gui-") and name.endswith(".lock")
+
+    def _target_can_resume(self, source: Path, target: Path) -> bool:
+        if not source.is_dir() or not target.is_dir():
+            return False
+        for current, directories, files in os.walk(target):
+            relative = Path(current).relative_to(target)
+            source_current = source / relative
+            for name in [*directories, *files]:
+                if self._is_runtime_lock(name):
+                    continue
+                target_entry = Path(current) / name
+                source_entry = source_current / name
+                if not source_entry.exists() or source_entry.is_dir() != target_entry.is_dir():
+                    return False
+        return True
+
+    def _migrate_data_dir(self, source: Path, target: Path) -> None:
+        source = source.expanduser().resolve()
+        target = target.expanduser().resolve()
+        if source == target:
+            target.mkdir(parents=True, exist_ok=True)
+            return
+        if self.running:
+            raise RuntimeError("同步正在运行，请先停止同步后再迁移解析器数据目录")
+        if source in target.parents or target in source.parents:
+            raise ValueError("新目录不能位于旧目录内部，旧目录也不能位于新目录内部")
+        if target.exists() and any(target.iterdir()) and not self._target_can_resume(source, target):
+            raise ValueError("新目录必须为空，或只能包含上次迁移已经复制的文件")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                target,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("collector-gui-*.lock"),
+            )
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+        if source.is_dir() and (source / "collector_state.sqlite3").exists():
+            if not (target / "collector_state.sqlite3").exists():
+                raise RuntimeError("迁移校验失败：状态数据库未复制到新目录")
+        self.event_callback("storage.migrated", f"{source}|{target}")
+
+    def _set_autostart(self, enabled: bool) -> None:
+        if winreg is None:
+            if enabled:
+                raise RuntimeError("????????? Windows")
+            return
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        value_name = "ChatAuditQQCollector"
+        if enabled:
+            if getattr(sys, "frozen", False):
+                command = f'"{sys.executable}" --start-hidden --config "{self.config_path}"'
+            else:
+                command = f'"{sys.executable}" -m collector.gui --start-hidden --config "{self.config_path}"'
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, command)
+        else:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.DeleteValue(key, value_name)
+            except FileNotFoundError:
+                pass
 
     def save_settings(self, settings: GuiSettings) -> CollectorConfig:
         account_id = settings.account_id.strip()
         device_name = settings.device_name.strip()
         data_root = str(Path(settings.data_root).expanduser().resolve()) if settings.data_root.strip() else ""
+        qq_install_dir = str(Path(settings.qq_install_dir).expanduser().resolve()) if settings.qq_install_dir.strip() else ""
         server_url = settings.server_url.strip().rstrip("/")
         if not account_id:
             raise ValueError("QQ 账号不能为空")
@@ -111,10 +217,19 @@ class CollectorGuiController:
             raise ValueError("请选择存在的 QQNT 数据目录")
         if not server_url.startswith(("http://", "https://")):
             raise ValueError("服务器地址必须以 http:// 或 https:// 开头")
-        if settings.sync_interval_minutes <= 0:
-            raise ValueError("同步间隔必须大于 0")
+        interval_seconds = settings.sync_interval_seconds
+        if interval_seconds is None:
+            if settings.sync_interval_minutes <= 0:
+                raise ValueError("sync interval must be positive")
+            interval_seconds = settings.sync_interval_minutes * 60
+        elif not 10 <= interval_seconds <= 100:
+            raise ValueError("read interval must be between 10 and 100 seconds")
 
-        data_dir = self.config_path.parent
+        current_config = load_config(self.config_path) if self.configured else None
+        current_data_dir = current_config.paths.root if current_config is not None else self.config_path.parent
+        requested_data_dir = settings.collector_data_dir.strip()
+        data_dir = (Path(requested_data_dir).expanduser().resolve() if requested_data_dir else current_data_dir).resolve()
+        self._migrate_data_dir(current_data_dir, data_dir)
         device_id = socket.gethostname().strip() or "windows-host"
         document = f"""
 [collector]
@@ -122,7 +237,9 @@ account_id = {_toml_string(account_id)}
 device_id = {_toml_string(device_id)}
 device_name = {_toml_string(device_name)}
 data_dir = {_toml_string(str(data_dir))}
-sync_interval_minutes = {settings.sync_interval_minutes}
+sync_interval_minutes = {max(1, (interval_seconds + 59) // 60)}
+sync_interval_seconds = {interval_seconds}
+autostart = {str(settings.autostart).lower()}
 reconcile_interval_hours = 24
 staging_max_gb = 20
 initial_import_batch_size = 200
@@ -130,6 +247,7 @@ incremental_batch_size = 100
 
 [qq]
 data_root = {_toml_string(data_root)}
+install_dir = {_toml_string(qq_install_dir)}
 read_mode = "snapshot_copy"
 enable_vss_fallback = false
 
@@ -149,17 +267,109 @@ rescan_not_downloaded_days = 30
         temporary.write_text(document + "\n", encoding="utf-8")
         os.replace(temporary, self.config_path)
         config = load_config(self.config_path)
+        self._set_autostart(settings.autostart)
         config.paths.ensure()
+        credentials = self._credentials_for_config(config)
         if settings.api_token:
-            self._credentials_for_config(config).set("api_token", settings.api_token)
+            credentials.set("api_token", settings.api_token)
+        if settings.qqnt_database_key:
+            credentials.set("qqnt_database_key", settings.qqnt_database_key)
         self.event_callback("settings.saved", "配置已保存")
         return config
+
+    def generate_unlock_script(self, data_root: str, qq_install_dir: str, output_path: str | Path) -> Path:
+        data_path = Path(data_root).expanduser().resolve()
+        install_path = Path(qq_install_dir).expanduser().resolve()
+        if not data_path.is_dir():
+            raise ValueError("\u0051\u0051 \u6570\u636e\u76ee\u5f55\u4e0d\u5b58\u5728\uff0c\u8bf7\u5148\u9009\u62e9\u6b63\u786e\u7684\u76ee\u5f55")
+        if not install_path.is_dir():
+            raise ValueError("\u0051\u0051 \u5b89\u88c5\u76ee\u5f55\u4e0d\u5b58\u5728\uff0c\u8bf7\u5148\u9009\u62e9\u6b63\u786e\u7684\u76ee\u5f55")
+        requested_output = Path(output_path).expanduser().resolve()
+        if requested_output.suffix.lower() == ".bat":
+            launcher = requested_output
+            output = requested_output.with_suffix(".ps1")
+        else:
+            output = requested_output if requested_output.suffix.lower() == ".ps1" else requested_output.with_suffix(".ps1")
+            launcher = output.with_suffix(".bat")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        data_literal = _powershell_single_quote(str(data_path))
+        install_literal = _powershell_single_quote(str(install_path))
+        script = f"""# Chat Audit QQ Collector - QQNT database unlock helper
+# Generated by the collector. This file only runs when the user executes it.
+# It downloads the QQBackup/qq-win-db-key Windows NTQQ extractor and invokes it.
+# Close QQ completely and back up important data before running this helper.
+
+$ErrorActionPreference = "Stop"
+$qqDataDir = {data_literal}
+$qqInstallDir = {install_literal}
+$extractorUrl = "https://raw.githubusercontent.com/QQBackup/qq-win-db-key/master/scripts/windows/ntqq/windows_ntqq_get_key.ps1"
+
+Write-Host "=== QQNT database key extraction ===" -ForegroundColor Cyan
+Write-Host "QQ data directory: $qqDataDir"
+Write-Host "QQ install directory: $qqInstallDir"
+if (-not (Test-Path -LiteralPath $qqDataDir -PathType Container)) {{
+    throw "QQ data directory does not exist: $qqDataDir"
+}}
+if (-not (Test-Path -LiteralPath $qqInstallDir -PathType Container)) {{
+    throw "QQ install directory does not exist: $qqInstallDir"
+}}
+
+$qqProcess = Get-Process -Name QQ,QQNT -ErrorAction SilentlyContinue
+if ($qqProcess) {{
+    Write-Host "QQ is still running. Close QQ and run this helper again." -ForegroundColor Yellow
+    exit 2
+}}
+
+$versionsDir = Join-Path $qqInstallDir "versions"
+$wrapperCandidates = @(Get-ChildItem -LiteralPath $versionsDir -Filter "wrapper.node" -File -Recurse -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.FullName -match "\\\\versions\\\\[^\\\\]+\\\\resources\\\\app\\\\wrapper\\.node$" }} |
+    Sort-Object LastWriteTime -Descending)
+if ($wrapperCandidates.Count -eq 0) {{
+    throw "wrapper.node was not found below versions\\<version>\\resources\\app"
+}}
+$wrapperNode = $wrapperCandidates[0].FullName
+Write-Host "Using wrapper.node: $wrapperNode" -ForegroundColor Green
+
+$tempScript = Join-Path $env:TEMP ("chat-audit-qqnt-key-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {{
+    Write-Host "Downloading the extractor to a temporary file..." -ForegroundColor Yellow
+    Invoke-WebRequest -UseBasicParsing -Uri $extractorUrl -OutFile $tempScript
+    Write-Host "Starting the extractor. Follow its prompts." -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tempScript -WrapperNodePath $wrapperNode
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
+}} finally {{
+    Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
+}}
+
+Write-Host "Copy the 16-byte ASCII key printed by the extractor into the collector settings." -ForegroundColor Green
+Write-Host "This helper does not write collector credentials, upload data, or modify the QQ database." -ForegroundColor Gray
+"""
+        output.write_text(script, encoding="utf-8")
+        launcher_text = f"""@echo off
+setlocal
+cd /d "%~dp0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0{output.name}"
+set "exit_code=%ERRORLEVEL%"
+echo.
+if not "%exit_code%"=="0" echo Script exited with code %exit_code%.
+pause
+exit /b %exit_code%
+"""
+        launcher.write_text(launcher_text, encoding="utf-8")
+        self.event_callback("unlock_script.generated", f"{output}|{launcher}")
+        return launcher
 
     def has_api_token(self) -> bool:
         if not self.configured:
             return False
         config = load_config(self.config_path)
         return bool(self._credentials_for_config(config).get("api_token"))
+
+    def has_database_key(self) -> bool:
+        if not self.configured:
+            return False
+        config = load_config(self.config_path)
+        return bool(self._credentials_for_config(config).get("qqnt_database_key"))
 
     def auto_detect_data_root(self, account_id: str = "") -> str | None:
         for root in candidate_data_roots(account_id=account_id.strip() or None):
@@ -184,8 +394,16 @@ rescan_not_downloaded_days = 30
             if "msg" in database.path.name.lower()
         ]
         formats = [detect_database_format(database.path) for database in databases]
-        readable = sum(value == "sqlite" for value in formats)
-        custom = sum(value == "qqnt_custom_vfs" for value in formats)
+        database_key = self._credentials_for_config(config).get("qqnt_database_key")
+        readable = 0
+        custom = 0
+        for database, database_format in zip(databases, formats):
+            if database_format == "sqlite":
+                readable += 1
+            elif database_format == "qqnt_custom_vfs":
+                custom += 1
+                if SQLiteKeyValidator().validate(database.path, database_key).usable:
+                    readable += 1
         unsupported = len(formats) - readable
         if not databases:
             return CompatibilityReport("missing", "未发现 QQNT 消息数据库", 0, 0, 0, 0)
@@ -200,10 +418,10 @@ rescan_not_downloaded_days = 30
             )
         if custom:
             return CompatibilityReport(
-                "unsupported",
-                "检测到 QQNT 自定义数据库，当前版本缺少兼容 NT VFS",
+                "needs_key",
+                "检测到 QQNT 加密数据库，请填写 16 字节数据库密钥",
                 len(databases),
-                0,
+                readable,
                 unsupported,
                 custom,
             )
@@ -256,7 +474,7 @@ rescan_not_downloaded_days = 30
             compatibility = self.inspect_databases()
             if compatibility.status != "ready":
                 raise RuntimeError(compatibility.message)
-        return asyncio.run(_run_once(self.config_path, mode))
+        return asyncio.run(_run_once(self.config_path, mode, progress_callback=self.event_callback))
 
     def simulate_upload(self) -> dict[str, Any]:
         config, store, queue, _credentials = _load_runtime(self.config_path)
@@ -266,7 +484,9 @@ rescan_not_downloaded_days = 30
             dedupe_key=f"simulation:{message_id}",
             payload=_simulated_message(config, message_id),
         )
-        return asyncio.run(_run_once(self.config_path, "incremental", scan=False))
+        return asyncio.run(
+            _run_once(self.config_path, "incremental", scan=False, progress_callback=self.event_callback)
+        )
 
     async def _background_main(self) -> None:
         config, store, queue, credentials = _load_runtime(self.config_path)
@@ -275,8 +495,13 @@ rescan_not_downloaded_days = 30
         if self._stop_requested.is_set():
             self._stop_event.set()
         async with CollectorApiClient(config, lambda: credentials.get("api_token")) as api:
-            uploader = _build_uploader(config, store, queue, api)
-            scheduler = CollectorScheduler(config, store, uploader, _build_scanner(config, store, queue, credentials))
+            uploader = _build_uploader(config, store, queue, api, progress_callback=self.event_callback)
+            scheduler = CollectorScheduler(
+                config,
+                store,
+                uploader,
+                _build_scanner(config, store, queue, credentials, progress_callback=self.event_callback),
+            )
             await scheduler.run_forever(self._stop_event)
 
     def _background_thread(self) -> None:

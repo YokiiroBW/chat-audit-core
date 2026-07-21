@@ -39,21 +39,40 @@ class CollectorQueue:
     def _stable_id(prefix: str, value: str) -> str:
         return f"{prefix}-{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
 
-    def enqueue_message(self, *, source_id: str, dedupe_key: str, payload: dict[str, Any]) -> str:
+    def enqueue_message(
+        self,
+        *,
+        source_id: str,
+        dedupe_key: str,
+        payload: dict[str, Any],
+        force_refresh: bool = False,
+    ) -> str:
         queue_id = self._stable_id("msg", f"{source_id}:{dedupe_key}")
         now = int(time.time())
         with self.store.connect(immediate=True) as connection:
-            connection.execute(
+            if force_refresh:
+                update_sql = """
+                    payload_json=excluded.payload_json,
+                    status='pending',
+                    next_attempt_at=0,
+                    attempts=0,
+                    updated_at=excluded.updated_at
                 """
-                INSERT INTO pending_messages(
-                    id,source_id,dedupe_key,payload_json,status,next_attempt_at,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?,?)
-                ON CONFLICT(dedupe_key) DO UPDATE SET
+            else:
+                update_sql = """
                     payload_json=CASE
                         WHEN pending_messages.status='completed' THEN pending_messages.payload_json
                         ELSE excluded.payload_json
                     END,
                     updated_at=excluded.updated_at
+                """
+            connection.execute(
+                f"""
+                INSERT INTO pending_messages(
+                    id,source_id,dedupe_key,payload_json,status,next_attempt_at,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(dedupe_key) DO UPDATE SET
+                    {update_sql}
                 """,
                 (
                     queue_id,
@@ -82,6 +101,7 @@ class CollectorQueue:
         content_sha256: str,
         file_name: str | None = None,
         payload: dict[str, Any] | None = None,
+        force_refresh: bool = False,
     ) -> str:
         if media_role not in {"asset", "thumbnail", "artifact"}:
             raise CollectorStateError("media_role must be asset, thumbnail, or artifact")
@@ -92,7 +112,7 @@ class CollectorQueue:
                 "SELECT id,status FROM pending_media WHERE message_queue_id=? AND ordinal=? AND media_role=?",
                 (message_queue_id, ordinal, media_role),
             ).fetchone()
-            if existing is not None and existing["status"] == "completed":
+            if existing is not None and existing["status"] == "completed" and not force_refresh:
                 return str(existing["id"])
             connection.execute(
                 """
@@ -108,8 +128,8 @@ class CollectorQueue:
                     file_size=excluded.file_size,
                     content_sha256=excluded.content_sha256,
                     payload_json=excluded.payload_json,
-                    status=CASE WHEN pending_media.status='completed' THEN 'completed' ELSE 'pending' END,
-                    next_attempt_at=CASE WHEN pending_media.status='completed' THEN pending_media.next_attempt_at ELSE 0 END,
+                    status=CASE WHEN pending_media.status='completed' AND NOT ? THEN 'completed' ELSE 'pending' END,
+                    next_attempt_at=CASE WHEN pending_media.status='completed' AND NOT ? THEN pending_media.next_attempt_at ELSE 0 END,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -129,6 +149,8 @@ class CollectorQueue:
                     0,
                     now,
                     now,
+                    force_refresh,
+                    force_refresh,
                 ),
             )
         return queue_id
@@ -302,10 +324,22 @@ class CollectorQueue:
                         payload["message"][field] = value.replace(replace_token, replacement)
             else:
                 raise CollectorStateError("media_role must be asset, thumbnail, or artifact")
-            connection.execute(
-                "UPDATE pending_messages SET payload_json=?, updated_at=? WHERE id=?",
-                (json.dumps(payload, ensure_ascii=False, sort_keys=True), int(time.time()), message_queue_id),
-            )
+            now = int(time.time())
+            if row["status"] == "dead_letter":
+                connection.execute(
+                    """
+                    UPDATE pending_messages
+                    SET payload_json=?, status='pending', attempts=0, next_attempt_at=0,
+                        lease_until=NULL, last_error_code=NULL, updated_at=?
+                    WHERE id=?
+                    """,
+                    (json.dumps(payload, ensure_ascii=False, sort_keys=True), now, message_queue_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE pending_messages SET payload_json=?, updated_at=? WHERE id=?",
+                    (json.dumps(payload, ensure_ascii=False, sort_keys=True), now, message_queue_id),
+                )
 
     def counts(self) -> dict[str, dict[str, int]]:
         return self.store.status_snapshot()["queues"]

@@ -6,13 +6,22 @@ import pystray
 from PIL import Image, ImageDraw
 
 
-def create_tray_image(size: int = 64) -> Image.Image:
+def create_tray_image(size: int = 64, status: str = "paused") -> Image.Image:
+    colors = {
+        "uploading": (34, 197, 94),
+        "paused": (245, 158, 11),
+        "analyzing": (139, 92, 246),
+        "error": (239, 68, 68),
+    }
+    lamp = colors.get(status, colors["paused"])
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((4, 4, size - 4, size - 4), radius=14, fill="#2563eb")
-    draw.ellipse((15, 15, 29, 29), fill="white")
-    draw.ellipse((35, 15, 49, 29), fill="white")
-    draw.rounded_rectangle((15, 35, 49, 44), radius=4, fill="white")
+    center = size // 2
+    radius = max(10, size // 4)
+    draw.ellipse((5, 5, size - 5, size - 5), fill="#17233d", outline="#ffffff", width=2)
+    draw.ellipse((center - radius - 4, center - radius - 4, center + radius + 4, center + radius + 4), fill=(*lamp, 65))
+    draw.ellipse((center - radius, center - radius, center + radius, center + radius), fill=lamp, outline="#ffffff", width=2)
+    draw.ellipse((center - radius // 3, center - radius // 2, center + radius // 5, center - radius // 7), fill="#ffffff")
     return image
 
 
@@ -27,9 +36,10 @@ class TrayManager:
         diagnostics: Callable[[], None],
         exit_app: Callable[[], None],
     ) -> None:
+        self.status = "paused"
         self.icon = pystray.Icon(
             "chat-audit-qq-collector",
-            create_tray_image(),
+            create_tray_image(status=self.status),
             "Chat Audit QQ Collector",
             pystray.Menu(
                 pystray.MenuItem("打开窗口", lambda _icon, _item: show(), default=True),
@@ -41,6 +51,19 @@ class TrayManager:
                 pystray.MenuItem("退出", lambda _icon, _item: exit_app()),
             ),
         )
+
+    def set_status(self, status: str) -> None:
+        if status not in {"uploading", "paused", "analyzing", "error"}:
+            status = "paused"
+        self.status = status
+        self.icon.icon = create_tray_image(status=status)
+        labels = {
+            "uploading": "\u6b63\u5728\u4e0a\u4f20",
+            "paused": "\u5df2\u6682\u505c",
+            "analyzing": "\u6b63\u5728\u5206\u6790",
+            "error": "\u540c\u6b65\u9519\u8bef",
+        }
+        self.icon.title = f"Chat Audit QQ Collector · {labels[status]}"
 
     def start(self) -> None:
         self.icon.run_detached()

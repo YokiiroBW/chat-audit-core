@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -24,6 +26,8 @@ from app.models import (
     MessageMediaReference,
     MessageSourceRecord,
     RobotMessage,
+    RoomProfile,
+    UserProfile,
 )
 from app.schemas import (
     ImportBatchCreateRequest,
@@ -55,8 +59,18 @@ class ImportStateError(ImportServiceError):
     pass
 
 
+def _strip_nul(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {key: _strip_nul(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_nul(item) for item in value]
+    return value
+
+
 def _json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(_strip_nul(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _json_loads(value: str | None) -> dict[str, Any]:
@@ -163,7 +177,23 @@ class ImportService:
             source.status = payload.status
             source.last_seen_at = now
             source.metadata_json, _ = _merge_json(source.metadata_json, payload.metadata)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(
+                select(ImportSource).where(
+                    ImportSource.source_type == payload.source_type,
+                    ImportSource.account_id == payload.account_id,
+                    ImportSource.device_id == payload.device_id,
+                )
+            )
+            source = result.scalar_one_or_none()
+            if source is None:
+                raise
+            if payload.id and payload.id != source.id:
+                raise ImportConflictError("source identity is already registered with a different id")
+            created = False
         await db.refresh(source)
         return source, created
 
@@ -278,14 +308,27 @@ class ImportService:
         media_counts = {"uploaded": 0, "not_downloaded": 0, "missing": 0, "failed": 0}
         for index, item in enumerate(payload.messages):
             try:
-                async with db.begin_nested():
-                    msg_hash, item_status, item_media_counts = await ImportService._upsert_message_item(
-                        db,
-                        source=source,
-                        batch=batch,
-                        item=item,
-                    )
-                    await db.flush()
+                last_integrity_error: IntegrityError | None = None
+                for attempt in range(2):
+                    try:
+                        async with db.begin_nested():
+                            msg_hash, item_status, item_media_counts = await ImportService._upsert_message_item(
+                                db,
+                                source=source,
+                                batch=batch,
+                                item=item,
+                            )
+                            await db.flush()
+                        last_integrity_error = None
+                        break
+                    except IntegrityError as exc:
+                        last_integrity_error = exc
+                        if attempt == 0:
+                            await asyncio.sleep(0)
+                            continue
+                        raise
+                if last_integrity_error is not None:
+                    raise last_integrity_error
                 setattr(response, item_status, getattr(response, item_status) + 1)
                 for key, value in item_media_counts.items():
                     media_counts[key] += value
@@ -297,7 +340,7 @@ class ImportService:
                         status=item_status,
                     )
                 )
-            except (ImportServiceError, ValueError) as exc:
+            except (ImportServiceError, ValueError, IntegrityError) as exc:
                 response.failed += 1
                 response.items.append(
                     ImportBatchItemResponse(
@@ -337,7 +380,13 @@ class ImportService:
         batch: ImportBatch,
         item: ImportMessageItemRequest,
     ) -> tuple[str, str, dict[str, int]]:
-        message_data = item.message
+        message_data = item.message.model_copy(
+            update={
+                "nickname": _strip_nul(item.message.nickname),
+                "raw_message": _strip_nul(item.message.raw_message),
+                "local_message": _strip_nul(item.message.local_message),
+            }
+        )
         if source.platform != message_data.platform:
             raise ImportConflictError("message platform does not match the import source platform")
         if source.account_id != message_data.robot_id:
@@ -399,6 +448,7 @@ class ImportService:
 
         created = message is None
         changed = created
+        qqnt_authoritative = source.source_type == "qqnt_local_db"
         incoming_local = message_data.local_message or message_data.raw_message
         if message is None:
             message = Message(
@@ -412,6 +462,7 @@ class ImportService:
                 raw_message=message_data.raw_message,
                 local_message=incoming_local,
                 timestamp=message_data.timestamp,
+                source_sequence=message_data.source_sequence,
             )
             db.add(message)
             await db.flush()
@@ -419,11 +470,14 @@ class ImportService:
             if not message.external_message_id and message_data.message_id:
                 message.external_message_id = message_data.message_id
                 changed = True
-            if not message.nickname and message_data.nickname:
+            if message_data.nickname and (not message.nickname or (qqnt_authoritative and message.nickname != message_data.nickname)):
                 message.nickname = message_data.nickname
                 changed = True
             if ImportService._local_message_score(incoming_local) > ImportService._local_message_score(message.local_message):
                 message.local_message = incoming_local
+                changed = True
+            if message.source_sequence is None and message_data.source_sequence is not None:
+                message.source_sequence = message_data.source_sequence
                 changed = True
 
         assoc_result = await db.execute(
@@ -435,6 +489,54 @@ class ImportService:
         if assoc_result.scalar_one_or_none() is None:
             db.add(RobotMessage(robot_id=message_data.robot_id, msg_hash=msg_hash))
             changed = True
+
+        metadata = item.source_record.metadata or {}
+        room_name = metadata.get("room_name")
+        room_avatar_url = metadata.get("room_avatar_url")
+        sender_avatar_url = metadata.get("sender_avatar_url")
+        if message_data.message_type == "group" and (
+            (isinstance(room_name, str) and room_name.strip())
+            or (isinstance(room_avatar_url, str) and room_avatar_url.strip())
+        ):
+            room_profile = await db.get(RoomProfile, message_data.room_id)
+            if room_profile is None:
+                db.add(
+                    RoomProfile(
+                        room_id=message_data.room_id,
+                        platform=message_data.platform,
+                        display_name=room_name.strip() if isinstance(room_name, str) and room_name.strip() else None,
+                        avatar_path=room_avatar_url.strip() if isinstance(room_avatar_url, str) and room_avatar_url.strip() else None,
+                    )
+                )
+            else:
+                if isinstance(room_name, str) and room_name.strip() and (
+                    not room_profile.display_name or (qqnt_authoritative and room_profile.display_name != room_name.strip())
+                ):
+                    room_profile.display_name = room_name.strip()
+                if isinstance(room_avatar_url, str) and room_avatar_url.strip() and (
+                    not room_profile.avatar_path or (qqnt_authoritative and room_profile.avatar_path != room_avatar_url.strip())
+                ):
+                    room_profile.avatar_path = room_avatar_url.strip()
+        if message_data.nickname or (isinstance(sender_avatar_url, str) and sender_avatar_url.strip()):
+            user_profile = await db.get(UserProfile, message_data.sender_id)
+            if user_profile is None:
+                db.add(
+                    UserProfile(
+                        user_id=message_data.sender_id,
+                        platform=message_data.platform,
+                        display_name=message_data.nickname,
+                        avatar_path=sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and sender_avatar_url.strip() else None,
+                    )
+                )
+            else:
+                if message_data.nickname and (
+                    not user_profile.display_name or (qqnt_authoritative and user_profile.display_name != message_data.nickname)
+                ):
+                    user_profile.display_name = message_data.nickname
+                if isinstance(sender_avatar_url, str) and sender_avatar_url.strip() and (
+                    not user_profile.avatar_path or (qqnt_authoritative and user_profile.avatar_path != sender_avatar_url.strip())
+                ):
+                    user_profile.avatar_path = sender_avatar_url.strip()
 
         profile = await db.get(BotProfile, message_data.robot_id)
         now = utc_now()
@@ -483,6 +585,7 @@ class ImportService:
                 db,
                 msg_hash=msg_hash,
                 reference=reference,
+                allow_complete_rebind=qqnt_authoritative,
             )
             changed = changed or reference_changed
             if archived_now:
@@ -565,6 +668,7 @@ class ImportService:
         *,
         msg_hash: str,
         reference: MessageMediaReferenceRequest,
+        allow_complete_rebind: bool = False,
     ) -> tuple[bool, str, str, bool]:
         validate_media_reference_assets(
             source_state=reference.source_state,
@@ -613,19 +717,29 @@ class ImportService:
 
         changed = False
         was_complete = model.archive_state == "complete"
-        if was_complete and reference.asset_file_hash and model.asset_file_hash and reference.asset_file_hash != model.asset_file_hash:
+        rebinding_complete = (
+            was_complete
+            and reference.asset_file_hash
+            and model.asset_file_hash
+            and reference.asset_file_hash != model.asset_file_hash
+        )
+        if rebinding_complete and not allow_complete_rebind:
             raise ImportConflictError("a complete media reference cannot be rebound to a different asset")
-        transition_allowed = can_transition_media_state(
-            model.source_state,
-            model.archive_state,
-            reference.source_state,
-            reference.archive_state,
+        transition_allowed = (
+            True
+            if rebinding_complete and allow_complete_rebind
+            else can_transition_media_state(
+                model.source_state,
+                model.archive_state,
+                reference.source_state,
+                reference.archive_state,
+            )
         )
         if transition_allowed and (model.source_state, model.archive_state) != (reference.source_state, reference.archive_state):
             model.source_state = reference.source_state
             model.archive_state = reference.archive_state
             changed = True
-        overwrite = transition_allowed and not was_complete
+        overwrite = transition_allowed and (not was_complete or bool(rebinding_complete and allow_complete_rebind))
         changed = ImportService._apply_media_fields(
             model,
             reference,

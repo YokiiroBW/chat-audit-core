@@ -59,11 +59,20 @@ class MediaResolver:
             if full_file:
                 break
         if full_file is None and self.index is not None:
-            full_file = self.index.find(
-                file_name=element.get("file_name") if isinstance(element.get("file_name"), str) else None,
-                declared_size=declared_size_value,
-                source_md5=source_md5,
+            file_name = element.get("file_name") if isinstance(element.get("file_name"), str) else None
+            alternate_name = element.get("name") if isinstance(element.get("name"), str) else None
+            has_media_identity = bool(
+                declared_size_value
+                or source_md5
+                or isinstance(element.get("sha1"), str)
+                or isinstance(element.get("uuid"), str)
             )
+            if file_name or alternate_name or has_media_identity:
+                full_file = self.index.find(
+                    file_name=file_name or alternate_name,
+                    declared_size=declared_size_value,
+                    source_md5=source_md5,
+                )
 
         thumbnail_file = None
         for field in self.THUMBNAIL_PATH_FIELDS:

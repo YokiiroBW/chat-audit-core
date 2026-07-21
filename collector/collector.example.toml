@@ -28,3 +28,4 @@ rescan_not_downloaded_days = 30
 
 # API Token and QQNT database keys are intentionally absent.
 # Store them with: python -m collector credential set api_token
+# and: python -m collector credential set qqnt_database_key

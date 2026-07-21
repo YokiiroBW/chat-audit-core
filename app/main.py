@@ -244,7 +244,11 @@ def create_app(
 
     @app.get("/sw.js", include_in_schema=False)
     async def service_worker() -> FileResponse:
-        return FileResponse(static_dir / "sw.js", media_type="application/javascript")
+        return FileResponse(
+            static_dir / "sw.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> JSONResponse | HealthResponse:

@@ -327,13 +327,37 @@ class CollectorStateStore:
             ).fetchone()
         return json.loads(row["cursor_json"]) if row else None
 
-    def start_sync_run(self, mode: str) -> str:
+    def try_start_sync_run(self, mode: str) -> str | None:
         run_id = uuid.uuid4().hex
         with self.connect(immediate=True) as connection:
+            active = connection.execute(
+                "SELECT id FROM sync_runs WHERE status='running' LIMIT 1"
+            ).fetchone()
+            if active is not None:
+                return None
             connection.execute(
                 "INSERT INTO sync_runs(id,mode,status,started_at) VALUES(?,?,?,?)",
                 (run_id, mode, "running", int(time.time())),
             )
+        return run_id
+
+    def recover_interrupted_runs(self, *, detail: str = "collector process restarted") -> int:
+        now = int(time.time())
+        with self.connect(immediate=True) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE sync_runs
+                SET status='failed', completed_at=?, error_code='COLLECTOR_RESTARTED', detail=?
+                WHERE status='running'
+                """,
+                (now, detail),
+            )
+        return int(cursor.rowcount)
+
+    def start_sync_run(self, mode: str) -> str:
+        run_id = self.try_start_sync_run(mode)
+        if run_id is None:
+            raise CollectorStateError("SYNC_ALREADY_RUNNING")
         return run_id
 
     def finish_sync_run(
@@ -394,6 +418,28 @@ class CollectorStateStore:
                 ) VALUES(?,?,?,?,?,?)
                 """,
                 (source_id, source_table, source_key_hash, error_code, detail, int(time.time())),
+            )
+
+    def resolve_parser_failures(
+        self,
+        *,
+        source_id: str,
+        source_table: str,
+        source_key_hash: str,
+        error_codes: tuple[str, ...] = ("PROTOBUF_PARSE_FAILED", "MESSAGE_PARSE_FAILED"),
+    ) -> None:
+        if not error_codes:
+            return
+        placeholders = ",".join("?" for _ in error_codes)
+        with self.connect(immediate=True) as connection:
+            connection.execute(
+                f"""
+                UPDATE parser_failures
+                SET resolved_at=?
+                WHERE source_id=? AND source_table=? AND source_key_hash=?
+                  AND resolved_at IS NULL AND error_code IN ({placeholders})
+                """,
+                (int(time.time()), source_id, source_table, source_key_hash, *error_codes),
             )
 
     def status_snapshot(self) -> dict[str, Any]:

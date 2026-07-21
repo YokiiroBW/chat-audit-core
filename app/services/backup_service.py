@@ -105,7 +105,7 @@ class BackupService:
         },
     }
     _OPTIONAL_FIELD_TYPES = {
-        "messages": {"external_message_id": str, "nickname": str},
+        "messages": {"external_message_id": str, "nickname": str, "source_sequence": int},
         "media_assets": {"file_checksum": dict},
         "room_profiles": {"display_name": str, "avatar_path": str},
         "user_profiles": {"display_name": str, "avatar_path": str},
@@ -278,6 +278,7 @@ class BackupService:
             "raw_message": message.raw_message,
             "local_message": message.local_message,
             "timestamp": message.timestamp,
+            "source_sequence": message.source_sequence,
         }
 
     @staticmethod
@@ -1080,7 +1081,7 @@ class BackupService:
     def _message_matches_existing(existing: Message, item: dict[str, Any]) -> bool:
         return all(
             getattr(existing, key) == item.get(key)
-            for key in ("platform", "room_id", "message_type", "external_message_id", "sender_id", "nickname", "raw_message", "local_message", "timestamp")
+            for key in ("platform", "room_id", "message_type", "external_message_id", "sender_id", "nickname", "raw_message", "local_message", "timestamp", "source_sequence")
         )
 
     @staticmethod
@@ -1335,6 +1336,7 @@ class BackupService:
                         raw_message=item["raw_message"],
                         local_message=item["local_message"],
                         timestamp=item["timestamp"],
+                        source_sequence=item.get("source_sequence"),
                     )
                 )
             else:
@@ -1347,6 +1349,8 @@ class BackupService:
                 message.raw_message = item["raw_message"]
                 message.local_message = item["local_message"]
                 message.timestamp = item["timestamp"]
+                if item.get("source_sequence") is not None:
+                    message.source_sequence = item["source_sequence"]
             message_count += 1
 
         robot_message_count = 0

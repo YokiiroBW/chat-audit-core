@@ -171,6 +171,12 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "applied": True,
             "applied_at": migrations_response.json()[9]["applied_at"],
         },
+        {
+            "version": "20260705_011_message_source_sequence",
+            "description": "Add source message sequence ordering",
+            "applied": True,
+            "applied_at": migrations_response.json()[10]["applied_at"],
+        },
     ]
     assert storage_root.exists()
     assert backup_root.exists()
@@ -202,6 +208,7 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "20260705_008_capture_target_policies",
             "20260705_009_performance_indexes",
             "20260705_010_qqnt_import_models",
+            "20260705_011_message_source_sequence",
         ]
 
 

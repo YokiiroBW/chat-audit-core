@@ -229,6 +229,21 @@ def test_media_index_stops_at_configured_file_cap(tmp_path):
     assert index.find(file_name="image-0.jpg") == (media_root / "image-0.jpg").resolve()
 
 
+def test_media_index_does_not_guess_between_duplicate_names(tmp_path):
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    (media_root / "image-0.jpg").write_bytes(b"first-image")
+    duplicate_root = tmp_path / "media-duplicate"
+    duplicate_root.mkdir()
+    (duplicate_root / "image-0.jpg").write_bytes(b"second-image-with-different-content")
+
+    index = MediaFileIndex([media_root, duplicate_root])
+    index.build()
+
+    assert index.find(file_name="image-0.jpg") is None
+
+
+
 def test_scanner_cursor_uses_declared_text_order_for_numeric_looking_ids(tmp_path):
     data_root = tmp_path / "qqnt"
     database_dir = data_root / "database"

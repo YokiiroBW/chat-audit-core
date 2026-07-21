@@ -48,6 +48,18 @@ def _plain_message_preview(value: str | None) -> str:
     return compact or "[消息]"
 
 
+def _qq_number_from_raw(raw_columns_json: str | None, robot_id: str) -> str | None:
+    try:
+        raw = json.loads(raw_columns_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    for key in ("qq", "uin", "user_id", "40033", "40030"):
+        value = str(raw.get(key) or "").strip()
+        if value.isdigit() and value != str(robot_id) and 5 <= len(value) <= 12:
+            return value
+    return None
+
+
 class QueryService:
     @staticmethod
     async def list_adapters(db: AsyncSession) -> list[Adapter]:
@@ -73,12 +85,16 @@ class QueryService:
             ((Message.message_type == "private") & (Message.sender_id == Message.room_id), Message.nickname),
             else_=None,
         )
+        private_message_nickname = case(
+            (Message.message_type == "private", Message.nickname),
+            else_=None,
+        )
         result = await db.execute(
             select(
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
                 func.max(Message.message_type).label("message_type"),
-                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
+                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name, private_message_nickname)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
             .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
@@ -88,16 +104,39 @@ class QueryService:
             .group_by(Message.room_id)
             .order_by(desc("last_timestamp"), Message.room_id.asc())
         )
-        return [
-            {
+        rows = result.all()
+        room_ids = [row.room_id for row in rows]
+        qq_candidates: dict[str, list[str]] = {room_id: [] for room_id in room_ids}
+        if room_ids:
+            source_result = await db.execute(
+                select(Message.room_id, Message.message_type, MessageSourceRecord.raw_columns_json)
+                .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                .outerjoin(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
+                .where(RobotMessage.robot_id == robot_id, Message.room_id.in_(room_ids))
+                .order_by(Message.timestamp.desc())
+            )
+            for room_id, message_type, raw_columns_json in source_result.all():
+                if message_type != "private" or len(qq_candidates[room_id]) >= 50:
+                    continue
+                qq_number = _qq_number_from_raw(raw_columns_json, robot_id)
+                if qq_number:
+                    qq_candidates[room_id].append(qq_number)
+
+        room_items = []
+        for row in rows:
+            candidates = qq_candidates.get(row.room_id, [])
+            qq_number = max(set(candidates), key=candidates.count) if candidates else None
+            if not qq_number and row.message_type == "private" and str(row.room_id).isdigit():
+                qq_number = str(row.room_id)
+            room_items.append({
                 "room_id": row.room_id,
                 "last_timestamp": row.last_timestamp,
                 "message_type": row.message_type,
                 "display_name": row.display_name,
                 "avatar_path": row.avatar_path,
-            }
-            for row in result.all()
-        ]
+                "qq_number": qq_number,
+            })
+        return room_items
 
     @staticmethod
     async def list_messages(
@@ -157,7 +196,11 @@ class QueryService:
 
         # Cursor loading needs the newest N messages before the cursor, then returns
         # them in chronological order for stable chat rendering.
-        stmt = stmt.order_by(Message.timestamp.desc(), Message.msg_hash.desc()).limit(limit)
+        stmt = stmt.order_by(
+            Message.timestamp.desc(),
+            func.coalesce(Message.source_sequence, -1).desc(),
+            Message.msg_hash.desc(),
+        ).limit(limit)
         result = await db.execute(stmt)
         messages = []
         for message, sender_display_name, sender_avatar_path in result.all():
@@ -165,6 +208,20 @@ class QueryService:
             message.sender_avatar_path = sender_avatar_path
             messages.append(message)
         messages = list(reversed(messages))
+        source_result = await db.execute(
+            select(MessageSourceRecord.msg_hash, MessageSourceRecord.raw_columns_json)
+            .where(MessageSourceRecord.msg_hash.in_([message.msg_hash for message in messages]))
+        )
+        outgoing_by_hash: dict[str, bool] = {}
+        for msg_hash, raw_columns_json in source_result.all():
+            try:
+                raw_columns = json.loads(raw_columns_json or "{}")
+            except (TypeError, json.JSONDecodeError):
+                raw_columns = {}
+            if "40033" in raw_columns:
+                outgoing_by_hash[msg_hash] = outgoing_by_hash.get(msg_hash, False) or str(raw_columns.get("40033")) == str(robot_id)
+        for message in messages:
+            message.is_outgoing = outgoing_by_hash.get(message.msg_hash)
         await QueryService._attach_reply_previews(db, messages)
         await QueryService._attach_import_details(db, messages)
         return messages
@@ -240,7 +297,11 @@ class QueryService:
             stmt = stmt.where(Message.timestamp <= end_timestamp)
         stmt = QueryService._apply_media_state_filter(stmt, media_state)
 
-        stmt = stmt.order_by(Message.timestamp.desc(), Message.msg_hash.desc()).limit(limit)
+        stmt = stmt.order_by(
+            Message.timestamp.desc(),
+            func.coalesce(Message.source_sequence, -1).desc(),
+            Message.msg_hash.desc(),
+        ).limit(limit)
         result = await db.execute(stmt)
         messages = list(result.scalars().unique().all())
         await QueryService._attach_reply_previews(db, messages)

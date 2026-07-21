@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,10 +17,18 @@ logger = logging.getLogger("collector.uploader")
 
 
 class CollectorApiError(RuntimeError):
-    def __init__(self, error_code: str, message: str, *, retryable: bool = True) -> None:
+    def __init__(
+        self,
+        error_code: str,
+        message: str,
+        *,
+        retryable: bool = True,
+        status_code: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.error_code = error_code
         self.retryable = retryable
+        self.status_code = status_code
 
 
 class CollectorApiClient:
@@ -65,9 +74,9 @@ class CollectorApiClient:
         except httpx.RequestError as exc:
             raise CollectorApiError("SERVER_UNAVAILABLE", "Chat Audit Core is unavailable") from exc
         if response.status_code in {401, 403}:
-            raise CollectorApiError("SERVER_AUTH_FAILED", "collector API authentication failed", retryable=False)
+            raise CollectorApiError("SERVER_AUTH_FAILED", "collector API authentication failed", retryable=False, status_code=response.status_code)
         if response.status_code >= 500:
-            raise CollectorApiError("SERVER_UNAVAILABLE", f"server returned HTTP {response.status_code}")
+            raise CollectorApiError("SERVER_UNAVAILABLE", f"server returned HTTP {response.status_code}", status_code=response.status_code)
         if response.status_code >= 400:
             detail = None
             try:
@@ -79,6 +88,7 @@ class CollectorApiClient:
                 "SERVER_BATCH_REJECTED",
                 str(detail or f"server rejected request with HTTP {response.status_code}"),
                 retryable=response.status_code in {408, 409, 425, 429},
+                status_code=response.status_code,
             )
         return response
 
@@ -168,13 +178,18 @@ class QueueUploader:
         store: CollectorStateStore,
         queue: CollectorQueue,
         api: CollectorApiClient,
+        progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self.config = config
         self.store = store
         self.queue = queue
         self.api = api
+        self.progress_callback = progress_callback or (lambda _event, _detail: None)
         identity = f"qqnt_local_db:{config.collector.account_id}:{config.collector.device_id}"
         self.local_source_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+    def _emit_progress(self, event: str, detail: str) -> None:
+        self.progress_callback(event, detail)
 
     def bootstrap_local_source(self) -> None:
         self.store.upsert_source(
@@ -196,7 +211,9 @@ class QueueUploader:
 
     async def _upload_media(self, limit: int) -> dict[str, int]:
         stats = {"leased": 0, "completed": 0, "retry": 0, "dead_letter": 0}
-        for item in self.queue.lease_ready("media", limit=limit):
+        items = self.queue.lease_ready("media", limit=limit)
+        self._emit_progress("upload.media.started", str(len(items)))
+        for item in items:
             stats["leased"] += 1
             try:
                 response = await self.api.upload_media(item)
@@ -229,6 +246,10 @@ class QueueUploader:
                     "media upload deferred",
                     extra={"event": "media.upload", "error_code": exc.error_code},
                 )
+        self._emit_progress(
+            "upload.media.completed",
+            f"{stats['leased']}|{stats['completed']}|{stats['retry']}|{stats['dead_letter']}",
+        )
         return stats
 
     @staticmethod
@@ -236,16 +257,93 @@ class QueueUploader:
         identity = f"{mode}:" + ":".join(item.id for item in items)
         return "collector-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:48]
 
-    async def _upload_messages(self, *, source_id: str, mode: str, limit: int) -> dict[str, int]:
-        stats = {"leased": 0, "completed": 0, "retry": 0, "dead_letter": 0, "failed": 0}
-        items = self.queue.lease_ready("message", limit=limit)
-        if not items:
-            return stats
-        stats["leased"] = len(items)
+    @staticmethod
+    def _fresh_batch_id(items: list[QueueItem], mode: str) -> str:
+        identity = f"{mode}:" + ":".join(item.id for item in items)
+        nonce = uuid.uuid4().hex
+        return "collector-" + hashlib.sha256(f"{identity}:{nonce}".encode("utf-8")).hexdigest()[:48]
+
+    async def _create_writable_batch(
+        self,
+        *,
+        source_id: str,
+        mode: str,
+        items: list[QueueItem],
+    ) -> str:
         batch_id = self._batch_id(items, mode)
+        response = await self.api.create_batch(batch_id=batch_id, source_id=source_id, mode=mode)
+        status = response.get("status")
+        completed_at = response.get("completed_at")
+        terminal = status in {"completed", "failed", "cancelled"} or (
+            status == "partial" and completed_at is not None
+        )
+        if not terminal:
+            return batch_id
+
+        replacement_id = self._fresh_batch_id(items, mode)
+        logger.info(
+            "creating replacement batch for terminal batch",
+            extra={
+                "event": "batch.replaced",
+                "batch_id": batch_id,
+                "replacement_batch_id": replacement_id,
+                "status": status,
+            },
+        )
+        await self.api.create_batch(batch_id=replacement_id, source_id=source_id, mode=mode)
+        return replacement_id
+
+    @staticmethod
+    def _strip_nul(value: Any) -> Any:
+        if isinstance(value, str):
+            return value.replace("\x00", "")
+        if isinstance(value, dict):
+            return {key: QueueUploader._strip_nul(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [QueueUploader._strip_nul(item) for item in value]
+        return value
+
+    @staticmethod
+    def _normalized_message_payload(item: QueueItem) -> dict[str, Any]:
+        payload = QueueUploader._strip_nul(dict(item.payload))
+        message = dict(payload.get("message") or {})
+        sender_id = str(message.get("sender_id") or "").strip()
+        if not sender_id:
+            source_record = dict(payload.get("source_record") or {})
+            source_key = str(source_record.get("source_key") or item.id)
+            source_table = str(source_record.get("source_table") or "message")
+            sender_id = "unknown:" + hashlib.sha256(f"{source_table}:{source_key}".encode("utf-8")).hexdigest()[:32]
+            message["sender_id"] = sender_id
+            metadata = dict(source_record.get("metadata") or {})
+            parser_failures = list(metadata.get("parser_failures") or [])
+            if "MISSING_SENDER_ID" not in parser_failures:
+                parser_failures.append("MISSING_SENDER_ID")
+            metadata["parser_failures"] = parser_failures
+            source_record["metadata"] = metadata
+            payload["source_record"] = source_record
+        payload["message"] = message
+        return payload
+
+    async def _upload_message_items(
+        self,
+        *,
+        source_id: str,
+        mode: str,
+        items: list[QueueItem],
+        stats: dict[str, int],
+    ) -> None:
+        if not items:
+            return
         try:
-            await self.api.create_batch(batch_id=batch_id, source_id=source_id, mode=mode)
-            response = await self.api.upload_messages(batch_id=batch_id, messages=[item.payload for item in items])
+            batch_id = await self._create_writable_batch(
+                source_id=source_id,
+                mode=mode,
+                items=items,
+            )
+            response = await self.api.upload_messages(
+                batch_id=batch_id,
+                messages=[self._normalized_message_payload(item) for item in items],
+            )
             results = response.get("items")
             if not isinstance(results, list) or len(results) != len(items):
                 raise CollectorApiError("SERVER_BATCH_REJECTED", "batch response item count is invalid")
@@ -262,20 +360,44 @@ class QueueUploader:
             if set(result_by_index) != set(range(len(items))):
                 raise CollectorApiError("SERVER_BATCH_REJECTED", "batch response item indexes are incomplete")
             failed_indexes = {
-                index
-                for index, result in result_by_index.items()
-                if result.get("status") == "failed"
+                index for index, result in result_by_index.items() if result.get("status") == "failed"
             }
             await self.api.complete_batch(batch_id=batch_id, partial=bool(failed_indexes))
         except CollectorApiError as exc:
+            if exc.status_code == 422 and len(items) > 1:
+                midpoint = len(items) // 2
+                logger.warning(
+                    "splitting rejected message batch",
+                    extra={
+                        "event": "batch.upload.split",
+                        "batch_id": batch_id,
+                        "error_code": exc.error_code,
+                        "error_detail": str(exc),
+                        "batch_size": len(items),
+                    },
+                )
+                await self._upload_message_items(
+                    source_id=source_id, mode=mode, items=items[:midpoint], stats=stats
+                )
+                await self._upload_message_items(
+                    source_id=source_id, mode=mode, items=items[midpoint:], stats=stats
+                )
+                return
             for item in items:
                 status = self.queue.mark_retry(item, exc.error_code, max_attempts=8 if exc.retryable else 1)
                 stats[status] += 1
             logger.warning(
                 "message batch upload deferred",
-                extra={"event": "batch.upload", "batch_id": batch_id, "error_code": exc.error_code},
+                extra={
+                    "event": "batch.upload",
+                    "batch_id": batch_id,
+                    "error_code": exc.error_code,
+                    "error_detail": str(exc),
+                    "status_code": exc.status_code,
+                    "batch_size": len(items),
+                },
             )
-            return stats
+            return
 
         for index, item in enumerate(items):
             if index in failed_indexes:
@@ -285,6 +407,19 @@ class QueueUploader:
             else:
                 self.queue.mark_completed(item, {"batch_id": batch_id})
                 stats["completed"] += 1
+
+    async def _upload_messages(self, *, source_id: str, mode: str, limit: int) -> dict[str, int]:
+        stats = {"leased": 0, "completed": 0, "retry": 0, "dead_letter": 0, "failed": 0}
+        items = self.queue.lease_ready("message", limit=limit)
+        if not items:
+            return stats
+        stats["leased"] = len(items)
+        self._emit_progress("upload.messages.started", f"{mode}|{len(items)}")
+        await self._upload_message_items(source_id=source_id, mode=mode, items=items, stats=stats)
+        self._emit_progress(
+            "upload.messages.completed",
+            f"{stats['leased']}|{stats['completed']}|{stats['retry']}|{stats['dead_letter']}|{stats['failed']}",
+        )
         return stats
 
     async def run_cycle(self, *, mode: str = "incremental") -> dict[str, Any]:

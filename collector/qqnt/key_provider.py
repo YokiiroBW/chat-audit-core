@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Callable
 
 from collector.qqnt.snapshot import detect_database_format, is_plain_sqlite
+from collector.qqnt.capabilities import detect_runtime_capabilities
+from collector.qqnt.sqlcipher import QQNT_DATABASE_KEY_NAME, sqlcipher_available
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,7 @@ class CredentialKeyProvider:
         self.getter = getter
 
     def get_database_key(self) -> str | None:
-        return self.getter("qqnt_database_key")
+        return self.getter(QQNT_DATABASE_KEY_NAME)
 
 
 class SQLiteKeyValidator:
@@ -34,11 +36,17 @@ class SQLiteKeyValidator:
             return KeyValidationResult("invalid", "DB_OPEN_FAILED", "database file does not exist")
         database_format = detect_database_format(path)
         if database_format == "qqnt_custom_vfs":
-            return KeyValidationResult(
-                "unsupported",
-                "DB_VFS_UNSUPPORTED",
-                "QQNT custom database header detected; a compatible NT VFS/SQLCipher runtime is required",
-            )
+            if not sqlcipher_available():
+                capabilities = detect_runtime_capabilities()
+                detail = "QQNT custom database detected, but sqlcipher3 is not installed"
+                if capabilities.sqlcipher_available:
+                    detail = f"SQLCipher runtime {capabilities.sqlcipher_provider} is unavailable to the Collector"
+                return KeyValidationResult("unsupported", "DB_SQLCIPHER_UNAVAILABLE", detail)
+            if not key:
+                return KeyValidationResult("invalid", "DB_KEY_INVALID", "QQNT database key is required")
+            if len(key.encode("utf-8")) != 16:
+                return KeyValidationResult("invalid", "DB_KEY_INVALID", "QQNT database key must be exactly 16 bytes")
+            return KeyValidationResult("valid")
         if is_plain_sqlite(path):
             try:
                 uri = f"file:{path.as_posix()}?mode=ro"

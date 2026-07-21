@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path(SPECPATH).parents[1]
-hidden_imports = collect_submodules("httpx")
+hidden_imports = collect_submodules("httpx") + collect_submodules("sqlcipher3")
 
 a = Analysis(
     [str(project_root / "collector" / "__main__.py")],

@@ -79,6 +79,23 @@ def test_message_parser_normalizes_text_face_reply_and_cards():
     assert parsed.failures == ()
 
 
+def test_message_parser_attaches_qqnt_profile_metadata():
+    context = MessageParserContext(
+        account_id="123456789",
+        sender_nicknames={"user-a": "????"},
+        room_names={"group-a": "????"},
+        sender_avatars={"user-a": "https://example.test/user.jpg"},
+        room_avatars={"group-a": "https://example.test/group.jpg"},
+    )
+
+    parsed = parse_source_message(_row({"elements": [{"type": "text", "text": "hello"}]}), context)
+
+    assert parsed.item["message"]["nickname"] == "Alice"
+    metadata = parsed.item["source_record"]["metadata"]
+    assert metadata["sender_avatar_url"] == "https://example.test/user.jpg"
+    assert metadata["room_avatar_url"] == "https://example.test/group.jpg"
+
+
 def test_video_state_parser_distinguishes_not_downloaded_missing_and_complete(tmp_path):
     not_downloaded = parse_source_message(
         _row({"elements": [{"type": "video", "file_name": "never.mp4", "uuid": "video-uuid"}]}),
@@ -195,6 +212,55 @@ def test_forward_payload_is_staged_as_real_json_and_patched_into_message(tmp_pat
     assert message.payload["media"] == []
 
 
+
+def _varint(value: int) -> bytes:
+    output = bytearray()
+    while value >= 0x80:
+        output.append((value & 0x7F) | 0x80)
+        value >>= 7
+    output.append(value)
+    return bytes(output)
+
+
+def _length_delimited(field_number: int, value: bytes) -> bytes:
+    return _varint(field_number << 3 | 2) + _varint(len(value)) + value
+
+
+def test_qqnt_protobuf_text_is_decoded_into_existing_message_elements():
+    content = _varint(45002 << 3) + _varint(1) + _length_delimited(45101, "QQNT text".encode())
+    raw_protobuf = _length_delimited(40800, content)
+
+    parsed = parse_source_message(_row(raw_protobuf), _context())
+
+    assert parsed.item["message"]["raw_message"] == "QQNT text"
+    assert parsed.failures == ()
+
+
+def test_qqnt_protobuf_special_types_are_decoded_without_parser_failures():
+    face = _varint(45002 << 3) + _varint(6) + _length_delimited(47602, bytes.fromhex("5be6838ae590935d"))
+    card = _varint(45002 << 3) + _varint(10) + _length_delimited(47901, b'{"prompt":"hello"}')
+    xml = _varint(45002 << 3) + _varint(16) + _length_delimited(48602, b'<msg serviceID="35"/>')
+    media = (
+        _varint(45002 << 3)
+        + _varint(2)
+        + _length_delimited(45402, b"photo.jpg")
+        + _varint(45405 << 3)
+        + _varint(1234)
+    )
+    raw_protobuf = b"".join(
+        _length_delimited(40800, value) for value in (face, card, xml, media)
+    )
+
+    parsed = parse_source_message(_row(raw_protobuf), _context())
+
+    assert parsed.failures == ()
+    assert "[CQ:face" in parsed.item["message"]["raw_message"]
+    assert "[CQ:json" in parsed.item["message"]["raw_message"]
+    assert "[CQ:xml" in parsed.item["message"]["raw_message"]
+    assert "[CQ:image,file=photo.jpg]" in parsed.item["message"]["raw_message"]
+    assert parsed.item["media"][0]["file_name"] == "photo.jpg"
+
+
 def test_unparsed_protobuf_is_preserved_and_failure_is_replayable(tmp_path):
     raw_protobuf = b"\x08\xff\x10\x80"
     parsed = parse_source_message(_row(raw_protobuf), _context())
@@ -218,6 +284,16 @@ def test_unparsed_protobuf_is_preserved_and_failure_is_replayable(tmp_path):
         staging=MediaStagingStore(tmp_path / "staging", max_bytes=1024),
     )
     assert store.status_snapshot()["unresolved_parser_failures"] == 1
+
+    recovered = parse_source_message(_row({"elements": [{"type": "text", "text": "recovered"}]}), _context())
+    enqueue_parsed_message(
+        recovered,
+        source_id="source",
+        queue=queue,
+        store=store,
+        staging=MediaStagingStore(tmp_path / "staging", max_bytes=1024),
+    )
+    assert store.status_snapshot()["unresolved_parser_failures"] == 0
     assert queue.counts()["messages"] == {"pending": 1}
 
 

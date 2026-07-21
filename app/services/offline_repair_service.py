@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import MediaAsset, Message, RoomProfile, UserProfile
 from app.services.backup_service import BackupService
 from app.services.message_service import MessageService
+from app.services.media_service import MediaService
 
 
 @dataclass
@@ -157,6 +158,20 @@ class OfflineRepairService:
             profile = room_profiles.get(room_id)
             if profile is not None and OfflineRepairService._is_local_profile_avatar(profile.avatar_path, public_storage_prefix):
                 continue
+
+            if profile is not None and profile.avatar_path and profile.avatar_path.startswith(('http://','https://')):
+                localized = await MediaService.download_url_to_local_path(
+                    db,
+                    profile.avatar_path,
+                    media_type='image',
+                    file_name=f'{room_id}.jpg',
+                    storage_root=storage_root,
+                    public_prefix=public_storage_prefix,
+                )
+                if localized:
+                    profile.avatar_path = localized
+                    repaired_paths.append(localized)
+                    continue
             local_path = await OfflineRepairService._save_profile_placeholder(
                 db,
                 profile_type="room",
@@ -175,6 +190,20 @@ class OfflineRepairService:
             profile = existing_user_profiles.get(user_id)
             if profile is not None and OfflineRepairService._is_local_profile_avatar(profile.avatar_path, public_storage_prefix):
                 continue
+
+            if profile is not None and profile.avatar_path and profile.avatar_path.startswith(('http://','https://')):
+                localized = await MediaService.download_url_to_local_path(
+                    db,
+                    profile.avatar_path,
+                    media_type='image',
+                    file_name=f'{room_id}.jpg',
+                    storage_root=storage_root,
+                    public_prefix=public_storage_prefix,
+                )
+                if localized:
+                    profile.avatar_path = localized
+                    repaired_paths.append(localized)
+                    continue
             local_path = await OfflineRepairService._save_profile_placeholder(
                 db,
                 profile_type="user",

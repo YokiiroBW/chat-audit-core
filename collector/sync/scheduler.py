@@ -40,7 +40,9 @@ class CollectorScheduler:
     async def run_once(self, mode: str = "incremental") -> SchedulerResult:
         if mode not in {"initial", "incremental", "reconcile", "media_rescan"}:
             raise ValueError(f"unsupported collector run mode: {mode}")
-        run_id = self.store.start_sync_run(mode)
+        run_id = self.store.try_start_sync_run(mode)
+        if run_id is None:
+            return SchedulerResult("", mode, "skipped", {"skipped": "active_run"})
         started = time.monotonic()
         try:
             scan_result: ScanResult | None = None
@@ -89,7 +91,7 @@ class CollectorScheduler:
 
     async def run_forever(self, stop_event: asyncio.Event | None = None) -> None:
         stop = stop_event or asyncio.Event()
-        sync_seconds = self.config.collector.sync_interval_minutes * 60
+        sync_seconds = self.config.collector.sync_interval_seconds
         reconcile_seconds = self.config.collector.reconcile_interval_hours * 3600
         while not stop.is_set():
             now = time.monotonic()
@@ -97,7 +99,10 @@ class CollectorScheduler:
                 mode = "initial"
             else:
                 mode = "reconcile" if now - self._last_reconcile_at >= reconcile_seconds else "incremental"
-            await self.run_once(mode)
+            result = await self.run_once(mode)
+            if result.status == "skipped":
+                await asyncio.sleep(min(5, sync_seconds))
+                continue
             if mode == "reconcile":
                 self._last_reconcile_at = time.monotonic()
             delay_seconds = sync_seconds

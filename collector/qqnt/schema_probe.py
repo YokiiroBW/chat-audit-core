@@ -65,6 +65,22 @@ def _map_message_columns(columns: tuple[str, ...]) -> tuple[int, dict[str, str]]
     return score, mapping
 
 
+def _map_qqnt_numeric_columns(table_name: str, columns: tuple[str, ...]) -> tuple[int, dict[str, str]]:
+    if table_name not in {"c2c_msg_table", "group_msg_table"}:
+        return 0, {}
+    required = {"40001", "40003", "40020", "40021", "40050", "40800"}
+    if not required.issubset(columns):
+        return 0, {}
+    return 11, {
+        "msg_id": "40001",
+        "msg_seq": "40003",
+        "msg_time": "40050",
+        "conversation_id": "40021",
+        "sender_id": "40020",
+        "content": "40800",
+    }
+
+
 def _chat_kind(table_name: str, mapping: dict[str, str]) -> str:
     lowered = table_name.lower()
     if "group" in lowered:
@@ -96,6 +112,9 @@ def probe_schema(database: ReadOnlySQLiteDatabase) -> SchemaProbeReport:
             sql = str(master_row["sql"] or "")
             tables.append(TableSchema(name, columns, primary_key, "WITHOUT ROWID" in sql.upper()))
             score, mapping = _map_message_columns(columns)
+            qqnt_score, qqnt_mapping = _map_qqnt_numeric_columns(name, columns)
+            if qqnt_score > score:
+                score, mapping = qqnt_score, qqnt_mapping
             if score >= 10:
                 candidates.append(MessageTableCandidate(name, score, mapping, _chat_kind(name, mapping)))
 

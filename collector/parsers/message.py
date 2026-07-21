@@ -4,7 +4,7 @@ import base64
 import copy
 import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from collector.media.resolver import MediaResolver
 from collector.media.staging import MediaStagingStore, StagingError
@@ -30,6 +30,10 @@ class MessageParserContext:
     qq_version: str | None = None
     schema_version: str | None = None
     max_forward_depth: int = 3
+    sender_nicknames: Mapping[str, str] | None = None
+    room_names: Mapping[str, str] | None = None
+    sender_avatars: Mapping[str, str] | None = None
+    room_avatars: Mapping[str, str] | None = None
 
 
 def _first(raw: dict[str, Any], *names: str) -> Any:
@@ -102,11 +106,14 @@ def parse_source_message(
 
     element_values = _elements(decoded.document)
     if element_values is None:
-        source_key_hash = hashlib.sha256(row.source_primary_key.encode("utf-8")).hexdigest()[:16]
-        segments.append(f"[QQNT:unparsed,source_table={row.source_table},source_key_hash={source_key_hash}]")
-        failures.append(
-            ParserFailure(decoded.error_code or "MESSAGE_PARSE_FAILED", "message payload is not a supported JSON/text envelope")
-        )
+        source_key_hash = hashlib.sha256(row.source_primary_key.encode('utf-8')).hexdigest()[:16]
+        content_type = _first(row.raw_columns, '40027', 'content_type', 'msg_type')
+        if row.content is None and content_type is not None:
+            segments.append(f'[QQNT:system,type={content_type}]')
+            failures.append(ParserFailure('EMPTY_MESSAGE_PAYLOAD', 'QQNT record has no content payload; preserved its message type'))
+        else:
+            segments.append(f'[QQNT:unparsed,source_table={row.source_table},source_key_hash={source_key_hash}]')
+            failures.append(ParserFailure(decoded.error_code or 'MESSAGE_PARSE_FAILED', 'message payload is not a supported JSON/text envelope'))
     else:
         for element_index, element in enumerate(element_values):
             element_type = str(element.get("type") or element.get("element_type") or "unknown").lower()
@@ -157,18 +164,34 @@ def parse_source_message(
     raw_columns = json_safe(row.raw_columns)
     raw_40800 = _blob_base64(_first(row.raw_columns, "raw_40800_protobuf", "40800", "msg_40800"))
     raw_40900 = _blob_base64(_first(row.raw_columns, "raw_40900_protobuf", "40900", "msg_40900"))
-    nickname = _first(row.raw_columns, "nickname", "sender_name", "send_nick_name")
+    nickname = _first(
+        row.raw_columns,
+        "nickname",
+        "sender_name",
+        "send_nick_name",
+        "40090",
+        "40093",
+    )
+    if not nickname and context.sender_nicknames:
+        nickname = context.sender_nicknames.get(str(row.sender_id))
+    sender_avatar = context.sender_avatars.get(str(row.sender_id)) if context.sender_avatars else None
+    room_avatar = context.room_avatars.get(str(row.conversation_id)) if context.room_avatars else None
+    sender_id = str(row.sender_id or "").strip()
+    if not sender_id:
+        sender_id = "unknown:" + hashlib.sha256(f"{row.source_table}:{row.source_primary_key}".encode("utf-8")).hexdigest()[:32]
+        failures.append(ParserFailure("MISSING_SENDER_ID", "QQNT record has no sender id; generated a stable placeholder"))
     item = {
         "message": {
             "robot_id": context.account_id,
             "platform": "qq",
             "room_id": row.conversation_id,
             "message_type": chat_type,
-            "sender_id": row.sender_id,
+            "sender_id": sender_id,
             "nickname": str(nickname) if nickname else None,
             "raw_message": raw_message,
             "local_message": raw_message,
             "timestamp": _timestamp(row.msg_time),
+            "source_sequence": max(0, int(row.msg_seq)),
             "message_id": message_id,
         },
         "source_record": {
@@ -183,6 +206,13 @@ def parse_source_message(
                 "source_identity": source_identity,
                 "qq_version": context.qq_version,
                 "parser_failures": [failure.error_code for failure in failures],
+                "room_name": (
+                    context.room_names.get(str(row.conversation_id))
+                    if context.room_names
+                    else None
+                ),
+                "sender_avatar_url": sender_avatar,
+                "room_avatar_url": room_avatar,
             },
         },
         "media": media_references,
@@ -197,6 +227,7 @@ def enqueue_parsed_message(
     queue: CollectorQueue,
     store: CollectorStateStore,
     staging: MediaStagingStore,
+    force_refresh: bool = False,
 ) -> str:
     item = copy.deepcopy(parsed.item)
     failures = list(parsed.failures)
@@ -232,7 +263,12 @@ def enqueue_parsed_message(
             failures.append(ParserFailure("MEDIA_STAGING_FULL" if "STAGING_FULL" in str(exc) else "MEDIA_UPLOAD_FAILED", str(exc)))
 
     dedupe_key = str(item["source_record"]["metadata"]["source_identity"])
-    message_queue_id = queue.enqueue_message(source_id=source_id, dedupe_key=dedupe_key, payload=item)
+    message_queue_id = queue.enqueue_message(
+        source_id=source_id,
+        dedupe_key=dedupe_key,
+        payload=item,
+        force_refresh=force_refresh,
+    )
     for upload, staged in staged_uploads:
         queue.enqueue_media(
             source_id=source_id,
@@ -245,6 +281,7 @@ def enqueue_parsed_message(
             file_size=staged.file_size,
             content_sha256=staged.content_sha256,
             file_name=upload.file_name,
+            force_refresh=force_refresh,
         )
     for artifact, staged in staged_artifacts:
         queue.enqueue_media(
@@ -264,10 +301,17 @@ def enqueue_parsed_message(
             },
         )
     source_key_hash = hashlib.sha256(str(item["source_record"]["source_key"]).encode("utf-8")).hexdigest()
+    source_table = str(item["source_record"]["source_table"])
+    if not any(failure.error_code in {"PROTOBUF_PARSE_FAILED", "MESSAGE_PARSE_FAILED"} for failure in failures):
+        store.resolve_parser_failures(
+            source_id=source_id,
+            source_table=source_table,
+            source_key_hash=source_key_hash,
+        )
     for failure in failures:
         store.record_parser_failure(
             source_id=source_id,
-            source_table=str(item["source_record"]["source_table"]),
+            source_table=source_table,
             source_key_hash=source_key_hash,
             error_code=failure.error_code,
             detail=failure.detail,

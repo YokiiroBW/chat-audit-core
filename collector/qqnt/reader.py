@@ -50,35 +50,52 @@ def _authorizer(action: int, _arg1: str | None, _arg2: str | None, _database: st
 
 
 class ReadOnlySQLiteDatabase:
-    def __init__(self, path: str | Path, *, immutable: bool = False, key: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        immutable: bool = False,
+        key: str | None = None,
+        cipher: bool = False,
+    ) -> None:
         self.path = Path(path).expanduser().resolve()
         self.immutable = immutable
         self.key = key
+        self.cipher = cipher
 
     def connect(self) -> sqlite3.Connection:
         if not self.path.is_file():
             raise ReadOnlyDatabaseError("DB_OPEN_FAILED", "database file does not exist")
-        query = "mode=ro"
-        if self.immutable:
-            query += "&immutable=1"
-        uri = f"file:{self.path.as_posix()}?{query}"
+        dbapi = sqlite3
+        if self.cipher:
+            from collector.qqnt.sqlcipher import configure_connection, load_sqlcipher
+
+            dbapi = load_sqlcipher()
         connection: sqlite3.Connection | None = None
         try:
-            connection = sqlite3.connect(uri, uri=True, timeout=10, isolation_level=None)
-            connection.row_factory = sqlite3.Row
+            if self.cipher:
+                connection = dbapi.connect(str(self.path), isolation_level=None)
+                connection.row_factory = dbapi.Row
+                configure_connection(connection, self.key or "")
+            else:
+                query = "mode=ro"
+                if self.immutable:
+                    query += "&immutable=1"
+                uri = f"file:{self.path.as_posix()}?{query}"
+                connection = sqlite3.connect(uri, uri=True, timeout=10, isolation_level=None)
+                connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only=ON")
-            connection.execute("PRAGMA trusted_schema=OFF")
+            with contextlib.suppress(Exception):
+                connection.execute("PRAGMA trusted_schema=OFF")
             connection.execute("PRAGMA busy_timeout=10000")
-            if self.key:
-                key_hex = self.key.encode("utf-8").hex()
-                connection.execute(f"PRAGMA key=\"x'{key_hex}'\"")
             connection.set_authorizer(_authorizer)
             connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
             return connection
-        except sqlite3.Error as exc:
+        except Exception as exc:
             if connection is not None:
                 connection.close()
-            raise ReadOnlyDatabaseError("DB_OPEN_FAILED", "database could not be opened read-only") from exc
+            error_code = "DB_KEY_INVALID" if self.cipher else "DB_OPEN_FAILED"
+            raise ReadOnlyDatabaseError(error_code, "database could not be opened read-only") from exc
 
     @contextlib.contextmanager
     def read_transaction(self) -> Iterator[sqlite3.Connection]:

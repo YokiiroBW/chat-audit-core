@@ -63,7 +63,7 @@ def test_alembic_upgrade_head_initializes_current_schema(tmp_path):
         "message_media_references",
         "alembic_version",
     } <= tables
-    assert version == "20260705_010"
+    assert version == "20260705_011"
 
 
 def test_alembic_upgrade_head_creates_performance_indexes(tmp_path):
@@ -131,4 +131,4 @@ def test_alembic_upgrade_from_009_creates_qqnt_import_tables(tmp_path):
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     assert {"import_sources", "import_batches", "import_batch_chunks", "message_source_records", "message_media_references"} <= tables
-    assert version == "20260705_010"
+    assert version == "20260705_011"

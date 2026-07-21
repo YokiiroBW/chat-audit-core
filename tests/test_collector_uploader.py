@@ -166,6 +166,59 @@ async def test_collector_two_phase_upload_and_batch_completion(tmp_path):
     assert store.status_snapshot()["last_run"]["status"] == "completed"
 
 
+async def test_terminal_batch_gets_replaced_before_message_upload(tmp_path):
+    config = _write_config(tmp_path)
+    store = CollectorStateStore(config.paths.state_db)
+    store.initialize()
+    queue = CollectorQueue(store)
+    create_calls = []
+    message_batch_ids = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/import/sources":
+            return httpx.Response(200, json={"id": "server-source"})
+        if request.url.path == "/api/import/batches":
+            body = json.loads(await request.aread())
+            create_calls.append(body["id"])
+            if len(create_calls) == 1:
+                return httpx.Response(200, json={"id": body["id"], "status": "completed"})
+            return httpx.Response(200, json={"id": body["id"], "status": "running"})
+        if request.url.path.endswith("/messages"):
+            message_batch_ids.append(request.url.path.split("/")[4])
+            return httpx.Response(
+                200,
+                json={
+                    "inserted": 1,
+                    "updated": 0,
+                    "unchanged": 0,
+                    "failed": 0,
+                    "replayed": False,
+                    "items": [{"index": 0, "message_id": "collector-message-id", "status": "inserted"}],
+                },
+            )
+        if request.url.path.endswith("/complete"):
+            return httpx.Response(200, json={"status": "completed"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url=config.server.base_url) as http_client:
+        async with CollectorApiClient(config, lambda: "operator-token", client=http_client) as api:
+            uploader = QueueUploader(config, store, queue, api)
+            uploader.bootstrap_local_source()
+            queue.enqueue_message(
+                source_id=uploader.local_source_id,
+                dedupe_key="terminal-batch-retry",
+                payload=_payload(),
+            )
+            result = await CollectorScheduler(config, store, uploader).run_once("incremental")
+
+    assert result.status == "completed"
+    assert len(create_calls) == 2
+    assert create_calls[0] != create_calls[1]
+    assert message_batch_ids == [create_calls[1]]
+    assert queue.counts()["messages"] == {"completed": 1}
+
+
 async def test_collector_simulated_message_reaches_real_import_api(db_session, tmp_path):
     config = _write_config(tmp_path)
     store = CollectorStateStore(config.paths.state_db)

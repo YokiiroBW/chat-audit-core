@@ -7,6 +7,7 @@ import pytest
 from collector.qqnt.discovery import candidate_data_roots, discover_database_sets, discover_qqnt_data
 from collector.app.main import main
 from collector.qqnt.key_provider import SQLiteKeyValidator
+from collector.qqnt.capabilities import detect_runtime_capabilities
 from collector.qqnt.reader import ReadOnlyDatabaseError, ReadOnlySQLiteDatabase
 from collector.qqnt.schema_probe import probe_schema
 from collector.qqnt.snapshot import DatabaseSnapshotManager
@@ -224,8 +225,8 @@ def test_database_key_validation_and_cursor_repository(tmp_path):
     qqnt_custom.write_bytes(b"SQLite header 3\x00" + b"\x00" * 16 + b"QQ_NT DB" + b"\x00" * 32)
     qqnt_result = SQLiteKeyValidator().validate(qqnt_custom, "unused")
     assert detect_database_format(qqnt_custom) == "qqnt_custom_vfs"
-    assert qqnt_result.status == "unsupported"
-    assert qqnt_result.error_code == "DB_VFS_UNSUPPORTED"
+    assert qqnt_result.status == "invalid"
+    assert qqnt_result.error_code == "DB_KEY_INVALID"
 
     store = CollectorStateStore(tmp_path / "state.sqlite3")
     store.initialize()
@@ -240,6 +241,17 @@ def test_database_key_validation_and_cursor_repository(tmp_path):
     cursors.save_table("group_msg_001", cursor)
     assert cursors.load_table("group_msg_001") == cursor
     assert IncrementalCursor(1783000000000).overlap_start(3600) == 1782996400000
+
+
+def test_runtime_capabilities_do_not_mistake_stdlib_sqlite_for_sqlcipher():
+    capabilities = detect_runtime_capabilities()
+
+    assert capabilities.sqlite_version
+    assert capabilities.nt_vfs_available is False
+    if capabilities.sqlcipher_available:
+        assert capabilities.sqlcipher_provider in {"pysqlcipher3", "sqlcipher3"}
+    else:
+        assert capabilities.sqlcipher_provider is None
 
 
 def test_collector_cli_discover_and_probe_plain_sqlite(tmp_path, capsys):

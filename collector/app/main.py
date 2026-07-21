@@ -9,7 +9,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from collector.app.config import CollectorConfig, CollectorConfigError, load_config
 from collector.app.credential_store import CredentialStore, CredentialStoreError
@@ -19,6 +19,7 @@ from collector.qqnt.discovery import discover_qqnt_data
 from collector.qqnt.key_provider import SQLiteKeyValidator
 from collector.qqnt.reader import QQNTReader, ReadOnlyDatabaseError, ReadOnlySQLiteDatabase
 from collector.qqnt.snapshot import DatabaseSnapshotManager, SnapshotError, detect_database_format
+from collector.qqnt.sqlcipher import materialize_clear_database
 from collector.qqnt.versions import select_adapter
 from collector.qqnt.versions.base import SchemaAdapterError
 from collector.sync.queue import CollectorQueue
@@ -66,8 +67,9 @@ def _build_uploader(
     store: CollectorStateStore,
     queue: CollectorQueue,
     api: CollectorApiClient,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> QueueUploader:
-    return QueueUploader(config, store, queue, api)
+    return QueueUploader(config, store, queue, api, progress_callback=progress_callback)
 
 
 def _build_scanner(
@@ -75,6 +77,7 @@ def _build_scanner(
     store: CollectorStateStore,
     queue: CollectorQueue,
     credentials: CredentialStore,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> QQNTScanner:
     return QQNTScanner(
         config,
@@ -82,6 +85,7 @@ def _build_scanner(
         queue,
         source_id=_upsert_local_source(store, config),
         credential_getter=credentials.get,
+        progress_callback=progress_callback,
     )
 
 
@@ -129,11 +133,21 @@ def _simulated_message(config: CollectorConfig, message_id: str) -> dict[str, An
     }
 
 
-async def _run_once(config_path: str | Path, mode: str, *, scan: bool = True) -> dict[str, Any]:
+async def _run_once(
+    config_path: str | Path,
+    mode: str,
+    *,
+    scan: bool = True,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> dict[str, Any]:
     config, store, queue, credentials = _load_runtime(config_path)
     async with CollectorApiClient(config, lambda: credentials.get("api_token")) as api:
-        uploader = _build_uploader(config, store, queue, api)
-        scanner = _build_scanner(config, store, queue, credentials) if scan else None
+        uploader = _build_uploader(config, store, queue, api, progress_callback=progress_callback)
+        scanner = (
+            _build_scanner(config, store, queue, credentials, progress_callback=progress_callback)
+            if scan
+            else None
+        )
         scheduler = CollectorScheduler(config, store, uploader, scanner)
         result = await scheduler.run_once(mode)
     return {
@@ -377,15 +391,24 @@ def main(argv: list[str] | None = None) -> int:
             snapshot = None
             manager = None
             target_path = database_path
+            cipher = False
             try:
-                if args.snapshot or config.qq.read_mode == "snapshot_copy":
+                is_qqnt_custom = detect_database_format(database_path) == "qqnt_custom_vfs"
+                if args.snapshot or config.qq.read_mode == "snapshot_copy" or is_qqnt_custom:
                     manager = DatabaseSnapshotManager(config.paths.root / "snapshots")
                     snapshot = manager.create(database_path)
                     target_path = snapshot.database_path
+                if is_qqnt_custom:
+                    target_path = materialize_clear_database(
+                        target_path,
+                        snapshot.snapshot_dir / f"{target_path.stem}.clear.db",
+                    )
+                    cipher = True
                 database = ReadOnlySQLiteDatabase(
                     target_path,
                     immutable=snapshot is not None,
                     key=key if key_result.status == "valid" else None,
+                    cipher=cipher,
                 )
                 report = QQNTReader(database).probe()
                 adapter = select_adapter(report)

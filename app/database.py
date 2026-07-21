@@ -40,6 +40,15 @@ async def _add_message_external_message_id(conn) -> None:
         await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_external_message_id ON messages (external_message_id)")
 
 
+async def _add_message_source_sequence(conn) -> None:
+    message_columns = await _table_columns(conn, "messages")
+    if "source_sequence" not in message_columns:
+        await conn.exec_driver_sql("ALTER TABLE messages ADD COLUMN source_sequence INTEGER")
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS idx_room_timestamp_sequence ON messages (room_id, timestamp, source_sequence)"
+    )
+
+
 async def _add_performance_indexes(conn) -> None:
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_room_timestamp ON messages (room_id, timestamp)")
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_platform_room_timestamp ON messages (platform, room_id, timestamp)")
@@ -107,6 +116,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_008_capture_target_policies", "Create capture_target_policies table", _noop_migration),
     LightweightMigration("20260705_009_performance_indexes", "Create performance indexes", _add_performance_indexes, _rollback_performance_indexes),
     LightweightMigration("20260705_010_qqnt_import_models", "Create QQNT import and media reference tables", _create_qqnt_import_tables, _rollback_qqnt_import_tables),
+    LightweightMigration("20260705_011_message_source_sequence", "Add source message sequence ordering", _add_message_source_sequence, None),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}

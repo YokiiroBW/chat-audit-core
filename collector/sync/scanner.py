@@ -13,7 +13,9 @@ from collector.parsers.message import MessageParserContext, enqueue_parsed_messa
 from collector.qqnt.discovery import discover_qqnt_data
 from collector.qqnt.key_provider import SQLiteKeyValidator
 from collector.qqnt.reader import QQNTReader, ReadOnlySQLiteDatabase
-from collector.qqnt.snapshot import DatabaseSnapshot, DatabaseSnapshotManager
+from collector.qqnt.profiles import load_profile_index
+from collector.qqnt.snapshot import DatabaseSnapshot, DatabaseSnapshotManager, detect_database_format
+from collector.qqnt.sqlcipher import materialize_clear_database
 from collector.qqnt.versions import select_adapter
 from collector.sync.cursor import CursorRepository, IncrementalCursor
 from collector.sync.queue import CollectorQueue
@@ -93,12 +95,17 @@ class QQNTScanner:
         *,
         source_id: str,
         credential_getter: Callable[[str], str | None] | None = None,
+        progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self.config = config
         self.store = store
         self.queue = queue
         self.source_id = source_id
         self.credential_getter = credential_getter or (lambda _name: None)
+        self.progress_callback = progress_callback or (lambda _event, _detail: None)
+
+    def _emit_progress(self, event: str, detail: str) -> None:
+        self.progress_callback(event, detail)
 
     def _resolver(self, database_paths: tuple[Path, ...], result: ScanResult) -> MediaResolver:
         roots = _media_roots(self.config, database_paths)
@@ -133,6 +140,7 @@ class QQNTScanner:
 
         paths = _database_paths(self.config, database_paths)
         result = ScanResult(mode=mode, discovered_databases=len(paths))
+        self._emit_progress("scan.started", f"{mode}|{len(paths)}")
         resolver = self._resolver(paths, result)
         staging = MediaStagingStore(
             self.config.paths.staging_dir,
@@ -140,6 +148,11 @@ class QQNTScanner:
         )
         cursors = CursorRepository(self.store, self.source_id)
         snapshot_manager = DatabaseSnapshotManager(self.config.paths.root / "snapshots")
+        profile_index = load_profile_index(
+            paths,
+            key=self.credential_getter("qqnt_database_key"),
+            snapshots=snapshot_manager,
+        )
         page_size = min(
             1000,
             self.config.collector.initial_import_batch_size
@@ -148,6 +161,7 @@ class QQNTScanner:
         )
 
         for source_path in paths:
+            self._emit_progress("scan.database", str(source_path))
             if max_messages is not None and result.scanned_messages >= max_messages:
                 result.has_more = True
                 break
@@ -158,17 +172,34 @@ class QQNTScanner:
 
             snapshot: DatabaseSnapshot | None = None
             target_path = source_path
+            cipher = False
             try:
-                if self.config.qq.read_mode == "snapshot_copy":
+                is_qqnt_custom = detect_database_format(source_path) == "qqnt_custom_vfs"
+                if self.config.qq.read_mode == "snapshot_copy" or is_qqnt_custom:
                     snapshot = snapshot_manager.create(source_path)
                     target_path = snapshot.database_path
-                database = ReadOnlySQLiteDatabase(target_path, immutable=snapshot is not None, key=key)
+                if is_qqnt_custom:
+                    target_path = materialize_clear_database(
+                        target_path,
+                        snapshot.snapshot_dir / f"{target_path.stem}.clear.db",
+                    )
+                    cipher = True
+                database = ReadOnlySQLiteDatabase(
+                    target_path,
+                    immutable=snapshot is not None,
+                    key=key,
+                    cipher=cipher,
+                )
                 reader = QQNTReader(database)
                 report = reader.probe()
                 adapter = select_adapter(report)
                 context = MessageParserContext(
                     account_id=self.config.collector.account_id,
                     schema_version=report.fingerprint,
+                    sender_nicknames=profile_index.sender_nicknames,
+                    room_names=profile_index.room_names,
+                    sender_avatars=profile_index.sender_avatars,
+                    room_avatars=profile_index.room_avatars,
                 )
                 result.scanned_databases += 1
 
@@ -179,7 +210,7 @@ class QQNTScanner:
                     result.scanned_tables += 1
                     cursor_name = _database_cursor_name(source_path, candidate.table)
                     saved_cursor = cursors.load_table(cursor_name)
-                    page_cursor = saved_cursor
+                    page_cursor = IncrementalCursor() if mode == "reconcile" else saved_cursor
                     first_page = True
                     while True:
                         remaining = (
@@ -208,9 +239,15 @@ class QQNTScanner:
                                 queue=self.queue,
                                 store=self.store,
                                 staging=staging,
+                                force_refresh=mode == "reconcile",
                             )
                             result.scanned_messages += 1
                             result.enqueued_messages += 1
+                            if result.scanned_messages % 100 == 0:
+                                self._emit_progress(
+                                    "scan.progress",
+                                    f"{result.scanned_messages}|{result.enqueued_messages}|{result.parser_failures}",
+                                )
                             result.parser_failures += len(parsed.failures)
                         page_cursor = page.next_cursor
                         if adapter.cursor_after(database, candidate, page_cursor, saved_cursor):
@@ -225,6 +262,10 @@ class QQNTScanner:
             finally:
                 if snapshot is not None:
                     snapshot_manager.cleanup(snapshot)
+        self._emit_progress(
+            "scan.completed",
+            f"{result.scanned_messages}|{result.enqueued_messages}|{result.parser_failures}|{len(result.issues)}",
+        )
         return result
 
 

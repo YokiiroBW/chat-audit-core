@@ -214,6 +214,32 @@ async def test_import_service_replays_chunks_and_upgrades_media_without_duplicat
     await db_session.refresh(batch_model)
     assert batch_model.uploaded_media == 1
 
+    replacement = MediaAsset(
+        file_hash="replacement-video-hash",
+        file_type="video",
+        file_size=2048,
+        local_path="/static/storage/replacement-video.mp4",
+    )
+    db_session.add(replacement)
+    await db_session.commit()
+    replacement_payload = ImportBatchMessagesRequest(
+        messages=[
+            _message_item(
+                message_id=message_id,
+                source_key="100:200:300",
+                source_state="downloaded",
+                archive_state="complete",
+                asset_file_hash="replacement-video-hash",
+                local_message="[CQ:video,file=/static/storage/replacement-video.mp4]",
+                raw_marker="v4",
+            )
+        ]
+    )
+    rebound = await ImportService.import_batch_messages(db_session, batch_id=batch.id, payload=replacement_payload)
+    assert rebound.updated == 1
+    await db_session.refresh(reference)
+    assert reference.asset_file_hash == "replacement-video-hash"
+
 
 async def test_qqnt_import_deduplicates_an_existing_napcat_message_by_platform_message_id(db_session):
     raw_platform_message_id = "762197037"
@@ -1111,3 +1137,35 @@ async def test_failed_backup_import_rolls_back_database_changes_before_audit(db_
     restored_source = await db_session.get(type(source), source_id)
     assert restored_source.device_name == "Original Device"
     assert await db_session.get(Message, "other-message-hash") is None
+
+
+@pytest.mark.asyncio
+async def test_same_qq_message_from_two_devices_is_deduplicated(db_session):
+    source_a, _ = await ImportService.upsert_source(
+        db_session,
+        ImportSourceCreateRequest(account_id="123456789", device_id="home-pc", device_name="Home"),
+    )
+    source_b, _ = await ImportService.upsert_source(
+        db_session,
+        ImportSourceCreateRequest(account_id="123456789", device_id="office-pc", device_name="Office"),
+    )
+    batch_a, _ = await ImportService.create_batch(
+        db_session, ImportBatchCreateRequest(id="two-device-a", source_id=source_a.id, mode="incremental")
+    )
+    batch_b, _ = await ImportService.create_batch(
+        db_session, ImportBatchCreateRequest(id="two-device-b", source_id=source_b.id, mode="incremental")
+    )
+    item_a = _message_item(message_id="stable-qq-message", source_key="home-row", source_state="not_downloaded", archive_state="metadata_only")
+    item_b = _message_item(message_id="stable-qq-message", source_key="office-row", source_state="not_downloaded", archive_state="metadata_only")
+
+    result_a = await ImportService.import_batch_messages(
+        db_session, batch_id=batch_a.id, payload=ImportBatchMessagesRequest(messages=[item_a])
+    )
+    result_b = await ImportService.import_batch_messages(
+        db_session, batch_id=batch_b.id, payload=ImportBatchMessagesRequest(messages=[item_b])
+    )
+
+    assert result_a.inserted == 1
+    assert result_b.updated == 1
+    assert await db_session.scalar(select(func.count(Message.msg_hash))) == 1
+    assert await db_session.scalar(select(func.count(MessageSourceRecord.id))) == 2

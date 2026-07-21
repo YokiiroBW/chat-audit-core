@@ -95,6 +95,7 @@ class Message(Base):
     raw_message = Column(Text, nullable=False)
     local_message = Column(Text, nullable=False)
     timestamp = Column(Integer, nullable=False, index=True)
+    source_sequence = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
     __table_args__ = (

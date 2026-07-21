@@ -65,6 +65,8 @@ class CollectorSettings:
     device_id: str
     device_name: str
     sync_interval_minutes: int = 10
+    sync_interval_seconds: int = 600
+    autostart: bool = False
     reconcile_interval_hours: int = 24
     staging_max_gb: int = 20
     initial_import_batch_size: int = 200
@@ -74,6 +76,7 @@ class CollectorSettings:
 @dataclass(frozen=True)
 class QQSettings:
     data_root: Path | None = None
+    install_dir: Path | None = None
     read_mode: str = "direct_readonly"
     enable_vss_fallback: bool = True
 
@@ -179,6 +182,8 @@ def load_config(path: str | Path) -> CollectorConfig:
 
     data_root_value = _optional_string(qq_table, "data_root")
     data_root = Path(os.path.expandvars(data_root_value)).expanduser() if data_root_value else None
+    install_dir_value = _optional_string(qq_table, "install_dir")
+    install_dir = Path(os.path.expandvars(install_dir_value)).expanduser() if install_dir_value else None
     read_mode = _optional_string(qq_table, "read_mode") or "direct_readonly"
     if read_mode not in {"direct_readonly", "snapshot_copy"}:
         raise CollectorConfigError("[qq].read_mode must be direct_readonly or snapshot_copy")
@@ -187,12 +192,16 @@ def load_config(path: str | Path) -> CollectorConfig:
     if not base_url.startswith(("http://", "https://")):
         raise CollectorConfigError("[server].base_url must use http:// or https://")
 
+    legacy_interval_minutes = _positive_int(collector_table, "sync_interval_minutes", 10)
+    interval_seconds = _positive_int(collector_table, "sync_interval_seconds", legacy_interval_minutes * 60)
     return CollectorConfig(
         collector=CollectorSettings(
             account_id=account_id,
             device_id=device_id,
             device_name=device_name,
-            sync_interval_minutes=_positive_int(collector_table, "sync_interval_minutes", 10),
+            sync_interval_minutes=legacy_interval_minutes,
+            sync_interval_seconds=interval_seconds,
+            autostart=_bool_value(collector_table, "autostart", False),
             reconcile_interval_hours=_positive_int(collector_table, "reconcile_interval_hours", 24),
             staging_max_gb=_positive_int(collector_table, "staging_max_gb", 20),
             initial_import_batch_size=_positive_int(collector_table, "initial_import_batch_size", 200),
@@ -200,6 +209,7 @@ def load_config(path: str | Path) -> CollectorConfig:
         ),
         qq=QQSettings(
             data_root=data_root,
+            install_dir=install_dir,
             read_mode=read_mode,
             enable_vss_fallback=_bool_value(qq_table, "enable_vss_fallback", True),
         ),

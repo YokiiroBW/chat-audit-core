@@ -56,6 +56,8 @@ class MediaFileIndex:
             item for values in self._by_name.values() for item in values
         ]
         normalized_md5 = (source_md5 or "").lower()
+        if len(candidates) > 1 and declared_size is None and not normalized_md5:
+            return None
         for candidate in candidates:
             tolerance = max(64 * 1024, int((declared_size or candidate.size) * 0.05))
             if declared_size is not None and abs(candidate.size - declared_size) > tolerance:

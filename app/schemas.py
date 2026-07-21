@@ -304,6 +304,7 @@ class RoomResponse(BaseModel):
     message_type: str | None = None
     display_name: str | None = None
     avatar_path: str | None = None
+    qq_number: str | None = None
 
 
 class MessageResponse(BaseModel):
@@ -318,10 +319,12 @@ class MessageResponse(BaseModel):
     sender_id: str
     sender_display_name: str | None = None
     sender_avatar_path: str | None = None
+    is_outgoing: bool | None = None
     nickname: str | None = None
     raw_message: str
     local_message: str
     timestamp: int
+    source_sequence: int | None = None
     reply_to_message_id: str | None = None
     reply_preview_text: str | None = None
     media: list["MessageMediaReferenceResponse"] = Field(default_factory=list)
@@ -361,6 +364,12 @@ class MessageIngestRequest(BaseModel):
         ge=SQL_INTEGER_MIN,
         le=SQL_INTEGER_MAX,
         description="Message timestamp in Unix seconds.",
+    )
+    source_sequence: int | None = Field(
+        default=None,
+        ge=0,
+        le=SQL_INTEGER_MAX,
+        description="Source platform sequence used to order messages sharing the same timestamp.",
     )
     message_id: str | None = Field(default=None, max_length=64, description="Source-platform message id used for reply jumps and deduplication.")
 
