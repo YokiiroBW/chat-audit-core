@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -398,6 +398,7 @@ class ImportService:
             raise ImportConflictError("Collector batch message_id is required")
         canonical_sender_id = str(message_data.canonical_sender_id or message_data.sender_id)
         canonical_room_id = str(message_data.canonical_room_id or message_data.room_id)
+        incoming_local = message_data.local_message or message_data.raw_message
         msg_hash = MessageService.message_hash(
             platform=message_data.platform,
             room_id=canonical_room_id,
@@ -450,10 +451,28 @@ class ImportService:
             if message is not None:
                 msg_hash = message.msg_hash
 
+        if message is None:
+            semantic_result = await db.execute(
+                select(Message)
+                .where(
+                    Message.platform == message_data.platform,
+                    Message.room_id == canonical_room_id,
+                    Message.message_type == message_data.message_type,
+                    Message.sender_id == canonical_sender_id,
+                    Message.timestamp == message_data.timestamp,
+                    Message.local_message == incoming_local,
+                )
+                .order_by(Message.created_at.asc(), Message.msg_hash.asc())
+                .limit(1)
+                .with_for_update()
+            )
+            message = semantic_result.scalars().first()
+            if message is not None:
+                msg_hash = message.msg_hash
+
         created = message is None
         changed = created
         qqnt_authoritative = source.source_type == "qqnt_local_db"
-        incoming_local = message_data.local_message or message_data.raw_message
         if message is None:
             message = Message(
                 msg_hash=msg_hash,

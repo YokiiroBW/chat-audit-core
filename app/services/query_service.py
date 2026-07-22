@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import json
 import base64
 import json
@@ -120,7 +120,7 @@ def _qqnt_historical_reply_parts(raw_base64: str | None) -> list[dict[str, str]]
                     if preview:
                         break
             if not preview and nested_fields.get(45402):
-                preview = "[图片]"
+                preview = "[鍥剧墖]"
             if preview:
                 break
         results.append({"id": str(reply_id), "preview": preview})
@@ -146,14 +146,14 @@ def _plain_message_preview(value: str | None) -> str:
     text = value or ""
     text = re.sub(r"\[CQ:reply,[^\]]+\]", "", text)
     text = re.sub(r"\[CQ:at,qq=([^\],]+)[^\]]*\]", r"@\1", text)
-    text = re.sub(r"\[CQ:image,[^\]]+\]", "[图片]", text)
-    text = re.sub(r"\[CQ:record,[^\]]+\]", "[语音]", text)
-    text = re.sub(r"\[CQ:video,[^\]]+\]", "[视频]", text)
-    text = re.sub(r"\[CQ:forward,[^\]]+\]", "[合并转发]", text)
-    text = re.sub(r"\[CQ:json,[^\]]+\]", "[卡片]", text)
-    text = re.sub(r"/static/storage/[a-f0-9]{32}\.[a-z0-9]+", "[媒体]", text, flags=re.I)
+    text = re.sub(r"\[CQ:image,[^\]]+\]", "[鍥剧墖]", text)
+    text = re.sub(r"\[CQ:record,[^\]]+\]", "[璇煶]", text)
+    text = re.sub(r"\[CQ:video,[^\]]+\]", "[瑙嗛]", text)
+    text = re.sub(r"\[CQ:forward,[^\]]+\]", "[鍚堝苟杞彂]", text)
+    text = re.sub(r"\[CQ:json,[^\]]+\]", "[鍗＄墖]", text)
+    text = re.sub(r"/static/storage/[a-f0-9]{32}\.[a-z0-9]+", "[濯掍綋]", text, flags=re.I)
     compact = re.sub(r"\s+", " ", text).strip()
-    return compact or "[消息]"
+    return compact or "[娑堟伅]"
 
 
 def _prefer_avatar_path(*paths: str | None) -> str | None:
@@ -211,12 +211,21 @@ def _qq_number_from_raw(
     raw_columns_json: str | None,
     robot_id: str,
     *,
+    message_type: str | None = None,
     exclude_robot: bool = True,
 ) -> str | None:
     try:
         raw = json.loads(raw_columns_json or "{}")
     except (TypeError, json.JSONDecodeError):
         return None
+    if message_type == "private":
+        sender_identity = str(raw.get("40020") or "").strip()
+        conversation_identity = str(raw.get("40021") or "").strip()
+        if sender_identity and conversation_identity and sender_identity != conversation_identity:
+            return str(robot_id) if not exclude_robot else None
+        private_peer = str(raw.get("40030") or "").strip()
+        if private_peer.isdigit() and 5 <= len(private_peer) <= 12:
+            return private_peer
     for key in ("qq", "uin", "user_id", "40033", "40030"):
         value = str(raw.get(key) or "").strip()
         if (
@@ -286,7 +295,7 @@ class QueryService:
             for room_id, message_type, raw_columns_json in source_result.all():
                 if message_type != "private" or len(qq_candidates[room_id]) >= 50:
                     continue
-                qq_number = _qq_number_from_raw(raw_columns_json, robot_id)
+                qq_number = _qq_number_from_raw(raw_columns_json, robot_id, message_type=message_type)
                 if qq_number:
                     qq_candidates[room_id].append(qq_number)
 
@@ -411,6 +420,7 @@ class QueryService:
             message.sender_avatar_path = sender_avatar_path
             messages.append(message)
         messages = list(reversed(messages))
+        message_types = {message.msg_hash: message.message_type for message in messages}
         source_result = await db.execute(
             select(MessageSourceRecord.msg_hash, MessageSourceRecord.raw_columns_json)
             .where(MessageSourceRecord.msg_hash.in_([message.msg_hash for message in messages]))
@@ -422,9 +432,21 @@ class QueryService:
                 raw_columns = json.loads(raw_columns_json or "{}")
             except (TypeError, json.JSONDecodeError):
                 raw_columns = {}
-            if "40033" in raw_columns:
+            message_type = message_types.get(msg_hash)
+            if message_type == "private":
+                sender_identity = str(raw_columns.get("40020") or "").strip()
+                conversation_identity = str(raw_columns.get("40021") or "").strip()
+                if sender_identity and conversation_identity:
+                    outgoing_by_hash[msg_hash] = sender_identity != conversation_identity
+            elif "40033" in raw_columns:
                 outgoing_by_hash[msg_hash] = outgoing_by_hash.get(msg_hash, False) or str(raw_columns.get("40033")) == str(robot_id)
-            profile_id = _qq_number_from_raw(raw_columns_json, robot_id, exclude_robot=False)
+
+            profile_id = _qq_number_from_raw(
+                raw_columns_json,
+                robot_id,
+                message_type=message_types.get(msg_hash),
+                exclude_robot=False,
+            )
             if profile_id:
                 profile_id_by_hash[msg_hash] = profile_id
 

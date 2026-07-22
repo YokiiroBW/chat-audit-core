@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import copy
@@ -97,9 +97,7 @@ def _numeric_identity(raw: dict[str, Any], *names: str) -> str | None:
 
 
 def _qqnt_identity(row: SourceMessageRow, context: MessageParserContext) -> tuple[str | None, str | None, bool | None]:
-    canonical_sender = _numeric_identity(
-        row.raw_columns, "canonical_sender_qq", "sender_qq", "sender_uin", "sender_qq_number", "40033",
-    )
+    chat_type = _chat_type(row)
     canonical_room = _numeric_identity(
         row.raw_columns, "canonical_room_qq", "room_qq", "group_id", "peer_uin", "conversation_qq", "40030",
     )
@@ -111,9 +109,24 @@ def _qqnt_identity(row: SourceMessageRow, context: MessageParserContext) -> tupl
         is_outgoing = outgoing_value
     elif outgoing_value is not None:
         is_outgoing = str(outgoing_value).strip().lower() in {"1", "true", "yes"}
-    sender_qq = canonical_sender or _numeric_identity(row.raw_columns, "qq", "uin")
-    if is_outgoing is None and sender_qq is not None:
-        is_outgoing = sender_qq == str(context.account_id)
+    sender_identity = str(_first(row.raw_columns, "40020") or "").strip()
+    conversation_identity = str(_first(row.raw_columns, "40021") or "").strip()
+    if is_outgoing is None and sender_identity and conversation_identity:
+        is_outgoing = sender_identity != conversation_identity
+    if chat_type == "private":
+        if is_outgoing is True:
+            canonical_sender = str(context.account_id)
+        else:
+            canonical_sender = canonical_room or _numeric_identity(
+                row.raw_columns, "canonical_sender_qq", "sender_qq", "sender_uin", "sender_qq_number", "qq", "uin",
+            )
+    else:
+        canonical_sender = _numeric_identity(
+            row.raw_columns, "canonical_sender_qq", "sender_qq", "sender_uin", "sender_qq_number", "40033",
+        )
+        sender_qq = canonical_sender or _numeric_identity(row.raw_columns, "qq", "uin")
+        if is_outgoing is None and sender_qq is not None:
+            is_outgoing = sender_qq == str(context.account_id)
     return canonical_sender, canonical_room, is_outgoing
 
 def _canonical_segment(element: dict[str, Any]) -> dict[str, Any]:
