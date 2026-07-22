@@ -89,6 +89,33 @@ def _elements(document: Any) -> list[dict[str, Any]] | None:
     return [value for value in values if isinstance(value, dict)]
 
 
+
+def _numeric_identity(raw: dict[str, Any], *names: str) -> str | None:
+    value = _first(raw, *names)
+    normalized = str(value or "").strip()
+    return normalized if normalized.isdigit() and 5 <= len(normalized) <= 12 else None
+
+
+def _qqnt_identity(row: SourceMessageRow, context: MessageParserContext) -> tuple[str | None, str | None, bool | None]:
+    canonical_sender = _numeric_identity(
+        row.raw_columns, "canonical_sender_qq", "sender_qq", "sender_uin", "sender_qq_number", "40033",
+    )
+    canonical_room = _numeric_identity(
+        row.raw_columns, "canonical_room_qq", "room_qq", "group_id", "peer_uin", "conversation_qq", "40030",
+    )
+    if canonical_room is None and str(row.conversation_id).isdigit() and 5 <= len(str(row.conversation_id)) <= 12:
+        canonical_room = str(row.conversation_id)
+    is_outgoing: bool | None = None
+    outgoing_value = _first(row.raw_columns, "is_outgoing", "outgoing")
+    if isinstance(outgoing_value, bool):
+        is_outgoing = outgoing_value
+    elif outgoing_value is not None:
+        is_outgoing = str(outgoing_value).strip().lower() in {"1", "true", "yes"}
+    sender_qq = canonical_sender or _numeric_identity(row.raw_columns, "qq", "uin")
+    if is_outgoing is None and sender_qq is not None:
+        is_outgoing = sender_qq == str(context.account_id)
+    return canonical_sender, canonical_room, is_outgoing
+
 def parse_source_message(
     row: SourceMessageRow,
     context: MessageParserContext,
@@ -177,6 +204,7 @@ def parse_source_message(
     sender_avatar = context.sender_avatars.get(str(row.sender_id)) if context.sender_avatars else None
     room_avatar = context.room_avatars.get(str(row.conversation_id)) if context.room_avatars else None
     sender_id = str(row.sender_id or "").strip()
+    canonical_sender_id, canonical_room_id, is_outgoing = _qqnt_identity(row, context)
     if not sender_id:
         sender_id = "unknown:" + hashlib.sha256(f"{row.source_table}:{row.source_primary_key}".encode("utf-8")).hexdigest()[:32]
         failures.append(ParserFailure("MISSING_SENDER_ID", "QQNT record has no sender id; generated a stable placeholder"))
@@ -187,6 +215,11 @@ def parse_source_message(
             "room_id": row.conversation_id,
             "message_type": chat_type,
             "sender_id": sender_id,
+            "canonical_sender_id": canonical_sender_id,
+            "canonical_room_id": canonical_room_id,
+            "is_outgoing": is_outgoing,
+            "source_event_type": "qqnt_local_db",
+            "message_segments": element_values or [],
             "nickname": str(nickname) if nickname else None,
             "raw_message": raw_message,
             "local_message": raw_message,
@@ -213,6 +246,12 @@ def parse_source_message(
                 ),
                 "sender_avatar_url": sender_avatar,
                 "room_avatar_url": room_avatar,
+                "identity_confidence": "high" if canonical_sender_id or canonical_room_id else "unresolved",
+                "identity_fields": {
+                    key: raw_columns.get(key)
+                    for key in ("40020", "40021", "40030", "40033", "sender_qq", "room_qq")
+                    if key in raw_columns
+                },
             },
         },
         "media": media_references,

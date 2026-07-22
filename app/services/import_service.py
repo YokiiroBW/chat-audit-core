@@ -18,6 +18,8 @@ from app.import_contract import (
 )
 from app.models import (
     BotProfile,
+    IdentityAlias,
+    ProfileChangeRecord,
     ImportBatch,
     ImportBatchChunk,
     ImportSource,
@@ -394,10 +396,12 @@ class ImportService:
         event_identity = message_data.message_id
         if not event_identity:
             raise ImportConflictError("Collector batch message_id is required")
+        canonical_sender_id = str(message_data.canonical_sender_id or message_data.sender_id)
+        canonical_room_id = str(message_data.canonical_room_id or message_data.room_id)
         msg_hash = MessageService.message_hash(
             platform=message_data.platform,
-            room_id=message_data.room_id,
-            sender_id=message_data.sender_id,
+            room_id=canonical_room_id,
+            sender_id=canonical_sender_id,
             event_identity=str(event_identity),
         )
 
@@ -407,8 +411,8 @@ class ImportService:
             existing_result = await db.execute(
                 select(Message).where(
                     Message.platform == message_data.platform,
-                    Message.room_id == message_data.room_id,
-                    Message.sender_id == message_data.sender_id,
+                    Message.room_id == canonical_room_id,
+                    Message.sender_id == canonical_sender_id,
                     Message.external_message_id == message_data.message_id,
                 ).with_for_update()
             )
@@ -422,8 +426,8 @@ class ImportService:
                 .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
                 .where(
                     Message.platform == message_data.platform,
-                    Message.room_id == message_data.room_id,
-                    Message.sender_id == message_data.sender_id,
+                    Message.room_id == canonical_room_id,
+                    Message.sender_id == canonical_sender_id,
                     MessageSourceRecord.source_external_message_id == message_data.message_id,
                 )
                 .with_for_update()
@@ -437,8 +441,8 @@ class ImportService:
             platform_result = await db.execute(
                 select(Message).where(
                     Message.platform == message_data.platform,
-                    Message.room_id == message_data.room_id,
-                    Message.sender_id == message_data.sender_id,
+                    Message.room_id == canonical_room_id,
+                    Message.sender_id == canonical_sender_id,
                     Message.external_message_id == platform_message_id,
                 ).with_for_update()
             )
@@ -454,19 +458,23 @@ class ImportService:
             message = Message(
                 msg_hash=msg_hash,
                 platform=message_data.platform,
-                room_id=message_data.room_id,
+                room_id=canonical_room_id,
                 message_type=message_data.message_type,
                 external_message_id=message_data.message_id,
-                sender_id=message_data.sender_id,
+                sender_id=canonical_sender_id,
                 nickname=message_data.nickname,
                 raw_message=message_data.raw_message,
                 local_message=incoming_local,
                 timestamp=message_data.timestamp,
                 source_sequence=message_data.source_sequence,
+                is_outgoing=message_data.is_outgoing,
             )
             db.add(message)
             await db.flush()
         else:
+            if message_data.is_outgoing is not None:
+                message.is_outgoing = message_data.is_outgoing
+                changed = True
             if not message.external_message_id and message_data.message_id:
                 message.external_message_id = message_data.message_id
                 changed = True
@@ -491,6 +499,18 @@ class ImportService:
             changed = True
 
         metadata = item.source_record.metadata or {}
+        await ImportService._upsert_identity_alias(
+            db, platform=message_data.platform, identity_type="user", canonical_id=canonical_sender_id,
+            alias_id=message_data.sender_id, alias_type="source_sender_id", source_id=source.id,
+        )
+        await ImportService._upsert_identity_alias(
+            db, platform=message_data.platform, identity_type="conversation", canonical_id=canonical_room_id,
+            alias_id=message_data.room_id, alias_type="source_room_id", source_id=source.id,
+        )
+        await MessageService._upsert_message_parts(
+            db, msg_hash=msg_hash, segments=message_data.message_segments,
+            source_format=message_data.source_event_type or source.source_type,
+        )
         room_name = metadata.get("room_name")
         room_avatar_url = metadata.get("room_avatar_url")
         sender_avatar_url = metadata.get("sender_avatar_url")
@@ -498,14 +518,16 @@ class ImportService:
             (isinstance(room_name, str) and room_name.strip())
             or (isinstance(room_avatar_url, str) and room_avatar_url.strip())
         ):
-            room_profile = await db.get(RoomProfile, message_data.room_id)
+            room_profile = await db.get(RoomProfile, canonical_room_id)
             if room_profile is None:
                 db.add(
                     RoomProfile(
-                        room_id=message_data.room_id,
+                        room_id=canonical_room_id,
                         platform=message_data.platform,
                         display_name=room_name.strip() if isinstance(room_name, str) and room_name.strip() else None,
-                        avatar_path=room_avatar_url.strip() if isinstance(room_avatar_url, str) and room_avatar_url.strip() else None,
+                        avatar_path=(room_avatar_url.strip() if isinstance(room_avatar_url, str) and room_avatar_url.startswith("/static/storage/") else None),
+                        avatar_source_url=(room_avatar_url.strip() if isinstance(room_avatar_url, str) and not room_avatar_url.startswith("/static/storage/") else None),
+                        avatar_status="local" if isinstance(room_avatar_url, str) and room_avatar_url.startswith("/static/storage/") else "pending",
                     )
                 )
             else:
@@ -513,19 +535,25 @@ class ImportService:
                     not room_profile.display_name or (qqnt_authoritative and room_profile.display_name != room_name.strip())
                 ):
                     room_profile.display_name = room_name.strip()
-                if isinstance(room_avatar_url, str) and room_avatar_url.strip() and (
-                    not room_profile.avatar_path or (qqnt_authoritative and room_profile.avatar_path != room_avatar_url.strip())
-                ):
-                    room_profile.avatar_path = room_avatar_url.strip()
+                if isinstance(room_avatar_url, str) and room_avatar_url.strip():
+                    if room_avatar_url.startswith("/static/storage/"):
+                        room_profile.avatar_path = room_avatar_url.strip()
+                        room_profile.avatar_status = "local"
+                    else:
+                        room_profile.avatar_source_url = room_avatar_url.strip()
+                        if not room_profile.avatar_path:
+                            room_profile.avatar_status = "pending"
         if message_data.nickname or (isinstance(sender_avatar_url, str) and sender_avatar_url.strip()):
-            user_profile = await db.get(UserProfile, message_data.sender_id)
+            user_profile = await db.get(UserProfile, canonical_sender_id)
             if user_profile is None:
                 db.add(
                     UserProfile(
-                        user_id=message_data.sender_id,
+                        user_id=canonical_sender_id,
                         platform=message_data.platform,
                         display_name=message_data.nickname,
-                        avatar_path=sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and sender_avatar_url.strip() else None,
+                        avatar_path=(sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and sender_avatar_url.startswith("/static/storage/") else None),
+                        avatar_source_url=(sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and not sender_avatar_url.startswith("/static/storage/") else None),
+                        avatar_status="local" if isinstance(sender_avatar_url, str) and sender_avatar_url.startswith("/static/storage/") else "pending",
                     )
                 )
             else:
@@ -533,10 +561,14 @@ class ImportService:
                     not user_profile.display_name or (qqnt_authoritative and user_profile.display_name != message_data.nickname)
                 ):
                     user_profile.display_name = message_data.nickname
-                if isinstance(sender_avatar_url, str) and sender_avatar_url.strip() and (
-                    not user_profile.avatar_path or (qqnt_authoritative and user_profile.avatar_path != sender_avatar_url.strip())
-                ):
-                    user_profile.avatar_path = sender_avatar_url.strip()
+                if isinstance(sender_avatar_url, str) and sender_avatar_url.strip():
+                    if sender_avatar_url.startswith("/static/storage/"):
+                        user_profile.avatar_path = sender_avatar_url.strip()
+                        user_profile.avatar_status = "local"
+                    else:
+                        user_profile.avatar_source_url = sender_avatar_url.strip()
+                        if not user_profile.avatar_path:
+                            user_profile.avatar_status = "pending"
 
         profile = await db.get(BotProfile, message_data.robot_id)
         now = utc_now()
@@ -758,6 +790,38 @@ class ImportService:
         return changed, model.source_state, model.archive_state, (not was_complete and model.archive_state == "complete")
 
     @staticmethod
+    async def _upsert_identity_alias(
+        db: AsyncSession,
+        *,
+        platform: str,
+        identity_type: str,
+        canonical_id: str,
+        alias_id: str,
+        alias_type: str,
+        source_id: str | None,
+    ) -> None:
+        if not alias_id:
+            return
+        result = await db.execute(
+            select(IdentityAlias).where(
+                IdentityAlias.platform == platform,
+                IdentityAlias.identity_type == identity_type,
+                IdentityAlias.alias_id == alias_id,
+                IdentityAlias.source_id == source_id,
+            ).with_for_update()
+        )
+        alias = result.scalar_one_or_none()
+        if alias is None:
+            db.add(IdentityAlias(
+                platform=platform, identity_type=identity_type, canonical_id=canonical_id,
+                alias_id=alias_id, alias_type=alias_type, source_id=source_id, confidence="observed",
+            ))
+        else:
+            alias.canonical_id = canonical_id
+            alias.alias_type = alias_type
+            alias.last_seen_at = utc_now()
+
+    @staticmethod
     def _apply_media_fields(
         model: MessageMediaReference,
         reference: MessageMediaReferenceRequest,
@@ -777,6 +841,7 @@ class ImportService:
             "source_md5",
             "source_sha1",
             "source_uuid",
+            "content_sha256",
             "source_local_path",
             "duration_ms",
             "width",

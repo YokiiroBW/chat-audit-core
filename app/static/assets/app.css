@@ -2508,3 +2508,15 @@ a:focus-visible {
   .json-card { min-width: 0; width: 100%; grid-template-columns: 72px minmax(0, 1fr); }
   .json-card-img { width: 72px; height: 72px; }
 }
+
+
+.chat-loading-skeleton { display: grid; gap: 16px; padding: 4px 0; }
+.message-skeleton { display: flex; align-items: flex-start; gap: 10px; opacity: .82; }
+.message-skeleton.reverse { flex-direction: row-reverse; }
+.skeleton-avatar, .skeleton-content i { display: block; background: linear-gradient(100deg, color-mix(in srgb, var(--panel) 75%, var(--line)), color-mix(in srgb, var(--panel) 35%, var(--line)), color-mix(in srgb, var(--panel) 75%, var(--line))); background-size: 220% 100%; animation: chat-skeleton-shimmer 1.15s ease-in-out infinite; }
+.skeleton-avatar { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 50%; }
+.skeleton-content { display: grid; gap: 8px; width: min(430px, 58%); padding-top: 4px; }
+.skeleton-content i { height: 13px; border-radius: 999px; }
+.skeleton-content i:last-child { width: 68%; }
+@keyframes chat-skeleton-shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton-avatar, .skeleton-content i { animation: none; } }

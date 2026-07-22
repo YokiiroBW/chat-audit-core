@@ -1,5 +1,5 @@
 #define AppName "Chat Audit QQ Collector"
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 #define AppPublisher "Chat Audit Core"
 #define AppGuiExeName "chat-audit-qq-collector-gui.exe"
 #define AppCliExeName "chat-audit-qq-collector.exe"

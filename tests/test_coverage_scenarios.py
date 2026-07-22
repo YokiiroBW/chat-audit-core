@@ -164,5 +164,5 @@ async def test_query_service_can_read_after_concurrent_ingestion(tmp_path):
     finally:
         await engine.dispose()
 
-    assert rooms == [{"room_id": "group-coverage", "last_timestamp": 1783300009, "message_type": "group", "display_name": None, "avatar_path": None}]
+    assert rooms == [{"room_id": "group-coverage", "last_timestamp": 1783300009, "message_type": "group", "display_name": None, "avatar_path": None, "qq_number": None}]
     assert [message.external_message_id for message in messages] == [f"msg-{index}" for index in range(10)]

@@ -40,6 +40,29 @@ async def _add_message_external_message_id(conn) -> None:
         await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_messages_external_message_id ON messages (external_message_id)")
 
 
+async def _add_unified_archive_schema(conn) -> None:
+    def create_tables(sync_conn) -> None:
+        for table_name in ("identity_aliases", "profile_change_records", "message_parts"):
+            Base.metadata.tables[table_name].create(bind=sync_conn, checkfirst=True)
+    await conn.run_sync(create_tables)
+    for table_name, column_name, column_sql in (
+        ("messages", "is_outgoing", "BOOLEAN"),
+        ("media_assets", "content_sha256", "VARCHAR(64)"),
+        ("message_media_references", "content_sha256", "VARCHAR(64)"),
+        ("room_profiles", "avatar_file_hash", "VARCHAR(64)"),
+        ("room_profiles", "avatar_source_url", "TEXT"),
+        ("room_profiles", "avatar_status", "VARCHAR(20)"),
+        ("user_profiles", "avatar_file_hash", "VARCHAR(64)"),
+        ("user_profiles", "avatar_source_url", "TEXT"),
+        ("user_profiles", "avatar_status", "VARCHAR(20)"),
+    ):
+        columns = await _table_columns(conn, table_name)
+        if column_name not in columns:
+            await conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_messages_is_outgoing ON messages (is_outgoing)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_media_assets_content_sha256 ON media_assets (content_sha256)")
+
+
 async def _add_message_source_sequence(conn) -> None:
     message_columns = await _table_columns(conn, "messages")
     if "source_sequence" not in message_columns:
@@ -63,6 +86,9 @@ _QQNT_IMPORT_TABLES = (
     "import_batch_chunks",
     "message_source_records",
     "message_media_references",
+    "identity_aliases",
+    "profile_change_records",
+    "message_parts",
 )
 
 
@@ -117,6 +143,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_009_performance_indexes", "Create performance indexes", _add_performance_indexes, _rollback_performance_indexes),
     LightweightMigration("20260705_010_qqnt_import_models", "Create QQNT import and media reference tables", _create_qqnt_import_tables, _rollback_qqnt_import_tables),
     LightweightMigration("20260705_011_message_source_sequence", "Add source message sequence ordering", _add_message_source_sequence, None),
+    LightweightMigration("20260705_012_unified_archive_schema", "Add unified identities, message parts, profile and media metadata", _add_unified_archive_schema, None),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}
@@ -131,7 +158,7 @@ def create_async_engine_and_sessionmaker(database_url: str | None = None) -> tup
     if parsed_url.get_backend_name() == "sqlite":
         is_memory_database = parsed_url.database in {None, "", ":memory:"}
         engine_kwargs["poolclass"] = StaticPool if is_memory_database else NullPool
-        engine_kwargs["connect_args"] = {"check_same_thread": False}
+        engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
     else:
         engine_kwargs.update(
             {

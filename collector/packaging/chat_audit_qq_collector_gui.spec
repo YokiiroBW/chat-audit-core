@@ -24,6 +24,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
+    icon=str(project_root / "collector" / "packaging" / "chat-audit-collector.ico"),
     name="chat-audit-qq-collector-gui",
     debug=False,
     bootloader_ignore_signals=False,

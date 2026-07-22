@@ -426,7 +426,7 @@ async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], s
 def _needs_qq_avatar_refresh(avatar_path: str | None) -> bool:
     if not avatar_path:
         return True
-    return avatar_path.lower().endswith(".svg")
+    return (not avatar_path.startswith("/static/storage/")) or avatar_path.lower().endswith(".svg")
 
 
 @router.get("/bots/{robot_id}/capture-targets", response_model=list[CaptureTargetSettingResponse])
@@ -908,7 +908,7 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
         room
         for room in rooms
         if room.get("message_type") == "private"
-        and str(room.get("room_id") or "").isdigit()
+        and str(room.get("qq_number") or room.get("room_id") or "").isdigit()
         and (not room.get("display_name") or _needs_qq_avatar_refresh(room.get("avatar_path")))
     ]
     if not missing_group_rooms and not missing_private_rooms:
@@ -936,11 +936,11 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
                 max_bytes=settings.media_max_bytes,
             )
             changed = True
-        for room in missing_private_rooms[:20]:
-            room_id = str(room["room_id"])
+        for room in missing_private_rooms:
+            user_id = str(room.get("qq_number") or room["room_id"])
             await UserProfileService.cache_qq_user_profile(
                 db,
-                user_id=room_id,
+                user_id=user_id,
                 platform="qq",
                 display_name=room.get("display_name"),
                 http_client=client,
@@ -1041,6 +1041,11 @@ async def ingest_message(
             "room_id": payload.room_id,
             "message_type": payload.message_type,
             "sender_id": payload.sender_id,
+            "canonical_sender_id": payload.canonical_sender_id,
+            "canonical_room_id": payload.canonical_room_id,
+            "is_outgoing": payload.is_outgoing,
+            "source_event_type": payload.source_event_type,
+            "message_segments": payload.message_segments,
             "nickname": payload.nickname,
             "raw_message": payload.raw_message,
             "local_message": payload.local_message or payload.raw_message,

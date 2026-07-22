@@ -12,6 +12,7 @@ from app.models import (
     MediaAsset,
     Message,
     MessageMediaReference,
+    MessagePart,
     MessageSourceRecord,
     RobotMessage,
     RoomProfile,
@@ -48,14 +49,74 @@ def _plain_message_preview(value: str | None) -> str:
     return compact or "[消息]"
 
 
-def _qq_number_from_raw(raw_columns_json: str | None, robot_id: str) -> str | None:
+def _prefer_avatar_path(*paths: str | None) -> str | None:
+    values = [str(path).strip() for path in paths if path]
+    for value in values:
+        if value.startswith("/static/storage/"):
+            return value
+    return values[0] if values else None
+
+
+def _usable_profile_name(
+    value: str | None,
+    *,
+    robot_id: str,
+    robot_display_name: str | None,
+    profile_id: str | None = None,
+) -> str | None:
+    name = str(value or "").strip()
+    if not name:
+        return None
+    if (
+        profile_id
+        and str(profile_id) != str(robot_id)
+        and robot_display_name
+        and name.casefold() == str(robot_display_name).strip().casefold()
+    ):
+        return None
+    return name
+
+
+async def _private_robot_display_name(
+    db: AsyncSession,
+    robot_id: str,
+    room_id: str | None = None,
+) -> str | None:
+    stmt = (
+        select(Message.nickname)
+        .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+        .where(
+            RobotMessage.robot_id == robot_id,
+            Message.message_type == "private",
+            Message.sender_id != Message.room_id,
+            Message.nickname.is_not(None),
+        )
+        .order_by(Message.timestamp.desc())
+        .limit(1)
+    )
+    if room_id:
+        stmt = stmt.where(Message.room_id == room_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+def _qq_number_from_raw(
+    raw_columns_json: str | None,
+    robot_id: str,
+    *,
+    exclude_robot: bool = True,
+) -> str | None:
     try:
         raw = json.loads(raw_columns_json or "{}")
     except (TypeError, json.JSONDecodeError):
         return None
     for key in ("qq", "uin", "user_id", "40033", "40030"):
         value = str(raw.get(key) or "").strip()
-        if value.isdigit() and value != str(robot_id) and 5 <= len(value) <= 12:
+        if (
+            value.isdigit()
+            and (not exclude_robot or value != str(robot_id))
+            and 5 <= len(value) <= 12
+        ):
             return value
     return None
 
@@ -81,12 +142,12 @@ class QueryService:
 
     @staticmethod
     async def list_rooms(db: AsyncSession, robot_id: str) -> list[dict]:
+        bot_result = await db.execute(
+            select(BotProfile.display_name).where(BotProfile.id == robot_id)
+        )
+        robot_display_name = bot_result.scalar_one_or_none() or await _private_robot_display_name(db, robot_id)
         private_sender_display_name = case(
             ((Message.message_type == "private") & (Message.sender_id == Message.room_id), Message.nickname),
-            else_=None,
-        )
-        private_message_nickname = case(
-            (Message.message_type == "private", Message.nickname),
             else_=None,
         )
         result = await db.execute(
@@ -94,7 +155,7 @@ class QueryService:
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
                 func.max(Message.message_type).label("message_type"),
-                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name, private_message_nickname)).label("display_name"),
+                func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
             .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
@@ -122,18 +183,49 @@ class QueryService:
                 if qq_number:
                     qq_candidates[room_id].append(qq_number)
 
+        profile_ids = {
+            qq_number
+            for candidates in qq_candidates.values()
+            for qq_number in candidates
+        }
+        profile_result = await db.execute(
+            select(UserProfile.user_id, UserProfile.display_name, UserProfile.avatar_path)
+            .where(UserProfile.user_id.in_(profile_ids))
+        ) if profile_ids else None
+        profiles = {
+            row.user_id: row
+            for row in (profile_result.all() if profile_result is not None else [])
+        }
+
         room_items = []
         for row in rows:
             candidates = qq_candidates.get(row.room_id, [])
             qq_number = max(set(candidates), key=candidates.count) if candidates else None
             if not qq_number and row.message_type == "private" and str(row.room_id).isdigit():
                 qq_number = str(row.room_id)
+            profile = profiles.get(qq_number)
+            if row.message_type == "private":
+                display_name = _usable_profile_name(
+                    profile.display_name if profile else None,
+                    robot_id=robot_id,
+                    robot_display_name=robot_display_name,
+                    profile_id=qq_number,
+                )
+                if display_name is None:
+                    display_name = _usable_profile_name(
+                        row.display_name,
+                        robot_id=robot_id,
+                        robot_display_name=robot_display_name,
+                        profile_id=qq_number,
+                    )
+            else:
+                display_name = row.display_name or (profile.display_name if profile else None)
             room_items.append({
                 "room_id": row.room_id,
                 "last_timestamp": row.last_timestamp,
                 "message_type": row.message_type,
-                "display_name": row.display_name,
-                "avatar_path": row.avatar_path,
+                "display_name": display_name,
+                "avatar_path": _prefer_avatar_path(profile.avatar_path if profile else None, row.avatar_path),
                 "qq_number": qq_number,
             })
         return room_items
@@ -148,6 +240,10 @@ class QueryService:
         media_state: str | None = None,
         limit: int = 50,
     ) -> list[Message]:
+        bot_result = await db.execute(
+            select(BotProfile.display_name).where(BotProfile.id == robot_id)
+        )
+        robot_display_name = bot_result.scalar_one_or_none() or await _private_robot_display_name(db, robot_id, room_id)
         if around_message_id:
             target_result = await db.execute(
                 select(Message)
@@ -213,6 +309,7 @@ class QueryService:
             .where(MessageSourceRecord.msg_hash.in_([message.msg_hash for message in messages]))
         )
         outgoing_by_hash: dict[str, bool] = {}
+        profile_id_by_hash: dict[str, str] = {}
         for msg_hash, raw_columns_json in source_result.all():
             try:
                 raw_columns = json.loads(raw_columns_json or "{}")
@@ -220,11 +317,69 @@ class QueryService:
                 raw_columns = {}
             if "40033" in raw_columns:
                 outgoing_by_hash[msg_hash] = outgoing_by_hash.get(msg_hash, False) or str(raw_columns.get("40033")) == str(robot_id)
+            profile_id = _qq_number_from_raw(raw_columns_json, robot_id, exclude_robot=False)
+            if profile_id:
+                profile_id_by_hash[msg_hash] = profile_id
+
+        profile_ids = set(profile_id_by_hash.values())
+        profile_result = await db.execute(
+            select(UserProfile.user_id, UserProfile.display_name, UserProfile.avatar_path)
+            .where(UserProfile.user_id.in_(profile_ids))
+        ) if profile_ids else None
+        profiles = {
+            row.user_id: row
+            for row in (profile_result.all() if profile_result is not None else [])
+        }
         for message in messages:
             message.is_outgoing = outgoing_by_hash.get(message.msg_hash)
+            profile_id = profile_id_by_hash.get(message.msg_hash)
+            profile = profiles.get(profile_id)
+            message.sender_qq_number = profile_id
+            if message.message_type == "private":
+                candidates = [
+                    message.nickname,
+                    message.sender_display_name,
+                    profile.display_name if profile else None,
+                ]
+                message.sender_display_name = next(
+                    (
+                        name
+                        for name in (
+                            _usable_profile_name(
+                                candidate,
+                                robot_id=robot_id,
+                                robot_display_name=robot_display_name,
+                                profile_id=profile_id,
+                            )
+                            for candidate in candidates
+                        )
+                        if name
+                    ),
+                    None,
+                )
+            elif profile:
+                message.sender_display_name = message.sender_display_name or profile.display_name
+            if profile:
+                message.sender_avatar_path = _prefer_avatar_path(profile.avatar_path, message.sender_avatar_path)
+        await QueryService._attach_parts(db, messages)
         await QueryService._attach_reply_previews(db, messages)
         await QueryService._attach_import_details(db, messages)
         return messages
+
+    @staticmethod
+    async def _attach_parts(db: AsyncSession, messages: list[Message]) -> None:
+        if not messages:
+            return
+        result = await db.execute(
+            select(MessagePart)
+            .where(MessagePart.msg_hash.in_([message.msg_hash for message in messages]))
+            .order_by(MessagePart.msg_hash.asc(), MessagePart.ordinal.asc())
+        )
+        parts_by_hash: dict[str, list[MessagePart]] = {}
+        for part in result.scalars().all():
+            parts_by_hash.setdefault(part.msg_hash, []).append(part)
+        for message in messages:
+            message.parts = parts_by_hash.get(message.msg_hash, [])
 
     @staticmethod
     async def _attach_reply_previews(db: AsyncSession, messages: list[Message]) -> None:

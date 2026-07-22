@@ -1,9 +1,10 @@
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import RoomProfile
+from app.models import MediaAsset, ProfileChangeRecord, RoomProfile
 from app.services.media_service import MediaService
 
 
@@ -16,16 +17,38 @@ class RoomProfileService:
         platform: str,
         display_name: str | None = None,
         avatar_path: str | None = None,
+        avatar_source_url: str | None = None,
+        source_id: str | None = None,
     ) -> RoomProfile:
         profile = await db.get(RoomProfile, room_id)
         if profile is None:
             profile = RoomProfile(room_id=room_id, platform=platform)
             db.add(profile)
         profile.platform = platform
+        asset_result = await db.execute(select(MediaAsset).where(MediaAsset.local_path == avatar_path)) if avatar_path else None
+        asset = asset_result.scalar_one_or_none() if asset_result is not None else None
+        old_name = profile.display_name
+        old_avatar_hash = profile.avatar_file_hash
+        new_name = display_name or profile.display_name
+        new_avatar_hash = asset.content_sha256 if asset is not None else profile.avatar_file_hash
         if display_name:
             profile.display_name = display_name
         if avatar_path:
             profile.avatar_path = avatar_path
+            profile.avatar_file_hash = new_avatar_hash
+            profile.avatar_status = "local"
+        if avatar_source_url:
+            profile.avatar_source_url = avatar_source_url
+        if (old_name != profile.display_name or old_avatar_hash != profile.avatar_file_hash) and (old_name or old_avatar_hash):
+            db.add(ProfileChangeRecord(
+                identity_type="conversation",
+                identity_id=room_id,
+                old_display_name=old_name,
+                new_display_name=profile.display_name,
+                old_avatar_file_hash=old_avatar_hash,
+                new_avatar_file_hash=profile.avatar_file_hash,
+                source_id=source_id,
+            ))
         await db.commit()
         await db.refresh(profile)
         return profile

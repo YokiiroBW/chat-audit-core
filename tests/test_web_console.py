@@ -19,8 +19,8 @@ async def test_web_console_index_serves_three_column_dashboard():
     html = response.text
     assert "<title>QQ社交资产审计平台</title>" in html
     assert '<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />' in html
-    assert '<link rel="stylesheet" href="/assets/app.min.css" />' in html
-    assert '<script src="/assets/app.min.js" defer></script>' in html
+    assert '<link rel="stylesheet" href="/assets/app.min.css' in html
+    assert '<script src="/assets/app.min.js' in html
 
     assert css_response.status_code == 200
     assert js_response.status_code == 200
@@ -32,16 +32,16 @@ async def test_web_console_index_serves_three_column_dashboard():
 
     page_bundle = "\n".join([html, css_response.text, js_response.text, sw_response.text])
     assert "QQ社交资产审计平台" in html
-    assert "<text" in favicon_response.text
-    assert ">QQ<" in favicon_response.text
+    assert "Chat Audit Collector" in favicon_response.text
+    assert "linearGradient" in favicon_response.text
     assert "/assets/favicon.svg" in sw_response.text
-    assert "chat-audit-static-v4" in sw_response.text
+    assert "chat-audit-static-v14" in sw_response.text
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
     assert "ElementPlus" not in page_bundle
     assert "Vue" not in page_bundle
-    assert "navigator.serviceWorker.register('/sw.js')" in html
+    assert "serviceWorker.register" in page_bundle
     assert "CACHE_NAME" in sw_response.text
     assert "/assets/app.min.js" in sw_response.text
     assert "/assets/app.min.css" in sw_response.text
@@ -65,6 +65,12 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "视频记录解析失败" in page_bundle
     assert "reference.source_state" in page_bundle
     assert "reference.archive_state" in page_bundle
+    assert "sender_qq_number" in page_bundle
+    assert "sender_display_name" in page_bundle
+    assert "isOutgoingMessage" in page_bundle
+    assert "renderStructuredMessageParts" in page_bundle
+    assert "payload_json" in page_bundle
+    assert "archive_state === 'thumbnail_only'" in page_bundle
     assert "msg.media || []" in page_bundle
     assert "refreshLiveMessages" in page_bundle
     assert "window.setInterval(refreshLiveMessages, 2000)" in page_bundle

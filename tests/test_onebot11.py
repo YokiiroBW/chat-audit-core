@@ -103,6 +103,10 @@ def test_normalize_group_message_event_maps_onebot_fields():
         "room_id": "998877",
         "message_type": "group",
         "sender_id": "445566",
+        "peer_id": "445566",
+        "self_id": "123456",
+        "source_event_type": "message",
+        "is_outgoing": False,
         "nickname": "群名片",
         "raw_message": "hello from napcat",
         "local_message": "hello from napcat",
@@ -150,6 +154,26 @@ def test_normalize_group_self_message_sent_event_maps_onebot_fields():
     assert normalized.msg_data["room_id"] == "949040596"
     assert normalized.msg_data["sender_id"] == "1449801200"
     assert normalized.msg_data["raw_message"] == "self message from napcat"
+
+
+def test_normalize_private_self_message_sent_uses_self_id_as_sender():
+    from app.adapters.onebot11 import normalize_message_event
+
+    normalized = normalize_message_event({
+        "post_type": "message_sent",
+        "message_type": "private",
+        "self_id": 123456,
+        "user_id": 445566,
+        "raw_message": "private self",
+        "time": 1783000601,
+        "sender": {"nickname": "BotSelf"},
+    })
+
+    assert normalized is not None
+    assert normalized.msg_data["room_id"] == "445566"
+    assert normalized.msg_data["sender_id"] == "123456"
+    assert normalized.msg_data["peer_id"] == "445566"
+    assert normalized.msg_data["is_outgoing"] is True
 
 
 @pytest.mark.asyncio
@@ -227,7 +251,7 @@ async def test_onebot_websocket_persists_group_message_with_robot_view(db_sessio
 
     assert websocket.accepted is True
     assert_only_group_info_actions(websocket)
-    assert rooms == [{"room_id": "998877", "last_timestamp": 1783000200, "message_type": "group", "display_name": None, "avatar_path": None}]
+    assert rooms == [{"room_id": "998877", "last_timestamp": 1783000200, "message_type": "group", "display_name": None, "avatar_path": None, "qq_number": None}]
     assert len(messages) == 1
     assert messages[0].raw_message == "websocket hello"
 

@@ -135,3 +135,8 @@ RPO 实测：
 缺失项与处理：
 结论：
 ```
+
+
+## Unified archive deployment check
+
+After deployment, verify `/health` and `/api/version` before enabling background synchronization. The version response must show the expected build commit, schema version `20260705_012`, frontend asset version, and QQNT adapter version. Historical identity/profile/media repair must run in dry-run mode first and preserve `message_source_records`, original media references, and profile change records.

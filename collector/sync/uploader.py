@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 import httpx
 
+from collector import __version__
 from collector.app.config import CollectorConfig
 from collector.sync.queue import CollectorQueue, QueueItem
 from collector.sync.state import CollectorStateStore
@@ -110,7 +111,7 @@ class CollectorApiClient:
             "device_id": self.config.collector.device_id,
             "device_name": self.config.collector.device_name,
             "status": "active",
-            "metadata": {"collector_version": "0.1.0"},
+            "metadata": {"collector_version": __version__},
         }
         if self.config.server.source_id:
             payload["id"] = self.config.server.source_id

@@ -65,6 +65,9 @@ class RoomProfile(Base):
     platform = Column(String(20), nullable=False)
     display_name = Column(String(128), nullable=True)
     avatar_path = Column(String(255), nullable=True)
+    avatar_file_hash = Column(String(64), nullable=True, index=True)
+    avatar_source_url = Column(Text, nullable=True)
+    avatar_status = Column(String(20), default="unknown", nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 
@@ -77,6 +80,9 @@ class UserProfile(Base):
     platform = Column(String(20), nullable=False)
     display_name = Column(String(128), nullable=True)
     avatar_path = Column(String(255), nullable=True)
+    avatar_file_hash = Column(String(64), nullable=True, index=True)
+    avatar_source_url = Column(Text, nullable=True)
+    avatar_status = Column(String(20), default="unknown", nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
 
@@ -92,6 +98,7 @@ class Message(Base):
     external_message_id = Column(String(64), nullable=True, index=True)
     sender_id = Column(String(64), nullable=False)
     nickname = Column(String(128), nullable=True)
+    is_outgoing = Column(Boolean, nullable=True, index=True)
     raw_message = Column(Text, nullable=False)
     local_message = Column(Text, nullable=False)
     timestamp = Column(Integer, nullable=False, index=True)
@@ -127,10 +134,71 @@ class MediaAsset(Base):
     __tablename__ = "media_assets"
 
     file_hash = Column(String(64), primary_key=True)
+    content_sha256 = Column(String(64), nullable=True, unique=True, index=True)
     file_type = Column(String(20), nullable=False)
     file_size = Column(Integer, nullable=False)
     local_path = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class IdentityAlias(Base):
+    """Maps protocol/source identifiers to one canonical QQ identity."""
+
+    __tablename__ = "identity_aliases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(20), nullable=False)
+    identity_type = Column(String(20), nullable=False)
+    canonical_id = Column(String(64), nullable=False, index=True)
+    alias_id = Column(String(255), nullable=False)
+    alias_type = Column(String(32), nullable=False)
+    source_id = Column(String(64), ForeignKey("import_sources.id"), nullable=True, index=True)
+    confidence = Column(String(20), default="observed", nullable=False)
+    metadata_json = Column(Text, nullable=True)
+    first_seen_at = Column(DateTime, default=utc_now, nullable=False)
+    last_seen_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("platform", "identity_type", "alias_id", "source_id", name="uq_identity_alias_source"),
+        Index("idx_identity_alias_canonical", "identity_type", "canonical_id"),
+    )
+
+
+class ProfileChangeRecord(Base):
+    """Historical user/group profile changes without losing current profile state."""
+
+    __tablename__ = "profile_change_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    identity_type = Column(String(20), nullable=False)
+    identity_id = Column(String(64), nullable=False, index=True)
+    old_display_name = Column(String(128), nullable=True)
+    new_display_name = Column(String(128), nullable=True)
+    old_avatar_file_hash = Column(String(64), nullable=True)
+    new_avatar_file_hash = Column(String(64), nullable=True)
+    source_id = Column(String(64), ForeignKey("import_sources.id"), nullable=True, index=True)
+    observed_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+
+
+class MessagePart(Base):
+    """Ordered protocol-neutral message segment."""
+
+    __tablename__ = "message_parts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    msg_hash = Column(String(64), ForeignKey("messages.msg_hash"), nullable=False, index=True)
+    ordinal = Column(Integer, nullable=False)
+    part_type = Column(String(20), nullable=False, index=True)
+    text_content = Column(Text, nullable=True)
+    media_reference_id = Column(Integer, ForeignKey("message_media_references.id"), nullable=True, index=True)
+    payload_json = Column(Text, nullable=True)
+    source_format = Column(String(32), nullable=True)
+    render_status = Column(String(20), default="parsed", nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("msg_hash", "ordinal", name="uq_message_part_ordinal"),
+        Index("idx_message_parts_message_order", "msg_hash", "ordinal"),
+    )
 
 
 class ImportSource(Base):
@@ -254,6 +322,7 @@ class MessageMediaReference(Base):
     source_md5 = Column(String(128), nullable=True, index=True)
     source_sha1 = Column(String(128), nullable=True)
     source_uuid = Column(String(255), nullable=True, index=True)
+    content_sha256 = Column(String(64), nullable=True, index=True)
     source_local_path = Column(Text, nullable=True)
     duration_ms = Column(Integer, nullable=True)
     width = Column(Integer, nullable=True)

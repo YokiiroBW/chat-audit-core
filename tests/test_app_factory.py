@@ -177,6 +177,12 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "applied": True,
             "applied_at": migrations_response.json()[10]["applied_at"],
         },
+        {
+            "version": "20260705_012_unified_archive_schema",
+            "description": "Add unified identities, message parts, profile and media metadata",
+            "applied": True,
+            "applied_at": migrations_response.json()[11]["applied_at"],
+        },
     ]
     assert storage_root.exists()
     assert backup_root.exists()
@@ -184,13 +190,13 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
     async def inspect_tables():
         async with engine.connect() as conn:
                 result = await conn.execute(
-                    text("select name from sqlite_master where type='table' and name in ('messages', 'robot_messages', 'media_assets', 'adapters', 'bot_profiles', 'room_profiles', 'user_profiles', 'audit_logs', 'schema_migrations', 'admin_tokens', 'system_settings', 'admin_users', 'admin_sessions', 'capture_target_policies', 'import_sources', 'import_batches', 'import_batch_chunks', 'message_source_records', 'message_media_references')")
+                    text("select name from sqlite_master where type='table' and name in ('messages', 'robot_messages', 'media_assets', 'adapters', 'bot_profiles', 'room_profiles', 'user_profiles', 'audit_logs', 'schema_migrations', 'admin_tokens', 'system_settings', 'admin_users', 'admin_sessions', 'capture_target_policies', 'import_sources', 'import_batches', 'import_batch_chunks', 'message_source_records', 'message_media_references', 'identity_aliases', 'profile_change_records', 'message_parts')")
                 )
                 return {row[0] for row in result.fetchall()}
 
     import anyio
 
-    assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters", "bot_profiles", "room_profiles", "user_profiles", "audit_logs", "schema_migrations", "admin_tokens", "system_settings", "admin_users", "admin_sessions", "capture_target_policies", "import_sources", "import_batches", "import_batch_chunks", "message_source_records", "message_media_references"}
+    assert anyio.run(inspect_tables) == {"messages", "robot_messages", "media_assets", "adapters", "bot_profiles", "room_profiles", "user_profiles", "audit_logs", "schema_migrations", "admin_tokens", "system_settings", "admin_users", "admin_sessions", "capture_target_policies", "import_sources", "import_batches", "import_batch_chunks", "message_source_records", "message_media_references", "identity_aliases", "profile_change_records", "message_parts"}
 
     async def inspect_migrations():
         async with engine.connect() as conn:
@@ -209,6 +215,7 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "20260705_009_performance_indexes",
             "20260705_010_qqnt_import_models",
             "20260705_011_message_source_sequence",
+            "20260705_012_unified_archive_schema",
         ]
 
 

@@ -34,6 +34,8 @@ def normalize_message_event(event: dict[str, Any]) -> NormalizedMessageEvent | N
     if self_id is None or user_id is None or raw_message is None or timestamp is None:
         return None
 
+    event_type = str(event.get("post_type") or "message")
+    is_outgoing = event_type == "message_sent"
     if message_type == "group":
         room_source = event.get("group_id")
     else:
@@ -42,15 +44,22 @@ def normalize_message_event(event: dict[str, Any]) -> NormalizedMessageEvent | N
         return None
 
     sender = event.get("sender") or {}
+    sender_source = self_id if is_outgoing else user_id
     msg_data = {
         "room_id": str(room_source),
         "message_type": str(message_type),
-        "sender_id": str(user_id),
+        "sender_id": str(sender_source),
+        "peer_id": str(user_id),
+        "self_id": str(self_id),
+        "source_event_type": event_type,
+        "is_outgoing": is_outgoing,
         "nickname": _pick_nickname(sender),
         "raw_message": str(raw_message),
         "local_message": str(raw_message),
         "timestamp": int(timestamp),
     }
+    if isinstance(event.get("message"), list):
+        msg_data["message_segments"] = event["message"]
     if event.get("message_id") is not None:
         msg_data["message_id"] = str(event["message_id"])
     return NormalizedMessageEvent(robot_id=str(self_id), platform="qq", msg_data=msg_data)

@@ -250,6 +250,17 @@ def create_app(
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
+    @app.get("/api/version")
+    async def version() -> JSONResponse:
+        return JSONResponse({
+            "app": "chat-audit-core",
+            "app_version": os.getenv("APP_VERSION", "development"),
+            "git_commit": os.getenv("BUILD_COMMIT", "unknown"),
+            "schema_version": "20260705_012",
+            "frontend_asset_version": os.getenv("FRONTEND_ASSET_VERSION", "development"),
+            "qqnt_adapter_version": os.getenv("QQNT_ADAPTER_VERSION", "qqnt-9.9.x-basic"),
+        })
+
     @app.get("/health", response_model=HealthResponse)
     async def health() -> JSONResponse | HealthResponse:
         checks: dict[str, str] = {

@@ -4,6 +4,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
+        APP_VERSION: ${APP_VERSION:-development}
+        FRONTEND_ASSET_VERSION: ${FRONTEND_ASSET_VERSION:-development}
+        QQNT_ADAPTER_VERSION: ${QQNT_ADAPTER_VERSION:-qqnt-9.9.x-basic}
     container_name: chat-audit-core
     restart: unless-stopped
 

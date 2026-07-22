@@ -307,6 +307,19 @@ class RoomResponse(BaseModel):
     qq_number: str | None = None
 
 
+class MessagePartResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ordinal: int
+    part_type: str
+    text_content: str | None = None
+    media_reference_id: int | None = None
+    payload_json: str | None = None
+    source_format: str | None = None
+    render_status: str
+
+
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -317,6 +330,7 @@ class MessageResponse(BaseModel):
     external_message_id: str | None = None
     external_message_aliases: list[str] = Field(default_factory=list)
     sender_id: str
+    sender_qq_number: str | None = None
     sender_display_name: str | None = None
     sender_avatar_path: str | None = None
     is_outgoing: bool | None = None
@@ -327,6 +341,7 @@ class MessageResponse(BaseModel):
     source_sequence: int | None = None
     reply_to_message_id: str | None = None
     reply_preview_text: str | None = None
+    parts: list[MessagePartResponse] = Field(default_factory=list)
     media: list["MessageMediaReferenceResponse"] = Field(default_factory=list)
     import_sources: list["MessageImportSourceResponse"] = Field(default_factory=list)
 
@@ -357,6 +372,10 @@ class MessageIngestRequest(BaseModel):
     room_id: str = Field(min_length=1, max_length=64, description="Group id or private peer id.")
     message_type: str = Field(min_length=1, max_length=20, description="group or private.")
     sender_id: str = Field(min_length=1, max_length=64, description="Original sender id.")
+    is_outgoing: bool | None = Field(default=None, description="Whether the message was sent by the configured QQ account.")
+    canonical_sender_id: str | None = Field(default=None, max_length=64)
+    canonical_room_id: str | None = Field(default=None, max_length=64)
+    source_event_type: str | None = Field(default=None, max_length=32)
     nickname: str | None = Field(default=None, max_length=128, description="Sender display name when available.")
     raw_message: str = Field(min_length=1, description="Raw message content, including CQ segments if present.")
     local_message: str | None = Field(default=None, description="Optional already-localized message content.")
@@ -372,6 +391,7 @@ class MessageIngestRequest(BaseModel):
         description="Source platform sequence used to order messages sharing the same timestamp.",
     )
     message_id: str | None = Field(default=None, max_length=64, description="Source-platform message id used for reply jumps and deduplication.")
+    message_segments: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
 
 
 class MessageIngestResponse(BaseModel):
@@ -404,6 +424,7 @@ class MessageMediaReferenceRequest(BaseModel):
     source_md5: str | None = Field(default=None, max_length=128)
     source_sha1: str | None = Field(default=None, max_length=128)
     source_uuid: str | None = Field(default=None, max_length=255)
+    content_sha256: str | None = Field(default=None, max_length=64)
     source_local_path: str | None = None
     duration_ms: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
     width: int | None = Field(default=None, ge=0, le=SQL_INTEGER_MAX)
@@ -446,6 +467,7 @@ class MessageMediaReferenceResponse(BaseModel):
     source_md5: str | None = None
     source_sha1: str | None = None
     source_uuid: str | None = None
+    content_sha256: str | None = None
     duration_ms: int | None = None
     width: int | None = None
     height: int | None = None

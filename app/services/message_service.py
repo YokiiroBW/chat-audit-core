@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -7,7 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.models import MediaAsset, Message, MessageMediaReference, MessageSourceRecord, RobotMessage
+from app.models import MediaAsset, Message, MessageMediaReference, MessagePart, MessageSourceRecord, RobotMessage
 from app.services.capture_policy_service import CapturePolicyService
 from app.time_utils import utc_now
 
@@ -83,6 +84,11 @@ class MessageService:
 
         clean_ext = ext.lstrip(".").lower()
         file_hash = MessageService.generate_md5(file_content)
+        content_sha256 = hashlib.sha256(file_content).hexdigest()
+        existing_by_sha256 = await db.execute(select(MediaAsset).where(MediaAsset.content_sha256 == content_sha256))
+        existing_asset = existing_by_sha256.scalar_one_or_none()
+        if existing_asset is not None:
+            return existing_asset.local_path
         filename = f"{file_hash}.{clean_ext}"
         target_path = root / filename
 
@@ -96,6 +102,7 @@ class MessageService:
             db.add(
                 MediaAsset(
                     file_hash=file_hash,
+                    content_sha256=content_sha256,
                     file_type=file_type,
                     file_size=len(file_content),
                     local_path=local_path,
@@ -176,10 +183,20 @@ class MessageService:
                     raw_message=raw_message,
                     local_message=local_message,
                     timestamp=msg_data["timestamp"],
+                    is_outgoing=msg_data.get("is_outgoing"),
                 )
             )
-        elif MessageService._local_message_score(local_message) > MessageService._local_message_score(existing_msg.local_message):
-            existing_msg.local_message = local_message
+        else:
+            if msg_data.get("is_outgoing") is not None:
+                existing_msg.is_outgoing = msg_data.get("is_outgoing")
+            if msg_data.get("nickname") and (not existing_msg.nickname or msg_data.get("is_outgoing")):
+                existing_msg.nickname = msg_data.get("nickname")
+            if MessageService._local_message_score(local_message) > MessageService._local_message_score(existing_msg.local_message):
+                existing_msg.local_message = local_message
+
+        await MessageService._upsert_message_parts(
+            db, msg_hash=msg_hash, segments=msg_data.get("message_segments"), source_format=msg_data.get("source_event_type") or platform,
+        )
 
         await MessageService._upgrade_structured_media_from_local_message(
             db,
@@ -199,6 +216,40 @@ class MessageService:
 
         await db.commit()
         return msg_hash
+
+    @staticmethod
+    async def _upsert_message_parts(
+        db: AsyncSession,
+        *,
+        msg_hash: str,
+        segments: list[dict[str, Any]] | None,
+        source_format: str,
+    ) -> None:
+        if not isinstance(segments, list):
+            return
+        for ordinal, segment in enumerate(segments):
+            if not isinstance(segment, dict):
+                continue
+            part_type = str(segment.get("type") or "unknown")[:20]
+            data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+            result = await db.execute(
+                select(MessagePart).where(MessagePart.msg_hash == msg_hash, MessagePart.ordinal == ordinal).with_for_update()
+            )
+            part = result.scalar_one_or_none()
+            payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
+            text_content = str(data.get("text")) if data.get("text") is not None else None
+            if part is None:
+                db.add(MessagePart(
+                    msg_hash=msg_hash, ordinal=ordinal, part_type=part_type,
+                    text_content=text_content, payload_json=payload, source_format=source_format,
+                    render_status="parsed",
+                ))
+            else:
+                part.part_type = part_type
+                part.text_content = text_content
+                part.payload_json = payload
+                part.source_format = source_format
+                part.render_status = "parsed"
 
     @staticmethod
     async def list_messages(db: AsyncSession) -> list[Message]:
