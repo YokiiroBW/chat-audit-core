@@ -153,8 +153,42 @@ def _media_element(fields: dict[int, list[Any]], content_type: int) -> dict[str,
     return element
 
 
+def _reply_preview(fields: dict[int, list[Any]]) -> str:
+    for value in fields.get(47423, []):
+        if not isinstance(value, bytes):
+            continue
+        try:
+            nested = _protobuf_fields(value)
+        except ValueError:
+            continue
+        element = _qqnt_content_element(nested)
+        element_type = element.get("type")
+        if element_type == "text":
+            return str(element.get("text") or "")
+        if element_type == "image":
+            return "[图片]"
+        if element_type == "video":
+            return "[视频]"
+        if element_type == "record":
+            return "[语音]"
+        if element_type == "file":
+            return "[文件]"
+        if element_type == "face":
+            return str(element.get("description") or "[表情]")
+    return ""
+
 def _qqnt_content_element(fields: dict[int, list[Any]]) -> dict[str, Any]:
     content_type = _first_integer(fields, 45002)
+    if content_type == 7:
+        reply_id = _first_integer(fields, 47422)
+        element = {"type": "reply", "message_id": str(reply_id) if reply_id else ""}
+        target_user_id = _first_integer(fields, 47403)
+        if target_user_id:
+            element["target_user_id"] = str(target_user_id)
+        preview = _reply_preview(fields)
+        if preview:
+            element["preview"] = preview
+        return element
     text_values = _text_values(fields, 45101)
     if text_values:
         return {"type": "text", "text": "".join(text_values)}

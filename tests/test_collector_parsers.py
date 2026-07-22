@@ -339,3 +339,18 @@ def test_qqnt_reply_and_at_segments_use_onebot_compatible_shape():
     ]
     assert "[CQ:reply,id=quoted-1]" in parsed.item["message"]["raw_message"]
     assert "[CQ:at,qq=998877" in parsed.item["message"]["raw_message"]
+
+def test_qqnt_protobuf_type_7_decodes_as_reply_with_target_and_preview():
+    from collector.parsers.protobuf import _qqnt_content_element
+
+    element = _qqnt_content_element({
+        45002: [7],
+        47403: [1248465005],
+        47422: [7664973297536280880],
+    })
+
+    assert element == {
+        "type": "reply",
+        "message_id": "7664973297536280880",
+        "target_user_id": "1248465005",
+    }

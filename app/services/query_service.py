@@ -1,4 +1,6 @@
+import base64
 import json
+import base64
 import json
 import re
 
@@ -35,6 +37,94 @@ def _parse_reply_id(value: str | None) -> str | None:
             return item.split("=", 1)[1]
     return None
 
+
+def _protobuf_fields(raw: bytes) -> dict[int, list[object]]:
+    fields: dict[int, list[object]] = {}
+    offset = 0
+    while offset < len(raw):
+        tag = 0
+        shift = 0
+        while offset < len(raw):
+            byte = raw[offset]
+            offset += 1
+            tag |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                break
+            shift += 7
+        field_number = tag >> 3
+        wire_type = tag & 0x07
+        if wire_type == 0:
+            value = 0
+            shift = 0
+            while offset < len(raw):
+                byte = raw[offset]
+                offset += 1
+                value |= (byte & 0x7F) << shift
+                if not byte & 0x80:
+                    break
+                shift += 7
+        elif wire_type == 2:
+            length = 0
+            shift = 0
+            while offset < len(raw):
+                byte = raw[offset]
+                offset += 1
+                length |= (byte & 0x7F) << shift
+                if not byte & 0x80:
+                    break
+                shift += 7
+            value = raw[offset : offset + length]
+            offset += length
+        elif wire_type == 1:
+            value = raw[offset : offset + 8]
+            offset += 8
+        elif wire_type == 5:
+            value = raw[offset : offset + 4]
+            offset += 4
+        else:
+            break
+        fields.setdefault(field_number, []).append(value)
+    return fields
+
+
+def _qqnt_historical_reply_parts(raw_base64: str | None) -> list[dict[str, str]]:
+    if not raw_base64:
+        return []
+    try:
+        outer = _protobuf_fields(base64.b64decode(raw_base64))
+    except (ValueError, TypeError, base64.binascii.Error):
+        return []
+    results: list[dict[str, str]] = []
+    for content in outer.get(40800, []):
+        if not isinstance(content, bytes):
+            continue
+        fields = _protobuf_fields(content)
+        content_type = fields.get(45002, [0])[-1]
+        if content_type != 7:
+            continue
+        reply_id = fields.get(47422, [0])[-1]
+        if not reply_id:
+            continue
+        preview = ""
+        for nested in fields.get(47423, []):
+            if not isinstance(nested, bytes):
+                continue
+            nested_fields = _protobuf_fields(nested)
+            text_values = nested_fields.get(45101, [])
+            for value in text_values:
+                if isinstance(value, bytes):
+                    try:
+                        preview = value.decode("utf-8")
+                    except UnicodeDecodeError:
+                        preview = ""
+                    if preview:
+                        break
+            if not preview and nested_fields.get(45402):
+                preview = "[图片]"
+            if preview:
+                break
+        results.append({"id": str(reply_id), "preview": preview})
+    return results
 
 def _message_reply_id(message: Message) -> str | None:
     reply_id = _parse_reply_id(message.local_message or message.raw_message)
@@ -387,17 +477,40 @@ class QueryService:
     async def _attach_parts(db: AsyncSession, messages: list[Message]) -> None:
         if not messages:
             return
+        message_hashes = [message.msg_hash for message in messages]
         result = await db.execute(
             select(MessagePart)
-            .where(MessagePart.msg_hash.in_([message.msg_hash for message in messages]))
+            .where(MessagePart.msg_hash.in_(message_hashes))
             .order_by(MessagePart.msg_hash.asc(), MessagePart.ordinal.asc())
         )
         parts_by_hash: dict[str, list[MessagePart]] = {}
         for part in result.scalars().all():
             parts_by_hash.setdefault(part.msg_hash, []).append(part)
+        source_result = await db.execute(
+            select(MessageSourceRecord.msg_hash, MessageSourceRecord.raw_40800_protobuf)
+            .where(MessageSourceRecord.msg_hash.in_(message_hashes))
+        )
+        raw_by_hash = {msg_hash: raw for msg_hash, raw in source_result.all()}
         for message in messages:
-            message.parts = parts_by_hash.get(message.msg_hash, [])
-
+            parts = parts_by_hash.setdefault(message.msg_hash, [])
+            historical_replies = _qqnt_historical_reply_parts(raw_by_hash.get(message.msg_hash))
+            for reply_index, reply in enumerate(historical_replies):
+                part = next((item for item in parts if item.ordinal == reply_index), None)
+                payload = json.dumps(reply, ensure_ascii=False, sort_keys=True)
+                if part is None:
+                    part = MessagePart(
+                        id=-(reply_index + 1), msg_hash=message.msg_hash, ordinal=reply_index,
+                        part_type="reply", text_content=None, payload_json=payload,
+                        source_format="qqnt_local_db", render_status="parsed",
+                    )
+                    parts.append(part)
+                elif part.part_type in {"system", "unknown", "reply"}:
+                    part.part_type = "reply"
+                    part.text_content = None
+                    part.payload_json = payload
+                    part.source_format = part.source_format or "qqnt_local_db"
+                    part.render_status = "parsed"
+            message.parts = sorted(parts, key=lambda item: item.ordinal)
     @staticmethod
     async def _attach_reply_previews(db: AsyncSession, messages: list[Message]) -> None:
         reply_ids = {
