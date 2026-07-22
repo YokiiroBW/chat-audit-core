@@ -16,7 +16,7 @@ from collector.parsers.image import parse_image_element
 from collector.parsers.protobuf import decode_message_payload, json_safe
 from collector.parsers.reply import parse_reply_element
 from collector.parsers.system import parse_system_element
-from collector.parsers.text import parse_face_element, parse_text_element
+from collector.parsers.text import parse_at_element, parse_face_element, parse_text_element
 from collector.parsers.video import parse_video_element
 from collector.parsers.voice import parse_voice_element
 from collector.qqnt.versions.base import SourceMessageRow
@@ -116,6 +116,25 @@ def _qqnt_identity(row: SourceMessageRow, context: MessageParserContext) -> tupl
         is_outgoing = sender_qq == str(context.account_id)
     return canonical_sender, canonical_room, is_outgoing
 
+def _canonical_segment(element: dict[str, Any]) -> dict[str, Any]:
+    raw_type = str(element.get("type") or element.get("kind") or element.get("element_type") or "unknown").lower()
+    aliases = {"quote": "reply", "reply_message": "reply", "mention": "at", "mention_user": "at", "text_plain": "text"}
+    part_type = aliases.get(raw_type, raw_type)
+    data = dict(element.get("data")) if isinstance(element.get("data"), dict) else {
+        key: value for key, value in element.items() if key not in {"type", "kind", "element_type"}
+    }
+    if part_type == "reply":
+        reply_id = next((data.get(key) for key in ("id", "message_id", "msg_id", "source_message_id", "msgId") if data.get(key) is not None), None)
+        if reply_id is not None:
+            data["id"] = str(reply_id)
+    elif part_type == "at":
+        target_id = next((data.get(key) for key in ("qq", "user_id", "uid", "uin", "target_id", "targetUid") if data.get(key) is not None), None)
+        if target_id is not None:
+            data["qq"] = str(target_id)
+    elif part_type == "text" and data.get("text") is None and data.get("content") is not None:
+        data["text"] = str(data["content"])
+    return {"type": part_type[:20], "data": data}
+
 def parse_source_message(
     row: SourceMessageRow,
     context: MessageParserContext,
@@ -148,6 +167,8 @@ def parse_source_message(
                 result = parse_text_element(element)
             elif element_type in {"face", "emoji", "system_face"}:
                 result = parse_face_element(element)
+            elif element_type in {"at", "mention", "mention_user"}:
+                result = parse_at_element(element)
             elif element_type in {"image", "imageelement"}:
                 result = parse_image_element(element, ordinal=media_ordinal, resolver=media_resolver)
                 media_ordinal += 1
@@ -219,7 +240,7 @@ def parse_source_message(
             "canonical_room_id": canonical_room_id,
             "is_outgoing": is_outgoing,
             "source_event_type": "qqnt_local_db",
-            "message_segments": element_values or [],
+            "message_segments": [_canonical_segment(value) for value in (element_values or [])],
             "nickname": str(nickname) if nickname else None,
             "raw_message": raw_message,
             "local_message": raw_message,

@@ -1,4 +1,5 @@
 import json
+import json
 import re
 
 from sqlalchemy import case, desc, func, or_, select
@@ -34,6 +35,22 @@ def _parse_reply_id(value: str | None) -> str | None:
             return item.split("=", 1)[1]
     return None
 
+
+def _message_reply_id(message: Message) -> str | None:
+    reply_id = _parse_reply_id(message.local_message or message.raw_message)
+    if reply_id:
+        return reply_id
+    for part in getattr(message, "parts", []) or []:
+        if str(part.part_type or "").lower() != "reply":
+            continue
+        try:
+            payload = json.loads(part.payload_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        for key in ("id", "message_id", "msg_id", "source_message_id", "msgId"):
+            if payload.get(key) is not None:
+                return str(payload[key])
+    return None
 
 def _plain_message_preview(value: str | None) -> str:
     text = value or ""
@@ -386,7 +403,7 @@ class QueryService:
         reply_ids = {
             reply_id
             for message in messages
-            if (reply_id := _parse_reply_id(message.local_message or message.raw_message))
+            if (reply_id := _message_reply_id(message))
         }
         if not reply_ids:
             return
@@ -409,7 +426,7 @@ class QueryService:
                     if alias in unresolved_ids:
                         by_external_id[alias] = source_message
         for message in messages:
-            reply_id = _parse_reply_id(message.local_message or message.raw_message)
+            reply_id = _message_reply_id(message)
             message.reply_to_message_id = reply_id
             source = by_external_id.get(reply_id or "")
             if source is not None:

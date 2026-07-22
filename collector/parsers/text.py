@@ -24,3 +24,21 @@ def parse_face_element(element: dict[str, Any]) -> ElementResult:
     description = element.get("description") or element.get("name")
     suffix = f",name={cq_escape(description)}" if description else ""
     return ElementResult(f"[CQ:face,id={face_id}{suffix}]")
+
+def parse_at_element(element: dict[str, Any]) -> ElementResult:
+    target_id = next(
+        (
+            element.get(key)
+            for key in ("qq", "user_id", "uid", "uin", "target_id", "targetUid")
+            if element.get(key) is not None
+        ),
+        None,
+    )
+    if target_id is None:
+        return ElementResult("[QQNT:at,unresolved]")
+    display = next(
+        (element.get(key) for key in ("name", "display", "display_name", "text") if element.get(key)),
+        None,
+    )
+    suffix = f",name={cq_escape(display)}" if display else ""
+    return ElementResult(f"[CQ:at,qq={cq_escape(target_id)}{suffix}]")

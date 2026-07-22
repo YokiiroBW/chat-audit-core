@@ -121,3 +121,16 @@ async def test_media_asset_is_content_addressed_and_deduplicated(db_session, tmp
     assert len(assets) == 1
     assert assets[0].file_size == len(content)
     assert (tmp_path / first_path.removeprefix("/static/storage/")).exists()
+
+
+def test_normalize_message_segment_unifies_qqnt_aliases():
+    from app.services.message_service import MessageService
+
+    assert MessageService.normalize_message_segment({"type": "quote", "message_id": 123}) == {
+        "type": "reply",
+        "data": {"message_id": 123, "id": "123"},
+    }
+    assert MessageService.normalize_message_segment({"type": "mention", "user_id": 456}) == {
+        "type": "at",
+        "data": {"user_id": 456, "qq": "456"},
+    }

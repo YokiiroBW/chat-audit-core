@@ -218,6 +218,67 @@ class MessageService:
         return msg_hash
 
     @staticmethod
+    @staticmethod
+    def normalize_message_segment(segment: dict[str, Any]) -> dict[str, Any]:
+        raw_type = str(
+            segment.get("type") or segment.get("kind") or segment.get("element_type") or "unknown"
+        ).strip().lower()
+        type_aliases = {
+            "quote": "reply",
+            "reply_message": "reply",
+            "mention": "at",
+            "mention_user": "at",
+            "text_plain": "text",
+        }
+        part_type = type_aliases.get(raw_type, raw_type or "unknown")
+        raw_data = segment.get("data")
+        if isinstance(raw_data, dict):
+            data = dict(raw_data)
+        else:
+            data = {
+                key: value
+                for key, value in segment.items()
+                if key not in {"type", "kind", "element_type"}
+            }
+        if part_type == "reply":
+            reply_id = next(
+                (
+                    data.get(key)
+                    for key in ("id", "message_id", "msg_id", "source_message_id", "msgId")
+                    if data.get(key) is not None
+                ),
+                None,
+            )
+            if reply_id is not None:
+                data["id"] = str(reply_id)
+            preview = next(
+                (data.get(key) for key in ("preview", "text_preview", "content") if data.get(key)),
+                None,
+            )
+            if preview and "preview" not in data:
+                data["preview"] = str(preview)
+        elif part_type == "at":
+            target_id = next(
+                (
+                    data.get(key)
+                    for key in ("qq", "user_id", "uid", "uin", "target_id", "targetUid")
+                    if data.get(key) is not None
+                ),
+                None,
+            )
+            if target_id is not None:
+                data["qq"] = str(target_id)
+            display = next(
+                (data.get(key) for key in ("name", "display", "display_name", "text") if data.get(key)),
+                None,
+            )
+            if display and "name" not in data:
+                data["name"] = str(display)
+        elif part_type == "text" and data.get("text") is None:
+            value = data.get("content")
+            if value is not None:
+                data["text"] = str(value)
+        return {"type": part_type[:20], "data": data}
     async def _upsert_message_parts(
         db: AsyncSession,
         *,
@@ -230,8 +291,9 @@ class MessageService:
         for ordinal, segment in enumerate(segments):
             if not isinstance(segment, dict):
                 continue
-            part_type = str(segment.get("type") or "unknown")[:20]
-            data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+            normalized = MessageService.normalize_message_segment(segment)
+            part_type = normalized["type"]
+            data = normalized["data"]
             result = await db.execute(
                 select(MessagePart).where(MessagePart.msg_hash == msg_hash, MessagePart.ordinal == ordinal).with_for_update()
             )

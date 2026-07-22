@@ -526,3 +526,24 @@ def test_onebot_websocket_accepts_bearer_authorization_header_when_configured():
                 pass
     finally:
         app.dependency_overrides.clear()
+
+
+def test_normalize_message_event_preserves_onebot_reply_and_at_segments():
+    from app.adapters.onebot11 import normalize_message_event
+
+    normalized = normalize_message_event({
+        "post_type": "message",
+        "message_type": "private",
+        "self_id": 123456,
+        "user_id": 445566,
+        "raw_message": "reply @user",
+        "time": 1783000602,
+        "message": [
+            {"type": "reply", "data": {"id": "quoted-1"}},
+            {"type": "at", "data": {"qq": "998877", "name": "Bob"}},
+        ],
+    })
+
+    assert normalized is not None
+    assert normalized.msg_data["message_segments"][0]["data"]["id"] == "quoted-1"
+    assert normalized.msg_data["message_segments"][1]["data"]["qq"] == "998877"

@@ -320,3 +320,22 @@ def test_staging_full_does_not_create_fake_asset_or_invalid_complete_reference(t
     assert (reference["source_state"], reference["archive_state"]) == ("downloaded", "failed")
     assert "asset_file_hash" not in reference
     assert store.status_snapshot()["unresolved_parser_failures"] == 1
+
+
+def test_qqnt_reply_and_at_segments_use_onebot_compatible_shape():
+    parsed = parse_source_message(
+        _row({
+            "elements": [
+                {"type": "reply", "message_id": "quoted-1", "preview": "原消息"},
+                {"type": "at", "user_id": "998877", "name": "Bob"},
+            ]
+        }),
+        _context(),
+    )
+
+    assert parsed.item["message"]["message_segments"] == [
+        {"type": "reply", "data": {"message_id": "quoted-1", "preview": "原消息", "id": "quoted-1"}},
+        {"type": "at", "data": {"user_id": "998877", "name": "Bob", "qq": "998877"}},
+    ]
+    assert "[CQ:reply,id=quoted-1]" in parsed.item["message"]["raw_message"]
+    assert "[CQ:at,qq=998877" in parsed.item["message"]["raw_message"]
