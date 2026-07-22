@@ -1564,6 +1564,15 @@
         renderOneBotSegment(wrapper, segment);
         rendered = true;
       });
+      const hasTextPart = parts.some((part) => normalizeMessagePartForView(part).type === "text");
+      const legacyText = text(message.local_message || message.raw_message || "")
+        .replace(/\[QQNT:system,type=qqnt_type_7\]/g, "")
+        .replace(/\[QQNT:type=7\]/g, "")
+        .trim();
+      if (!hasTextPart && legacyText && !isMedia(legacyText)) {
+        appendLinkedText(wrapper, legacyText, "message-text");
+        rendered = true;
+      }
       if (!rendered) return false;
       container.appendChild(wrapper);
       return true;
