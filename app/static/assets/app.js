@@ -1969,8 +1969,9 @@
       const preview = document.createElement('div');
       preview.className = 'reply-preview';
       const backendPreview = replyPreviewText(params.id);
+      const partPreview = params.preview || params.text_preview || "";
       const isMissing = params.id && String(state.replyJumpMissingId || '') === String(params.id);
-      preview.textContent = isMissing ? '原消息未缓存或已被清理' : (backendPreview || (source
+      preview.textContent = isMissing ? '原消息未缓存或已被清理' : (backendPreview || partPreview || (source
         ? `${source.nickname || source.sender_id}: ${plainMessagePreview(source.local_message || source.raw_message)}`
         : '原消息暂未加载'));
       card.appendChild(preview);
