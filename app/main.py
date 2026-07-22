@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.api import public_router as public_api_router, router as api_router
+from app.api import media_router, public_router as public_api_router, router as api_router
 from app.config import Settings, get_settings
 from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
 from app.logging_config import setup_logging
@@ -181,6 +181,9 @@ def create_app(
             status_code=response.status_code,
             duration_seconds=duration_ms / 1000,
         )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
         logger.info(
             "HTTP request completed",
             extra={
@@ -207,7 +210,8 @@ def create_app(
 
         csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME)
         needs_cookie = csrf_cookie is None
-        if request.method not in CSRF_SAFE_METHODS and request.url.path not in CSRF_EXEMPT_PATHS and _is_browser_context(request):
+        request_path = str(request.scope.get("path") or request.url.path)
+        if request.method not in CSRF_SAFE_METHODS and request_path not in CSRF_EXEMPT_PATHS and _is_browser_context(request):
             if _is_cross_site_request(request):
                 return _csrf_response(active_settings)
             csrf_header = request.headers.get(CSRF_HEADER_NAME)
@@ -225,17 +229,13 @@ def create_app(
 
     app.dependency_overrides[get_db_session] = app_db_session
     app.mount(
-        active_settings.public_storage_prefix,
-        StaticFiles(directory=active_settings.storage_root, check_dir=False),
-        name="storage",
-    )
-    app.mount(
         "/assets",
         StaticFiles(directory=static_dir / "assets", check_dir=False),
         name="assets",
     )
     app.include_router(public_api_router, prefix="/api")
     app.include_router(api_router, prefix="/api")
+    app.include_router(media_router)
     app.include_router(ws_router)
 
     @app.get("/")

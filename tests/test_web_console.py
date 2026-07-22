@@ -35,7 +35,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "Chat Audit Collector" in favicon_response.text
     assert "linearGradient" in favicon_response.text
     assert "/assets/favicon.svg" in sw_response.text
-    assert "chat-audit-static-v14" in sw_response.text
+    assert "chat-audit-static-v15" in sw_response.text
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
@@ -73,7 +73,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "archive_state === 'thumbnail_only'" in page_bundle
     assert "msg.media || []" in page_bundle
     assert "refreshLiveMessages" in page_bundle
-    assert "window.setInterval(refreshLiveMessages, 2000)" in page_bundle
+    assert "window.setInterval(refreshLiveMessages, 5000)" in page_bundle
     assert "mergeMessages([...state.messageList, ...latest])" in page_bundle
     assert "reference.last_checked_at" in page_bundle
     assert "reference.archived_at" in page_bundle
@@ -91,7 +91,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "popstate" in page_bundle
     assert "搜索结果" in page_bundle
     assert "before_timestamp" in page_bundle
-    assert "static/storage" in page_bundle
+    assert "isLocalPath" in page_bundle and "before_source_sequence" in page_bundle
     assert "parseCQSegment" in page_bundle
     assert "renderCQJsonCard" in page_bundle
     assert "打开卡片网页" in page_bundle

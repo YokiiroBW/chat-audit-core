@@ -225,8 +225,8 @@ def test_database_key_validation_and_cursor_repository(tmp_path):
     qqnt_custom.write_bytes(b"SQLite header 3\x00" + b"\x00" * 16 + b"QQ_NT DB" + b"\x00" * 32)
     qqnt_result = SQLiteKeyValidator().validate(qqnt_custom, "unused")
     assert detect_database_format(qqnt_custom) == "qqnt_custom_vfs"
-    assert qqnt_result.status == "invalid"
-    assert qqnt_result.error_code == "DB_KEY_INVALID"
+    assert qqnt_result.status == "unsupported"
+    assert qqnt_result.error_code == "DB_SQLCIPHER_UNAVAILABLE"
 
     store = CollectorStateStore(tmp_path / "state.sqlite3")
     store.initialize()

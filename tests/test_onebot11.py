@@ -285,7 +285,7 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
     assert_only_group_info_actions(websocket)
     assert stub_client.requested_urls == ["http://media.local/ws-image.jpg"]
     assert len(messages) == 1
-    assert messages[0].local_message.startswith("/static/storage/")
+    assert messages[0].local_message.startswith("/media/")
     assert "http://media.local" not in messages[0].local_message
     assert static_response.status_code == 200
     assert static_response.content == media_bytes
@@ -353,7 +353,7 @@ async def test_onebot_forward_hydration_caches_payload_without_opening(tmp_path,
         await engine.dispose()
 
     assert stub_client.requested_urls == ["http://media.local/forward.jpg"]
-    assert "local=/static/storage/" in messages[0].local_message
+    assert "local=/media/" in messages[0].local_message
 
 
 @pytest.mark.asyncio

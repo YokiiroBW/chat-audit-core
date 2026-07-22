@@ -1,10 +1,8 @@
 ﻿import base64
 import json
-import base64
-import json
 import re
 
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -285,16 +283,26 @@ class QueryService:
         room_ids = [row.room_id for row in rows]
         qq_candidates: dict[str, list[str]] = {room_id: [] for room_id in room_ids}
         if room_ids:
-            source_result = await db.execute(
-                select(Message.room_id, Message.message_type, MessageSourceRecord.raw_columns_json)
+            ranked_sources = (
+                select(
+                    Message.room_id.label("room_id"),
+                    Message.message_type.label("message_type"),
+                    MessageSourceRecord.raw_columns_json.label("raw_columns_json"),
+                    func.row_number().over(
+                        partition_by=Message.room_id,
+                        order_by=(Message.timestamp.desc(), func.coalesce(Message.source_sequence, -1).desc(), Message.msg_hash.desc()),
+                    ).label("room_rank"),
+                )
                 .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
                 .outerjoin(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
-                .where(RobotMessage.robot_id == robot_id, Message.room_id.in_(room_ids))
-                .order_by(Message.timestamp.desc())
+                .where(RobotMessage.robot_id == robot_id, Message.room_id.in_(room_ids), Message.message_type == "private")
+                .subquery()
+            )
+            source_result = await db.execute(
+                select(ranked_sources.c.room_id, ranked_sources.c.message_type, ranked_sources.c.raw_columns_json)
+                .where(ranked_sources.c.room_rank <= 50)
             )
             for room_id, message_type, raw_columns_json in source_result.all():
-                if message_type != "private" or len(qq_candidates[room_id]) >= 50:
-                    continue
                 qq_number = _qq_number_from_raw(raw_columns_json, robot_id, message_type=message_type)
                 if qq_number:
                     qq_candidates[room_id].append(qq_number)
@@ -352,6 +360,8 @@ class QueryService:
         robot_id: str,
         room_id: str,
         before_timestamp: int | None = None,
+        before_source_sequence: int | None = None,
+        before_msg_hash: str | None = None,
         around_message_id: str | None = None,
         media_state: str | None = None,
         limit: int = 50,
@@ -404,7 +414,22 @@ class QueryService:
         )
         stmt = QueryService._apply_media_state_filter(stmt, media_state)
         if before_timestamp is not None:
-            stmt = stmt.where(Message.timestamp < before_timestamp)
+            if before_source_sequence is not None and before_msg_hash:
+                source_sequence = func.coalesce(Message.source_sequence, -1)
+                stmt = stmt.where(
+                    or_(
+                        Message.timestamp < before_timestamp,
+                        and_(
+                            Message.timestamp == before_timestamp,
+                            or_(
+                                source_sequence < before_source_sequence,
+                                and_(source_sequence == before_source_sequence, Message.msg_hash < before_msg_hash),
+                            ),
+                        ),
+                    )
+                )
+            else:
+                stmt = stmt.where(Message.timestamp < before_timestamp)
 
         # Cursor loading needs the newest N messages before the cursor, then returns
         # them in chronological order for stable chat rendering.

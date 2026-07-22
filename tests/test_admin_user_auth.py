@@ -258,3 +258,61 @@ async def test_admin_can_list_and_force_revoke_sessions(db_session):
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
     assert after_revoke.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_media_routes_require_auth_and_accept_http_only_session_cookie(db_session, tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    (storage_root / "proof.txt").write_text("private", encoding="utf-8")
+    settings = Settings(admin_api_token="bootstrap-admin", storage_root=storage_root)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            anonymous = await client.get("/media/proof.txt")
+            exchanged = await client.post("/api/auth/session", headers={"Authorization": "Bearer bootstrap-admin"})
+            authenticated = await client.get("/media/proof.txt")
+            traversal = await client.get("/media/../proof.txt")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert anonymous.status_code == 401
+    assert exchanged.status_code == 204
+    assert "chat_audit_session=" in exchanged.headers["set-cookie"]
+    assert "HttpOnly" in exchanged.headers["set-cookie"]
+    assert authenticated.status_code == 200
+    assert authenticated.text == "private"
+    assert traversal.status_code in {401, 404}
+
+
+@pytest.mark.asyncio
+async def test_password_login_sets_http_only_session_cookie(db_session):
+    settings = Settings(admin_api_token="bootstrap-admin")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            created = await client.post(
+                "/api/admin/users",
+                headers={"Authorization": "Bearer bootstrap-admin"},
+                json={"username": "cookie-user", "password": "strong-password-1", "role": "viewer"},
+            )
+            login = await client.post("/api/auth/login", json={"username": "cookie-user", "password": "strong-password-1"})
+            me = await client.get("/api/auth/me")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert created.status_code == 201
+    assert login.status_code == 200
+    assert "HttpOnly" in login.headers["set-cookie"]
+    assert me.status_code == 200
+    assert me.json()["username"] == "cookie-user"

@@ -1,3 +1,23 @@
+    const DEFAULT_PALETTE = Object.freeze({
+      primary: '#1d4ed8',
+      secondary: '#dbeafe',
+      contrast: '#14b8a6',
+    });
+    const loadPalette = () => {
+      try {
+        const saved = JSON.parse(localStorage.getItem('chatAuditPalette') || 'null');
+        if (!saved || typeof saved !== 'object') return { ...DEFAULT_PALETTE };
+        return {
+          primary: typeof saved.primary === 'string' ? saved.primary : DEFAULT_PALETTE.primary,
+          secondary: typeof saved.secondary === 'string' ? saved.secondary : DEFAULT_PALETTE.secondary,
+          contrast: typeof saved.contrast === 'string' ? saved.contrast : DEFAULT_PALETTE.contrast,
+        };
+      } catch {
+        localStorage.removeItem('chatAuditPalette');
+        return { ...DEFAULT_PALETTE };
+      }
+    };
+
     const state = {
       accountList: [],
       adapterList: [],
@@ -58,18 +78,15 @@
         originX: 0,
         originY: 0,
       },
-      palette: JSON.parse(localStorage.getItem('chatAuditPalette') || 'null') || {
-        primary: '#1d4ed8',
-        secondary: '#dbeafe',
-        contrast: '#14b8a6',
-      },
-      adminApiToken: localStorage.getItem('chatAuditAdminApiToken') || '',
+      palette: loadPalette(),
+      adminApiToken: '',
       authGeneration: 0,
       liveRefreshTimer: null,
       liveRefreshBusy: false,
       liveRefreshTick: 0,
       mediaStateFilter: 'all',
       detailMessage: null,
+      modalTrigger: null,
     };
 
     const el = (id) => document.getElementById(id);
@@ -97,15 +114,41 @@
     const roleRank = (role) => ({ viewer: 1, operator: 2, admin: 3 })[role] || 1;
     const canRole = (role) => roleRank(currentRole()) >= roleRank(role);
 
-    const promptForAdminApiToken = () => {
-      const token = window.prompt('请输入管理 API Token（不是网页登录密码）');
-      if (token && token.trim()) {
-        state.adminApiToken = token.trim();
-        state.authGeneration += 1;
-        localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
-        return true;
+    const establishBrowserSession = async (token) => {
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: csrfHeaders('POST', { Authorization: `Bearer ${token}` }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, '/api/auth/session'));
       }
-      return false;
+      state.adminApiToken = '';
+      state.authGeneration += 1;
+    };
+
+    const promptForAdminApiToken = async () => {
+      const token = window.prompt('Enter an admin API token');
+      if (!token || !token.trim()) return false;
+      try {
+        await establishBrowserSession(token.trim());
+        await refreshAuthIdentity();
+        return true;
+      } catch (error) {
+        state.authError = error.message || String(error);
+        renderSettings();
+        return false;
+      }
+    };
+
+    const migrateLegacyAdminApiToken = async () => {
+      const legacyToken = localStorage.getItem('chatAuditAdminApiToken');
+      if (!legacyToken) return;
+      localStorage.removeItem('chatAuditAdminApiToken');
+      try {
+        await establishBrowserSession(legacyToken);
+      } catch (error) {
+        pushUiLog(`legacy token migration failed: ${error.message || error}`, 'warning');
+      }
     };
 
     const authHeaders = (headers = {}) => {
@@ -165,16 +208,18 @@
     const shouldRetryResponse = (response) => response.status === 429 || response.status >= 500;
 
     const requestWithRetry = async (url, options = {}, { retries = 2 } = {}) => {
-      const method = options.method || 'GET';
+      const method = (options.method || 'GET').toUpperCase();
+      const safeToRetry = ['GET', 'HEAD', 'OPTIONS'].includes(method);
+      const retryCount = safeToRetry ? retries : 0;
       const requestAuthGeneration = state.authGeneration;
-      for (let attempt = 0; attempt <= retries; attempt += 1) {
+      for (let attempt = 0; attempt <= retryCount; attempt += 1) {
         try {
           const headers = csrfHeaders(method, authHeaders(options.headers || {}));
           let response = await fetch(url, { ...options, headers });
           if (response.status === 401 && attempt === 0) {
             const tokenChangedWhileRequesting = state.authGeneration !== requestAuthGeneration;
             const canReuseNewToken = tokenChangedWhileRequesting && Boolean(state.adminApiToken);
-            if (!canReuseNewToken && !promptForAdminApiToken()) return response;
+            if (!canReuseNewToken && !(await promptForAdminApiToken())) return response;
             response = await fetch(url, {
               ...options,
               headers: csrfHeaders(method, authHeaders(options.headers || {})),
@@ -186,8 +231,8 @@
           }
           const technicalMessage = await responseErrorMessage(response, url);
           const userMessage = friendlyHttpErrorMessage(response, technicalMessage);
-          if (shouldRetryResponse(response) && attempt < retries) {
-            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retries}: ${userMessage}`, 'warning');
+          if (safeToRetry && shouldRetryResponse(response) && attempt < retryCount) {
+            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retryCount}: ${userMessage}`, 'warning');
             await sleep(1000 * (attempt + 1));
             continue;
           }
@@ -198,9 +243,9 @@
         } catch (error) {
           if (error.technicalMessage) throw error;
           if (error && error.name === 'AbortError') throw error;
-          if (attempt < retries) {
+          if (safeToRetry && attempt < retryCount) {
             const userMessage = friendlyNetworkErrorMessage(error);
-            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retries}: ${userMessage}`, 'warning');
+            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retryCount}: ${userMessage}`, 'warning');
             await sleep(1000 * (attempt + 1));
             continue;
           }
@@ -269,11 +314,11 @@
       img.src = url;
       container.appendChild(img);
     };
-    const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
+    const isMedia = (value) => typeof value === 'string' && (value.includes('/media/') || value.includes('/static/storage/'));
     const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
-    const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
+    const isLocalPath = (value) => typeof value === 'string' && (value.startsWith('/media/') || value.startsWith('/static/storage/'));
     const isRemoteUrl = (value) => /^https?:\/\//i.test(String(value || ''));
     const isSafeProtocol = (url) => ['http:', 'https:'].includes(url.protocol);
     const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.:@-]+$/;
@@ -2674,15 +2719,16 @@
     }
 
     async function refreshAuthIdentity() {
-      if (!state.adminApiToken) {
-        state.authIdentity = null;
-        state.authError = '';
-        renderSettings();
-        return;
-      }
       try {
-        state.authIdentity = await apiGet('/api/auth/me');
-        state.authError = '';
+        const response = await fetch('/api/auth/me');
+        if (!response.ok) {
+          if (response.status !== 401) throw new Error(await responseErrorMessage(response, '/api/auth/me'));
+          state.authIdentity = null;
+          state.authError = '';
+        } else {
+          state.authIdentity = await response.json();
+          state.authError = '';
+        }
       } catch (error) {
         state.authIdentity = null;
         state.authError = error.message || String(error);
@@ -2749,21 +2795,18 @@
         renderSettings();
         return;
       }
-      const payload = await response.json();
-      state.adminApiToken = payload.token;
-      localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
-      state.authIdentity = { ...payload.user, actor: `db-user:${payload.user.username}` };
-      state.authError = '';
+      await response.json();
+      state.adminApiToken = '';
+      state.authGeneration += 1;
+      await refreshAuthIdentity();
       await loadAdapters();
     }
 
     async function logoutAuth() {
-      if (state.adminApiToken) {
-        try {
-          await apiSend('/api/auth/logout', 'POST');
-        } catch {
-          // Logging out should still clear local state if the remote session is already gone.
-        }
+      try {
+        await fetch('/api/auth/logout', { method: 'POST', headers: csrfHeaders('POST') });
+      } catch {
+        // Logging out still clears local state when the remote session is unavailable.
       }
       state.adminApiToken = '';
       localStorage.removeItem('chatAuditAdminApiToken');
@@ -2905,12 +2948,15 @@
       renderAll();
     }
 
-    const loadMessages = async (beforeTimestamp = null, aroundMessageId = '', limit = 50, roomOverride = null, signal = null) => {
+    const loadMessages = async (beforeTimestamp = null, aroundMessageId = '', limit = 50, roomOverride = null, signal = null, beforeCursor = null) => {
       const room = roomOverride || state.currentRoom;
       if (!state.currentRobot || !room) return [];
       const normalizedLimit = Math.max(1, Math.min(200, Number(limit) || 50));
       let url = `/api/messages?robot_id=${encodeURIComponent(state.currentRobot.id)}&room_id=${encodeURIComponent(room.room_id)}&limit=${normalizedLimit}`;
       if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
+      if (beforeCursor && Number.isFinite(Number(beforeCursor.source_sequence)) && beforeCursor.msg_hash) {
+        url += `&before_source_sequence=${encodeURIComponent(beforeCursor.source_sequence)}&before_msg_hash=${encodeURIComponent(beforeCursor.msg_hash)}`;
+      }
       if (aroundMessageId) url += `&around_message_id=${encodeURIComponent(aroundMessageId)}`;
       if (state.mediaStateFilter !== 'all') url += `&media_state=${encodeURIComponent(state.mediaStateFilter)}`;
       return await apiGet(url, signal ? { signal } : {});
@@ -3021,7 +3067,7 @@
 
     const startLiveRefresh = () => {
       if (state.liveRefreshTimer) window.clearInterval(state.liveRefreshTimer);
-      state.liveRefreshTimer = window.setInterval(refreshLiveMessages, 2000);
+      state.liveRefreshTimer = window.setInterval(refreshLiveMessages, 5000);
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) refreshLiveMessages();
       });
@@ -3101,12 +3147,15 @@
       const historyToken = ++state.historyLoadToken;
       const oldScrollHeight = chat.scrollHeight;
       const oldScrollTop = chat.scrollTop;
-      const cursorTimestamp = state.messageList[0].timestamp;
+      const oldestMessage = state.messageList[0];
+      const cursorTimestamp = oldestMessage.timestamp;
+      const cursor = { source_sequence: oldestMessage.source_sequence ?? -1, msg_hash: oldestMessage.msg_hash };
+
       state.loadingHistory = true;
       renderChat();
       let restoreScrollTop = oldScrollTop;
       try {
-        const older = await loadMessages(cursorTimestamp, '', 50, state.currentRoom);
+        const older = await loadMessages(cursorTimestamp, '', 50, state.currentRoom, null, cursor);
         if (historyToken !== state.historyLoadToken || roomLoadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== roomId) return;
         if (older.length > 0) {
           state.messageList = [...older, ...state.messageList];
@@ -3383,9 +3432,17 @@
       openModal('messageDetailModal');
     };
 
-    const openModal = (id) => el(id).classList.add('open');
+    const openModal = (id) => {
+      const modal = el(id);
+      state.modalTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      modal.classList.add('open');
+      modal.setAttribute('aria-hidden', 'false');
+      requestAnimationFrame(() => modal.querySelector('[autofocus], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus());
+    };
     const closeModal = (id) => {
-      el(id).classList.remove('open');
+      const modal = el(id);
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
       if (id === 'imagePreviewModal') {
         el('imagePreviewImg').removeAttribute('src');
         el('imagePreviewCaption').textContent = '';
@@ -3395,6 +3452,9 @@
         el('forwardPreviewCaption').textContent = '';
         clearNode(el('forwardPreviewBody'));
       }
+      const trigger = state.modalTrigger;
+      state.modalTrigger = null;
+      if (trigger && document.contains(trigger)) trigger.focus();
     };
 
     const closeFloatingPanels = () => {
@@ -3635,6 +3695,19 @@
         if (!clickedPalette && !clickedLog) closeFloatingPanels();
       });
       document.addEventListener('keydown', (event) => {
+        if (event.key === 'Tab') {
+          const modal = document.querySelector('.modal-backdrop.open');
+          if (modal) {
+            const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+            if (focusable.length) {
+              const first = focusable[0];
+              const last = focusable[focusable.length - 1];
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+            }
+          }
+          return;
+        }
         if (event.key === 'Escape') {
           if (state.selectionMode) {
             exitSelectionMode();
@@ -3690,7 +3763,7 @@
     applyTheme();
     pushUiLog('控制台启动');
     renderAll();
-    loadAdapters().catch((error) => {
+    migrateLegacyAdminApiToken().finally(() => loadAdapters().catch((error) => {
       console.error(error);
       el('roomList').appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '控制台加载失败，请检查 API 或管理 Token。' }));
-    });
+    }));

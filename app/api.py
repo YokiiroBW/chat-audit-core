@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,8 +170,13 @@ async def require_admin_api_token(
 
     header_token = request.headers.get("x-admin-token")
     bearer_token = _extract_bearer_token(request.headers.get("authorization"))
-    provided_token = header_token or bearer_token
-    matched = token_records.get(header_token or "") or token_records.get(bearer_token or "")
+    cookie_token = request.cookies.get(settings.auth_session_cookie_name)
+    provided_token = header_token or bearer_token or cookie_token
+    matched = (
+        token_records.get(header_token or "")
+        or token_records.get(bearer_token or "")
+        or token_records.get(cookie_token or "")
+    )
     if matched:
         request.state.admin_role = matched["role"]
         request.state.admin_actor = matched["name"]
@@ -205,6 +211,7 @@ async def require_admin_api_token(
 
 public_router = APIRouter()
 router = APIRouter(dependencies=[Depends(require_admin_api_token)])
+media_router = APIRouter(dependencies=[Depends(require_admin_api_token)])
 
 
 def _client_ip(request: Request) -> str | None:
@@ -326,10 +333,56 @@ async def _audit(
     )
 
 
+def _set_auth_session_cookie(response: Response, settings: Settings, token: str) -> None:
+    response.set_cookie(
+        settings.auth_session_cookie_name,
+        token,
+        httponly=True,
+        secure=settings.auth_session_cookie_secure,
+        samesite="strict",
+        max_age=86400 * 7,
+        path="/",
+    )
+
+
+def _clear_auth_session_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        settings.auth_session_cookie_name,
+        secure=settings.auth_session_cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+
+
+def _storage_file_path(storage_root: Path, file_name: str) -> Path | None:
+    root = storage_root.resolve()
+    candidate = (root / file_name).resolve()
+    if candidate == root or not candidate.is_relative_to(root):
+        return None
+    return candidate
+
+
+@media_router.get("/media/{file_name:path}", include_in_schema=False)
+@media_router.get("/static/storage/{file_name:path}", include_in_schema=False)
+async def download_media_file(
+    file_name: str,
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    file_path = _storage_file_path(settings.storage_root, file_name)
+    if file_path is None or not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media file not found")
+    return FileResponse(
+        file_path,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @public_router.post("/auth/login", response_model=AuthLoginResponse)
 async def login_admin_user(
     payload: AuthLoginRequest,
     request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db_session),
 ) -> AuthLoginResponse:
     user = await AdminUserService.authenticate(db, username=payload.username, password=payload.password)
@@ -354,7 +407,25 @@ async def login_admin_user(
         target=str(user.id),
         detail={"role": user.role},
     )
+    _set_auth_session_cookie(response, settings, token)
     return AuthLoginResponse(token=token, user=AdminUserResponse.model_validate(user))
+
+
+@router.post("/auth/session", status_code=status.HTTP_204_NO_CONTENT)
+async def establish_browser_session(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    token = (
+        request.headers.get("x-admin-token")
+        or _extract_bearer_token(request.headers.get("authorization"))
+        or request.cookies.get(settings.auth_session_cookie_name)
+    )
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing admin api token")
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _set_auth_session_cookie(response, settings, token)
+    return response
 
 
 @router.get("/auth/me", response_model=AuthMeResponse)
@@ -371,13 +442,20 @@ async def get_auth_identity(request: Request) -> AuthMeResponse:
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_admin_user(
     request: Request,
+    settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    token = _extract_bearer_token(request.headers.get("authorization"))
+    token = (
+        request.headers.get("x-admin-token")
+        or _extract_bearer_token(request.headers.get("authorization"))
+        or request.cookies.get(settings.auth_session_cookie_name)
+    )
     if token:
         await AdminUserService.revoke_session(db, token)
     await _audit(db, request, action="auth.logout", status_="success")
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_auth_session_cookie(response, settings)
+    return response
 
 
 @router.get("/adapters", response_model=list[AdapterResponse])
@@ -957,6 +1035,8 @@ async def list_messages(
     robot_id: str = Query(..., min_length=1),
     room_id: str = Query(..., min_length=1),
     before_timestamp: int | None = Query(default=None),
+    before_source_sequence: int | None = Query(default=None),
+    before_msg_hash: str | None = Query(default=None, min_length=1),
     around_message_id: str | None = Query(default=None, min_length=1),
     media_state: str | None = Query(default=None, pattern="^(all|any|complete|not_downloaded|missing|failed)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -968,6 +1048,8 @@ async def list_messages(
         robot_id=robot_id,
         room_id=room_id,
         before_timestamp=before_timestamp,
+        before_source_sequence=before_source_sequence,
+        before_msg_hash=before_msg_hash,
         around_message_id=around_message_id,
         media_state=media_state,
         limit=limit,
@@ -978,6 +1060,8 @@ async def list_messages(
             robot_id=robot_id,
             room_id=room_id,
             before_timestamp=before_timestamp,
+            before_source_sequence=before_source_sequence,
+            before_msg_hash=before_msg_hash,
             around_message_id=around_message_id,
             media_state=media_state,
             limit=limit,

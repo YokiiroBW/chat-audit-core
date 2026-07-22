@@ -502,3 +502,48 @@ async def test_bots_api_refreshes_placeholder_svg_avatar(db_session, monkeypatch
 
     assert response.status_code == 200
     assert response.json()[0]["avatar_path"] == "/static/storage/bot-real.jpg"
+
+
+@pytest.mark.asyncio
+async def test_messages_api_composite_cursor_keeps_same_timestamp_rows(db_session):
+    for offset in range(3):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "room_id": "group-composite-cursor",
+                "message_type": "group",
+                "sender_id": f"user-{offset}",
+                "nickname": f"User {offset}",
+                "raw_message": f"same-second {offset}",
+                "timestamp": 1783000200,
+                "source_sequence": offset,
+            },
+        )
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            newest = await client.get("/api/messages", params={"robot_id": "robot-a", "room_id": "group-composite-cursor", "limit": 1})
+            cursor = newest.json()[0]
+            older = await client.get(
+                "/api/messages",
+                params={
+                    "robot_id": "robot-a",
+                    "room_id": "group-composite-cursor",
+                    "before_timestamp": cursor["timestamp"],
+                    "before_source_sequence": cursor["source_sequence"] if cursor["source_sequence"] is not None else -1,
+                    "before_msg_hash": cursor["msg_hash"],
+                    "limit": 10,
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert newest.status_code == 200
+    assert older.status_code == 200
+    assert {item["raw_message"] for item in older.json()} == {"same-second 0", "same-second 1"}

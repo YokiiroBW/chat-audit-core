@@ -1,9 +1,11 @@
 import asyncio
 import html
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -240,13 +242,73 @@ def _media_type_from_url(url: str, fallback: str = "file") -> str:
 
 def _normalize_http_url(url: str) -> str | None:
     value = url.strip()
-    if value.startswith(("http://", "https://")):
-        return value
     if value.startswith("//"):
-        return f"https:{value}"
-    if "." in value and not value.startswith(("/", "#")):
-        return f"https://{value}"
-    return None
+        value = f"https:{value}"
+    elif not value.startswith(("http://", "https://")):
+        if "." not in value or value.startswith(("/", "#")):
+            return None
+        value = f"https://{value}"
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        port = parsed.port
+        if port is not None and port not in {80, 443}:
+            return None
+    except ValueError:
+        return None
+    return value
+
+
+def _is_public_ip_address(value: str) -> bool:
+    address = ipaddress.ip_address(value)
+    return not any((
+        address.is_private,
+        address.is_loopback,
+        address.is_link_local,
+        address.is_multicast,
+        address.is_reserved,
+        address.is_unspecified,
+    ))
+
+
+async def _validate_download_url(url: str, *, resolve_host: bool) -> str | None:
+    normalized = _normalize_http_url(url)
+    if normalized is None:
+        return None
+    host = urlparse(normalized).hostname
+    if not host:
+        return None
+    try:
+        literal_is_public = _is_public_ip_address(host)
+    except ValueError:
+        literal_is_public = None
+    if literal_is_public is False:
+        return None
+    if not resolve_host:
+        return normalized
+    try:
+        if literal_is_public is None:
+            loop = asyncio.get_running_loop()
+            resolved = await loop.run_in_executor(None, lambda: socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+            if not resolved or any(not _is_public_ip_address(item[4][0]) for item in resolved):
+                return None
+    except (OSError, ValueError):
+        return None
+    return normalized
+
+
+async def _read_response_bytes(response: Any, max_bytes: int) -> bytes | None:
+    content = bytearray()
+    iterator = getattr(response, "aiter_bytes", None)
+    if callable(iterator):
+        async for chunk in iterator():
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                return None
+        return bytes(content)
+    body = bytes(response.content)
+    return body if len(body) <= max_bytes else None
 
 
 def _normalize_card_url_key(key: str | None) -> str:
@@ -573,27 +635,42 @@ class MediaService:
         client = http_client or httpx.AsyncClient()
         download_status = "unknown"
         try:
+            normalized_url = await _validate_download_url(url, resolve_host=owns_client or type(client).__module__.startswith("httpx"))
+            if normalized_url is None:
+                download_status = "unsafe_url"
+                logger.warning("Media download rejected unsafe URL", extra={"url": url, "media_type": media_type})
+                return None
             try:
-                response = await client.get(url)
+                try:
+                    response = await client.get(normalized_url, follow_redirects=False)
+                except TypeError:
+                    response = await client.get(normalized_url)
             except (httpx.HTTPError, KeyError) as exc:
                 download_status = "request_error"
                 logger.warning(
                     "Media download request failed",
-                    extra={"url": url, "media_type": media_type, "error": str(exc)},
+                    extra={"url": normalized_url, "media_type": media_type, "error": str(exc)},
+                )
+                return None
+            if 300 <= response.status_code < 400:
+                download_status = "redirect_rejected"
+                logger.warning(
+                    "Media download redirect rejected",
+                    extra={"url": normalized_url, "media_type": media_type, "location": response.headers.get("location")},
                 )
                 return None
             if response.status_code >= 400:
                 download_status = "upstream_error"
                 logger.warning(
                     "Media download rejected by upstream",
-                    extra={"url": url, "media_type": media_type, "status_code": response.status_code},
+                    extra={"url": normalized_url, "media_type": media_type, "status_code": response.status_code},
                 )
                 return None
             if not _is_allowed_download_content_type(media_type, response.headers.get("content-type")):
                 download_status = "content_type_rejected"
                 logger.warning(
                     "Media download content type rejected",
-                    extra={"url": url, "media_type": media_type, "content_type": response.headers.get("content-type")},
+                    extra={"url": normalized_url, "media_type": media_type, "content_type": response.headers.get("content-type")},
                 )
                 return None
             content_length = response.headers.get("content-length")
@@ -601,19 +678,20 @@ class MediaService:
                 download_status = "too_large"
                 logger.warning(
                     "Media download content length exceeds limit",
-                    extra={"url": url, "media_type": media_type, "content_length": int(content_length), "max_bytes": media_max_bytes},
+                    extra={"url": normalized_url, "media_type": media_type, "content_length": int(content_length), "max_bytes": media_max_bytes},
                 )
                 return None
-            if len(response.content) > media_max_bytes:
+            content = await _read_response_bytes(response, media_max_bytes)
+            if content is None:
                 download_status = "too_large"
                 logger.warning(
                     "Media download body exceeds limit",
-                    extra={"url": url, "media_type": media_type, "content_length": len(response.content), "max_bytes": media_max_bytes},
+                    extra={"url": normalized_url, "media_type": media_type, "max_bytes": media_max_bytes},
                 )
                 return None
-            ext = _guess_ext(url, file_name, media_type)
+            ext = _guess_ext(normalized_url, file_name, media_type)
             content, ext = await MediaService._maybe_transcode_media(
-                response.content,
+                content,
                 media_type,
                 ext,
                 enabled=settings.media_transcode_enabled if transcode_enabled is None else transcode_enabled,

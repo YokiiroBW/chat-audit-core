@@ -628,3 +628,35 @@ async def test_cache_cq_forward_payloads_stops_at_configured_depth(db_session, t
     assert "[CQ:forward,id=inner-forward]" in nested_message
     assert "local=" not in nested_message
     assert seen == ["outer-forward"]
+
+
+@pytest.mark.asyncio
+async def test_download_url_to_local_path_rejects_private_network_targets(db_session, tmp_path):
+    client = StubAsyncClient({"http://127.0.0.1/private.jpg": b"private"})
+
+    local_path = await MediaService.download_url_to_local_path(
+        db_session,
+        "http://127.0.0.1/private.jpg",
+        media_type="image",
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/media",
+    )
+
+    assert local_path is None
+    assert client.requested_urls == []
+
+
+@pytest.mark.asyncio
+async def test_download_url_to_local_path_rejects_credential_and_custom_port_urls(db_session, tmp_path):
+    client = StubAsyncClient({})
+    credential_path = await MediaService.download_url_to_local_path(
+        db_session, "https://user:password@example.com/a.jpg", http_client=client, storage_root=tmp_path
+    )
+    custom_port_path = await MediaService.download_url_to_local_path(
+        db_session, "https://example.com:8443/a.jpg", http_client=client, storage_root=tmp_path
+    )
+
+    assert credential_path is None
+    assert custom_port_path is None
+    assert client.requested_urls == []

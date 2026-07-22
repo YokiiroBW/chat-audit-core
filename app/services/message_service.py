@@ -383,8 +383,13 @@ class MessageService:
     def local_media_paths_by_ordinal(local_message: str | None, public_prefix: str = "/static/storage") -> list[str | None]:
         from app.services.media_service import _parse_cq_params
 
-        prefix = public_prefix.rstrip("/") + "/"
-        local_path_pattern = rf"{re.escape(prefix)}[^\s\"'<>),\]]+?\.[a-z0-9]+"
+        prefixes = tuple(dict.fromkeys((
+            public_prefix.rstrip("/") + "/",
+            "/media/",
+            "/static/storage/",
+        )))
+        escaped_prefixes = "|".join(re.escape(prefix) for prefix in prefixes)
+        local_path_pattern = rf"(?:{escaped_prefixes})[^\s\"'<>),\]]+?\.[a-z0-9]+"
         pattern = re.compile(rf"\[CQ:(?:image|record|video|file),([^\]]*)\]|({local_path_pattern})", re.I)
         paths: list[str | None] = []
         for match in pattern.finditer(local_message or ""):
@@ -393,7 +398,7 @@ class MessageService:
                 continue
             params = _parse_cq_params(match.group(1) or "")
             candidate = params.get("local") or params.get("file") or params.get("url")
-            paths.append(candidate if isinstance(candidate, str) and candidate.startswith(prefix) else None)
+            paths.append(candidate if isinstance(candidate, str) and candidate.startswith(prefixes) else None)
         return paths
 
     @staticmethod

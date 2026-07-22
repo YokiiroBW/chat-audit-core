@@ -1,4 +1,4 @@
-const CACHE_NAME = 'chat-audit-static-v14';
+const CACHE_NAME = 'chat-audit-static-v15';
 const STATIC_ASSETS = [
   '/',
   '/assets/favicon.svg',
@@ -37,7 +37,7 @@ self.addEventListener('fetch', (event) => {
     );
     return;
   }
-  if (!STATIC_ASSETS.includes(url.pathname)) {
+  if (!STATIC_ASSETS.some((asset) => new URL(asset, self.location.origin).pathname === url.pathname)) {
     return;
   }
   event.respondWith(

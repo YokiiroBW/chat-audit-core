@@ -18,13 +18,14 @@ from collector.sync.state import CollectorStateStore
 
 
 def _write_config(path: Path, root: Path, *, extra: str = "") -> None:
+    escaped_root = str(root).replace("\\", "\\\\")
     path.write_text(
         f"""
 [collector]
 account_id = "123456789"
 device_id = "test-device"
 device_name = "Test PC"
-data_dir = "{str(root).replace('\\', '\\\\')}"
+data_dir = "{escaped_root}"
 sync_interval_minutes = 1
 reconcile_interval_hours = 1
 staging_max_gb = 1

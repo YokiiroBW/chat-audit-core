@@ -24,7 +24,9 @@ class Settings(BaseSettings):
 
     storage_root: Path = Path("./data/storage")
     backup_root: Path = Path("./data/backups")
-    public_storage_prefix: str = "/static/storage"
+    public_storage_prefix: str = "/media"
+    auth_session_cookie_name: str = "chat_audit_session"
+    auth_session_cookie_secure: bool = False
 
     onebot_ws_path: str = "/onebot/v11/ws"
     onebot_access_token: str = ""
