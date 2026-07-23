@@ -1,10 +1,14 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -93,24 +97,33 @@ class MessageService:
         target_path = root / filename
 
         if not target_path.exists():
-            target_path.write_bytes(file_content)
+            temp_path = root / f".{filename}.{uuid4().hex}.tmp"
+            try:
+                temp_path.write_bytes(file_content)
+                os.replace(temp_path, target_path)
+            finally:
+                temp_path.unlink(missing_ok=True)
 
         local_path = f"{prefix.rstrip('/')}/{filename}"
-        result = await db.execute(select(MediaAsset).where(MediaAsset.file_hash == file_hash))
+        asset_values = {
+            "file_hash": file_hash,
+            "content_sha256": content_sha256,
+            "file_type": file_type,
+            "file_size": len(file_content),
+            "local_path": local_path,
+        }
+        dialect_name = db.get_bind().dialect.name
+        insert_factory = postgresql_insert if dialect_name == "postgresql" else sqlite_insert
+        await db.execute(
+            insert_factory(MediaAsset)
+            .values(**asset_values)
+            .on_conflict_do_nothing(index_elements=[MediaAsset.file_hash])
+        )
+        result = await db.execute(select(MediaAsset).where(MediaAsset.content_sha256 == content_sha256))
         asset = result.scalar_one_or_none()
         if asset is None:
-            db.add(
-                MediaAsset(
-                    file_hash=file_hash,
-                    content_sha256=content_sha256,
-                    file_type=file_type,
-                    file_size=len(file_content),
-                    local_path=local_path,
-                )
-            )
-            await db.commit()
-
-        return local_path
+            raise RuntimeError("media asset upsert completed without a readable asset")
+        return asset.local_path
 
     @staticmethod
     async def process_incoming_message(
@@ -142,9 +155,19 @@ class MessageService:
         )
 
         local_message = msg_data.get("local_message", raw_message)
+        message_segments = msg_data.get("message_segments")
         if media_http_client is not None:
             from app.services.media_service import MediaService
 
+            if isinstance(message_segments, list):
+                message_segments = await MediaService.localize_onebot_content(
+                    db,
+                    message_segments,
+                    http_client=media_http_client,
+                    storage_root=media_storage_root,
+                    public_prefix=media_public_prefix,
+                    allowed_media_types=capture_decision.allowed_media_types,
+                )
             local_message = await MediaService.rewrite_cq_media_to_local_paths(
                 db,
                 raw_message=raw_message,
@@ -195,7 +218,7 @@ class MessageService:
                 existing_msg.local_message = local_message
 
         await MessageService._upsert_message_parts(
-            db, msg_hash=msg_hash, segments=msg_data.get("message_segments"), source_format=msg_data.get("source_event_type") or platform,
+            db, msg_hash=msg_hash, segments=message_segments, source_format=msg_data.get("source_event_type") or platform,
         )
 
         await MessageService._upgrade_structured_media_from_local_message(
@@ -217,7 +240,6 @@ class MessageService:
         await db.commit()
         return msg_hash
 
-    @staticmethod
     @staticmethod
     def normalize_message_segment(segment: dict[str, Any]) -> dict[str, Any]:
         raw_type = str(
@@ -278,6 +300,39 @@ class MessageService:
             value = data.get("content")
             if value is not None:
                 data["text"] = str(value)
+        elif part_type in {"face", "mface", "market_face", "bface"}:
+            raw = data.get("raw")
+            if isinstance(raw, str):
+                try:
+                    parsed_raw = json.loads(raw)
+                except json.JSONDecodeError:
+                    parsed_raw = None
+                if isinstance(parsed_raw, dict):
+                    data["raw"] = parsed_raw
+                    raw = parsed_raw
+            if isinstance(raw, dict):
+                for key, value in raw.items():
+                    data.setdefault(key, value)
+            face_id = next(
+                (data.get(key) for key in ("id", "face_id", "faceIndex", "face_index", "sticker_id") if data.get(key) is not None),
+                None,
+            )
+            if face_id is not None:
+                data["id"] = str(face_id)
+            label = next(
+                (
+                    data.get(key)
+                    for key in ("name", "description", "faceText", "face_text", "summary", "text")
+                    if data.get(key) and str(data.get(key)) != "[object Object]"
+                ),
+                None,
+            )
+            if label is None:
+                label = f"QQ 表情 #{data['id']}" if data.get("id") else "QQ 表情"
+            data["name"] = str(label)
+            for key in ("url", "file", "pack_id", "sticker_id", "face_id"):
+                if data.get(key) is not None:
+                    data[key] = str(data[key])
         return {"type": part_type[:20], "data": data}
     async def _upsert_message_parts(
         db: AsyncSession,

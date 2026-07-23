@@ -41,6 +41,9 @@ _SUPPORTED_MEDIA_TYPES = {
     "record": "voice",
     "video": "video",
     "file": "file",
+    "mface": "image",
+    "market_face": "image",
+    "bface": "image",
 }
 _URL_PATTERN = re.compile(r"https?://[^\s\"'<>\\\]]+")
 _CARD_MEDIA_KEYS = {
@@ -182,6 +185,15 @@ _ALLOWED_DOWNLOAD_CONTENT_TYPES = {
 
 def _normalize_content_type(content_type: str | None) -> str:
     return (content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _is_trusted_qq_media_url(url: str) -> bool:
+    hostname = (urlparse(url).hostname or "").lower()
+    return any(hostname == part or hostname.endswith(f".{part}") for part in _KNOWN_MEDIA_HOST_PARTS)
+
+
+def _looks_like_supported_video_payload(content: bytes) -> bool:
+    return len(content) >= 12 and (content[4:8] == b"ftyp" or content.startswith(b"\x1a\x45\xdf\xa3"))
 
 
 def _is_allowed_download_content_type(media_type: str, content_type: str | None) -> bool:
@@ -402,7 +414,7 @@ def _parse_cq_media_segments_with_ordinals(
     prefix = (public_prefix or get_settings().public_storage_prefix).rstrip("/") + "/"
     local_path_pattern = rf"{re.escape(prefix)}[^\s\"'<>),\]]+?\.[a-z0-9]+"
     ordinal_pattern = re.compile(
-        rf"\[CQ:(?P<kind>image|record|video|file),(?P<params>[^\]]*)\]|(?P<local>{local_path_pattern})",
+        rf"\[CQ:(?P<kind>image|record|video|file|mface|market_face|bface),(?P<params>[^\]]*)\]|(?P<local>{local_path_pattern})",
         re.I,
     )
     segments: list[tuple[int, CQMediaSegment]] = []
@@ -666,11 +678,17 @@ class MediaService:
                     extra={"url": normalized_url, "media_type": media_type, "status_code": response.status_code},
                 )
                 return None
-            if not _is_allowed_download_content_type(media_type, response.headers.get("content-type")):
+            content_type = _normalize_content_type(response.headers.get("content-type"))
+            is_trusted_generic_video = (
+                media_type == "video"
+                and content_type == "application/octet-stream"
+                and _is_trusted_qq_media_url(normalized_url)
+            )
+            if not _is_allowed_download_content_type(media_type, content_type) and not is_trusted_generic_video:
                 download_status = "content_type_rejected"
                 logger.warning(
                     "Media download content type rejected",
-                    extra={"url": normalized_url, "media_type": media_type, "content_type": response.headers.get("content-type")},
+                    extra={"url": normalized_url, "media_type": media_type, "content_type": content_type},
                 )
                 return None
             content_length = response.headers.get("content-length")
@@ -687,6 +705,13 @@ class MediaService:
                 logger.warning(
                     "Media download body exceeds limit",
                     extra={"url": normalized_url, "media_type": media_type, "max_bytes": media_max_bytes},
+                )
+                return None
+            if is_trusted_generic_video and not _looks_like_supported_video_payload(content):
+                download_status = "unsupported_video_payload"
+                logger.warning(
+                    "Media download rejected unsupported QQ video payload",
+                    extra={"url": normalized_url, "content_type": content_type},
                 )
                 return None
             ext = _guess_ext(normalized_url, file_name, media_type)
@@ -1305,9 +1330,9 @@ class MediaService:
         segment_type = segment.get("type") or segment.get("kind")
         data = segment.get("data") if isinstance(segment.get("data"), dict) else segment
         if isinstance(data, dict):
-            if segment_type in {"image", "record", "video", "file"}:
+            if segment_type in {"image", "record", "video", "file", "mface", "market_face", "bface"}:
                 url = data.get("url") or data.get("path")
-                media_type = {"record": "voice"}.get(str(segment_type), str(segment_type))
+                media_type = {"record": "voice", "mface": "image", "market_face": "image", "bface": "image"}.get(str(segment_type), str(segment_type))
                 if (
                     isinstance(url, str)
                     and url.startswith(("http://", "https://"))

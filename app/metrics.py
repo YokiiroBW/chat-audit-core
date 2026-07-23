@@ -19,6 +19,7 @@ class MetricsRegistry:
         self._http_duration_sum: defaultdict[tuple[str, str], float] = defaultdict(float)
         self._http_duration_count: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._media_downloads: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._onebot_message_results: defaultdict[str, int] = defaultdict(int)
         self._rate_limit_exceeded: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._websocket_connections = 0
 
@@ -31,6 +32,10 @@ class MetricsRegistry:
     def record_media_download(self, *, media_type: str, status: str) -> None:
         with self._lock:
             self._media_downloads[(media_type, status)] += 1
+
+    def record_onebot_message(self, *, status: str) -> None:
+        with self._lock:
+            self._onebot_message_results[status] += 1
 
     def record_rate_limit_exceeded(self, *, action: str, actor: str) -> None:
         with self._lock:
@@ -50,6 +55,7 @@ class MetricsRegistry:
             duration_sum = dict(self._http_duration_sum)
             duration_count = dict(self._http_duration_count)
             media_downloads = dict(self._media_downloads)
+            onebot_message_results = dict(self._onebot_message_results)
             rate_limit_exceeded = dict(self._rate_limit_exceeded)
             websocket_connections = self._websocket_connections
 
@@ -81,6 +87,15 @@ class MetricsRegistry:
         )
         for (media_type, status), value in sorted(media_downloads.items()):
             lines.append(f"chat_audit_media_download_total{_labels(media_type=media_type, status=status)} {value}")
+
+        lines.extend(
+            [
+                "# HELP chat_audit_onebot_messages_total OneBot messages processed by result.",
+                "# TYPE chat_audit_onebot_messages_total counter",
+            ]
+        )
+        for status, value in sorted(onebot_message_results.items()):
+            lines.append(f"chat_audit_onebot_messages_total{_labels(status=status)} {value}")
 
         lines.extend(
             [

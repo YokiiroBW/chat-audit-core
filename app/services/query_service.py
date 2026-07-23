@@ -1,4 +1,4 @@
-﻿import base64
+import base64
 import json
 import re
 
@@ -723,5 +723,22 @@ class QueryService:
                 existing["imported_at"] = min(existing["imported_at"], record.imported_at)
                 existing["last_seen_at"] = max(existing["last_seen_at"], record.last_seen_at)
         for msg_hash, sources in source_by_message.items():
-            by_hash[msg_hash].import_sources = list(sources.values())
-            by_hash[msg_hash].external_message_aliases = sorted(aliases_by_message[msg_hash])
+            message = by_hash[msg_hash]
+            message.import_sources = list(sources.values())
+            message.external_message_aliases = sorted(aliases_by_message[msg_hash])
+            source_types = {source["source_type"] for source in sources.values()}
+            for reference in message.media:
+                if reference.source_state == "not_downloaded":
+                    reference.availability_reason = "source_not_downloaded"
+                elif reference.source_state == "missing":
+                    reference.availability_reason = "source_missing"
+                elif reference.archive_state == "failed":
+                    reference.availability_reason = (
+                        "archive_failed" if "qqnt_local_db" in source_types else "napcat_download_failed"
+                    )
+                elif reference.archive_state == "thumbnail_only":
+                    reference.availability_reason = "thumbnail_only"
+                elif reference.archive_state == "complete" and not reference.asset_local_path:
+                    reference.availability_reason = "asset_unavailable"
+                else:
+                    reference.availability_reason = None

@@ -473,6 +473,7 @@ class MessageMediaReferenceResponse(BaseModel):
     height: int | None = None
     failure_code: str | None = None
     failure_detail: str | None = None
+    availability_reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     first_seen_at: datetime
     last_checked_at: datetime

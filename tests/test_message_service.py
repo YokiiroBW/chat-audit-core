@@ -134,3 +134,32 @@ def test_normalize_message_segment_unifies_qqnt_aliases():
         "type": "at",
         "data": {"user_id": 456, "qq": "456"},
     }
+
+def test_normalize_message_segment_turns_napcat_face_payload_into_readable_label():
+    from app.services.message_service import MessageService
+
+    normalized = MessageService.normalize_message_segment(
+        {
+            "type": "face",
+            "data": {
+                "id": 317,
+                "raw": '{"faceIndex": 317, "faceText": "/汪汪"}',
+            },
+        }
+    )
+
+    assert normalized["type"] == "face"
+    assert normalized["data"]["id"] == "317"
+    assert normalized["data"]["name"] == "/汪汪"
+    assert normalized["data"]["faceIndex"] == 317
+
+
+def test_normalize_message_segment_has_stable_face_fallback_for_object_raw_value():
+    from app.services.message_service import MessageService
+
+    normalized = MessageService.normalize_message_segment({"type": "face", "data": {"id": 277, "raw": "[object Object]"}})
+
+    assert normalized == {
+        "type": "face",
+        "data": {"id": "277", "raw": "[object Object]", "name": "QQ 表情 #277"},
+    }

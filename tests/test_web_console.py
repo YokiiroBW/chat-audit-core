@@ -61,8 +61,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderMediaReference" in page_bundle
     assert "media-reference-card" in page_bundle
     assert "未下载视频" in page_bundle
-    assert "视频文件已丢失" in page_bundle
-    assert "视频记录解析失败" in page_bundle
+    assert "源文件已丢失" in page_bundle
+    assert "NapCat 媒体归档失败" in page_bundle
+    assert "记录解析失败" in page_bundle
     assert "reference.source_state" in page_bundle
     assert "reference.archive_state" in page_bundle
     assert "sender_qq_number" in page_bundle

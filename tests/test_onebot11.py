@@ -547,3 +547,51 @@ def test_normalize_message_event_preserves_onebot_reply_and_at_segments():
     assert normalized is not None
     assert normalized.msg_data["message_segments"][0]["data"]["id"] == "quoted-1"
     assert normalized.msg_data["message_segments"][1]["data"]["qq"] == "998877"
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_keeps_connection_after_unexpected_single_message_error(db_session, monkeypatch):
+    import app.ws as ws_module
+    from app.ws import onebot11_reverse_ws
+
+    await register_adapter(db_session)
+    original_process = ws_module.MessageService.process_incoming_message
+    calls = 0
+
+    async def fail_first_message(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("simulated media asset conflict")
+        return await original_process(*args, **kwargs)
+
+    monkeypatch.setattr(ws_module.MessageService, "process_incoming_message", fail_first_message)
+    websocket = FakeOneBotWebSocket([
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 123456,
+            "group_id": 998877,
+            "user_id": 445566,
+            "message_id": 1,
+            "raw_message": "first message fails",
+            "time": 1783000800,
+            "sender": {"nickname": "Alice"},
+        },
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 123456,
+            "group_id": 998877,
+            "user_id": 445566,
+            "message_id": 2,
+            "raw_message": "second message survives",
+            "time": 1783000810,
+            "sender": {"nickname": "Alice"},
+        },
+    ])
+
+    await onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token="")
+
+    messages = await QueryService.list_messages(db_session, robot_id="123456", room_id="998877")
+    assert websocket.accepted is True
+    assert [message.raw_message for message in messages] == ["second message survives"]

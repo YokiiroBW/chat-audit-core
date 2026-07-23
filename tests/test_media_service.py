@@ -660,3 +660,58 @@ async def test_download_url_to_local_path_rejects_credential_and_custom_port_url
     assert credential_path is None
     assert custom_port_path is None
     assert client.requested_urls == []
+
+
+def test_parse_cq_media_segments_supports_napcat_animated_face_url():
+    segments = parse_cq_media_segments(
+        "[CQ:mface,file=sticker.gif,url=https://multimedia.nt.qq.com.cn/download?fileid=animated]"
+    )
+
+    assert len(segments) == 1
+    assert segments[0].media_type == "image"
+    assert segments[0].ext == "gif"
+
+
+@pytest.mark.asyncio
+async def test_download_accepts_trusted_qq_generic_video_with_mp4_signature(db_session, tmp_path):
+    url = "https://multimedia.nt.qq.com.cn/download?fileid=video"
+    client = StubAsyncClient(
+        {url: b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"},
+        {url: {"content-type": "application/octet-stream"}},
+    )
+
+    local_path = await MediaService.download_url_to_local_path(
+        db_session,
+        url,
+        media_type="video",
+        file_name="napcat.mp4",
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        transcode_enabled=False,
+    )
+
+    assert local_path and local_path.endswith(".mp4")
+    assert (tmp_path / local_path.removeprefix("/static/storage/")).exists()
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_unrecognized_trusted_qq_generic_video(db_session, tmp_path):
+    url = "https://multimedia.nt.qq.com.cn/download?fileid=video"
+    client = StubAsyncClient(
+        {url: b"not-a-supported-video-container"},
+        {url: {"content-type": "application/octet-stream"}},
+    )
+
+    local_path = await MediaService.download_url_to_local_path(
+        db_session,
+        url,
+        media_type="video",
+        file_name="napcat.mp4",
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        transcode_enabled=False,
+    )
+
+    assert local_path is None
