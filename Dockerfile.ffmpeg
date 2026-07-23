@@ -7,7 +7,7 @@ WORKDIR /app
 COPY requirements-prod.txt ./
 COPY vendor/wheels ./vendor/wheels
 RUN pip install --upgrade pip \
-    && pip install --user -r requirements-prod.txt \
+    && pip install --index-url https://pypi.org/simple --user -r requirements-prod.txt \
     && pip install --user --no-index --find-links ./vendor/wheels imageio-ffmpeg==0.6.0
 
 FROM python:3.11-slim

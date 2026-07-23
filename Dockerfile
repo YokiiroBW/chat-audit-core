@@ -6,7 +6,7 @@ WORKDIR /app
 
 COPY requirements-prod.txt ./
 RUN pip install --upgrade pip \
-    && pip install --user -r requirements-prod.txt
+    && pip install --index-url https://pypi.org/simple --user -r requirements-prod.txt
 
 FROM python:3.11-slim
 
