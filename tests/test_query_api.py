@@ -3,8 +3,9 @@ import pytest
 
 from app.database import get_db_session
 from app.main import app
-from app.models import Adapter, BotProfile, RoomProfile, UserProfile
+from app.models import Adapter, BotProfile, ImportSource, Message, MessageSourceRecord, RoomProfile, UserProfile
 from app.services.message_service import MessageService
+from app.services.query_service import QueryService
 
 
 @pytest.mark.asyncio
@@ -547,3 +548,48 @@ async def test_messages_api_composite_cursor_keeps_same_timestamp_rows(db_sessio
     assert newest.status_code == 200
     assert older.status_code == 200
     assert {item["raw_message"] for item in older.json()} == {"same-second 0", "same-second 1"}
+
+
+@pytest.mark.asyncio
+async def test_query_includes_imported_messages_when_robot_view_link_is_missing(db_session):
+    source = ImportSource(
+        id="qqnt-source-account-a",
+        source_type="qqnt_local_db",
+        platform="qq",
+        account_id="robot-a",
+        device_id="device-a",
+        status="active",
+    )
+    message = Message(
+        msg_hash="imported-only-message-hash",
+        platform="qq",
+        room_id="friend-9001",
+        message_type="private",
+        external_message_id="imported-1",
+        sender_id="9001",
+        nickname="Imported Friend",
+        raw_message="historical imported message",
+        local_message="historical imported message",
+        timestamp=1783000100,
+    )
+    source_record = MessageSourceRecord(
+        msg_hash=message.msg_hash,
+        source_id=source.id,
+        source_table="messages",
+        source_primary_key="imported-1",
+        source_external_message_id="imported-1",
+        raw_columns_json='{"40030":"9001"}',
+    )
+    db_session.add_all([source, message, source_record])
+    await db_session.commit()
+
+    rooms = await QueryService.list_rooms(db_session, robot_id="robot-a")
+    messages = await QueryService.list_messages(
+        db_session,
+        robot_id="robot-a",
+        room_id="friend-9001",
+        limit=50,
+    )
+
+    assert [room["room_id"] for room in rooms] == ["friend-9001"]
+    assert [item.raw_message for item in messages] == ["historical imported message"]

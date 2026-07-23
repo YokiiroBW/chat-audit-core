@@ -182,6 +182,22 @@ def _usable_profile_name(
     return name
 
 
+def _robot_message_scope(robot_id: str):
+    source_record = aliased(MessageSourceRecord)
+    import_source = aliased(ImportSource)
+    imported_message_scope = (
+        select(source_record.id)
+        .join(import_source, import_source.id == source_record.source_id)
+        .where(
+            source_record.msg_hash == Message.msg_hash,
+            import_source.account_id == robot_id,
+            import_source.platform == Message.platform,
+        )
+        .exists()
+    )
+    return or_(RobotMessage.robot_id == robot_id, imported_message_scope)
+
+
 async def _private_robot_display_name(
     db: AsyncSession,
     robot_id: str,
@@ -189,9 +205,9 @@ async def _private_robot_display_name(
 ) -> str | None:
     stmt = (
         select(Message.nickname)
-        .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+        .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
         .where(
-            RobotMessage.robot_id == robot_id,
+            _robot_message_scope(robot_id),
             Message.message_type == "private",
             Message.sender_id != Message.room_id,
             Message.nickname.is_not(None),
@@ -272,10 +288,10 @@ class QueryService:
                 func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
-            .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
             .outerjoin(RoomProfile, RoomProfile.room_id == Message.room_id)
             .outerjoin(UserProfile, UserProfile.user_id == Message.room_id)
-            .where(RobotMessage.robot_id == robot_id)
+            .where(_robot_message_scope(robot_id))
             .group_by(Message.room_id)
             .order_by(desc("last_timestamp"), Message.room_id.asc())
         )
@@ -293,9 +309,9 @@ class QueryService:
                         order_by=(Message.timestamp.desc(), func.coalesce(Message.source_sequence, -1).desc(), Message.msg_hash.desc()),
                     ).label("room_rank"),
                 )
-                .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
                 .outerjoin(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
-                .where(RobotMessage.robot_id == robot_id, Message.room_id.in_(room_ids), Message.message_type == "private")
+                .where(_robot_message_scope(robot_id), Message.room_id.in_(room_ids), Message.message_type == "private")
                 .subquery()
             )
             source_result = await db.execute(
@@ -373,9 +389,9 @@ class QueryService:
         if around_message_id:
             target_result = await db.execute(
                 select(Message)
-                .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
                 .where(
-                    RobotMessage.robot_id == robot_id,
+                    _robot_message_scope(robot_id),
                     Message.room_id == room_id,
                     Message.external_message_id == around_message_id,
                 )
@@ -385,10 +401,10 @@ class QueryService:
             if target is None:
                 alias_result = await db.execute(
                     select(Message)
-                    .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                    .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
                     .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
                     .where(
-                        RobotMessage.robot_id == robot_id,
+                        _robot_message_scope(robot_id),
                         Message.room_id == room_id,
                         or_(
                             MessageSourceRecord.source_external_message_id == around_message_id,
@@ -408,9 +424,9 @@ class QueryService:
                 UserProfile.display_name.label("sender_display_name"),
                 UserProfile.avatar_path.label("sender_avatar_path"),
             )
-            .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
             .outerjoin(UserProfile, UserProfile.user_id == Message.sender_id)
-            .where(RobotMessage.robot_id == robot_id, Message.room_id == room_id)
+            .where(_robot_message_scope(robot_id), Message.room_id == room_id)
         )
         stmt = QueryService._apply_media_state_filter(stmt, media_state)
         if before_timestamp is not None:
@@ -607,8 +623,8 @@ class QueryService:
     ) -> list[Message]:
         stmt = (
             select(Message)
-            .join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
-            .where(RobotMessage.robot_id == robot_id)
+            .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .where(_robot_message_scope(robot_id))
         )
         if keyword:
             pattern = f"%{keyword}%"
