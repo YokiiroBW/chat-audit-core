@@ -276,6 +276,42 @@ async def test_private_room_api_hydrates_friend_avatar_and_preserves_name(db_ses
 
 
 @pytest.mark.asyncio
+async def test_rooms_api_keeps_all_rooms_when_avatar_hydration_fails(db_session, monkeypatch):
+    for room_id, nickname in (("123456789", "Private Friend"), ("987654321", "Another Friend")):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "room_id": room_id,
+                "message_type": "private",
+                "sender_id": room_id,
+                "nickname": nickname,
+                "raw_message": "hello private",
+                "timestamp": 1783000000,
+            },
+        )
+
+    async def failing_cache_qq_user_profile(**kwargs):
+        raise RuntimeError("avatar asset is not readable")
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", failing_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/rooms", params={"robot_id": "robot-a"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert {item["room_id"] for item in response.json()} == {"123456789", "987654321"}
+
+
+@pytest.mark.asyncio
 async def test_private_room_api_refreshes_placeholder_svg_avatar(db_session, monkeypatch):
     await MessageService.process_incoming_message(
         db_session,

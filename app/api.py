@@ -3,6 +3,7 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 import time
@@ -95,6 +96,7 @@ from app.services.user_profile_service import UserProfileService
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
 _VALID_ADMIN_ROLES = VALID_ADMIN_ROLES
 _EXTERNAL_MEDIA_TYPES = {"image", "voice", "video", "file"}
+logger = logging.getLogger(__name__)
 _EXTERNAL_MEDIA_ALIASES = {
     "audio": "voice",
     "record": "voice",
@@ -1003,30 +1005,38 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
                     group_info = payload["data"]
             except (LookupError, asyncio.TimeoutError, ValueError):
                 group_info = None
-            await RoomProfileService.cache_qq_group_profile(
-                db,
-                room_id=room_id,
-                platform="qq",
-                group_info=group_info,
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-            changed = True
+            try:
+                await RoomProfileService.cache_qq_group_profile(
+                    db,
+                    room_id=room_id,
+                    platform="qq",
+                    group_info=group_info,
+                    http_client=client,
+                    storage_root=settings.storage_root,
+                    public_prefix=settings.public_storage_prefix,
+                    max_bytes=settings.media_max_bytes,
+                )
+                changed = True
+            except Exception:
+                await db.rollback()
+                logger.exception("Room profile hydration failed", extra={"room_id": room_id, "platform": "qq"})
         for room in missing_private_rooms:
             user_id = str(room.get("qq_number") or room["room_id"])
-            await UserProfileService.cache_qq_user_profile(
-                db,
-                user_id=user_id,
-                platform="qq",
-                display_name=room.get("display_name"),
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-            changed = True
+            try:
+                await UserProfileService.cache_qq_user_profile(
+                    db,
+                    user_id=user_id,
+                    platform="qq",
+                    display_name=room.get("display_name"),
+                    http_client=client,
+                    storage_root=settings.storage_root,
+                    public_prefix=settings.public_storage_prefix,
+                    max_bytes=settings.media_max_bytes,
+                )
+                changed = True
+            except Exception:
+                await db.rollback()
+                logger.exception("User profile hydration failed", extra={"user_id": user_id, "platform": "qq"})
     return changed
 
 
