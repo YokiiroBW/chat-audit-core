@@ -18,7 +18,7 @@
 ## 阶段二 · W2 其余
 
 - [x] FQ-22 · 原子写盘 `atomic_write_bytes()`（S）— 已完成
-- [ ] FQ-24 · `is_outgoing` 幂等统计（S）
+- [x] FQ-24 · `is_outgoing` 幂等统计（S）— 代码已在 W0/W1 顺带修复，本轮补回归锁定
 - [ ] FQ-25 · 离线审计 `covered_urls` 错位（S）
 - [ ] FQ-30 · 默认端口绑定 127.0.0.1（S）
 - [ ] FQ-32 · 采集器 TLS 告警（S）

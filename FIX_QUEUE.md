@@ -84,7 +84,7 @@
 - [ ] **FQ\-21 · M9 卡片 HTML 存储型 XSS** —— `.html`/`.svg` 类媒体(`api.py:367-379`)强制 `Content-Disposition: attachment` 或独立无凭据子域,附加严格 CSP。工作量 M。
 - [ ] **FQ\-22 · R7 原子写盘 \+ M10** —— 抽 `atomic_write_bytes()`(temp\+`os.replace`),用于 `backup_service.py:683` 自动备份与 `:996-998` 嵌入媒体还原。工作量 S。
 - [ ] **FQ\-23 · R9 路径包含校验 \+ M11 resolver 根约束** —— 抽 `path_within(root, p)` 公共函数,补进 `collector/media/resolver.py:26-49`,拒绝越出 QQ 数据根的媒体路径;无 md5 的协议媒体不接受单体积匹配。工作量 M。
-- [ ] **FQ\-24 · M14 is\_outgoing 幂等统计** —— `import_service.py:493-496` 改为先比较值再置 `changed=True`。工作量 S。
+- [x] **FQ\-24 · M14 is\_outgoing 幂等统计** —— **代码在 W0/W1(`1fd1797`)已顺带修好**,当时未勾选。`origin/main` 上确为 `if message_data.is_outgoing is not None:` 无条件置 `changed`,现分支已是先比较再置。本轮补上缺失的回归:既有幂等测试走的是**同批次重放**短路,根本到不了更新分支,故新增「同一来源、第二个批次、完全相同的消息」用例断言 `updated == 0`。
 - [ ] **FQ\-25 · M15 离线审计 covered\_urls 错位** —— `offline_audit_service.py:163-172` 改用 `ordinal→url` 映射比对(`_parse_cq_media_segments_with_ordinals`)。工作量 S。
 - [ ] **FQ\-26 · M16 回填队头饿死** —— `media_backfill_service.py:248-262` 引入推进游标/失败退避标记;清理冗余 `contains` OR;为 `media_assets.local_path` 建索引(顺带修性能)。工作量 M。
 - [x] **FQ\-27 · M17 备份 cron** —— 已完成,两条路都走了(实现 \+ 文档),因为原问题不只是"支持的表达式太少"。
