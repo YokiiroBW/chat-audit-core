@@ -174,8 +174,14 @@ def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     assert "pg_isready" in test_job["services"]["postgres"]["options"]
     steps = {step["name"]: step["run"] for step in test_job["steps"] if "run" in step}
     assert "python -m pip install -r requirements-dev.txt" in steps["Install dependencies"]
-    assert "python scripts/minify_static_assets.py" in steps["Verify minified frontend assets"]
-    assert "git diff --exit-code app/static/assets/app.min.css app/static/assets/app.min.js" in steps["Verify minified frontend assets"]
+    # 资产门禁走 --check：只读比对、不写盘，因此后续步骤看到的仍是干净检出。
+    assert "python scripts/minify_static_assets.py --check" in steps["Verify minified frontend assets"]
+    assert "python -m pip check" in steps["Verify dependency resolution"]
+    # pip-audit 必须装在独立 venv，否则它的依赖会扰动 requirements-prod.txt 钉定的版本。
+    audit_step = steps["Audit production dependencies"]
+    assert "pip-audit" in audit_step
+    assert "requirements-prod.txt" in audit_step
+    assert ".tmp/audit-venv" in audit_step
     assert steps["Compile Python modules"] == "python -m compileall app tests"
     assert steps["Run tests"] == "python -m pytest tests -q"
     assert steps["Build Docker image"] == "docker build -t chat-audit-core:ci ."

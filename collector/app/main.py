@@ -382,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
             if key_result.status == "invalid" and key_result.error_code == "DB_KEY_INVALID":
                 key = credentials.get("qqnt_database_key")
                 key_result = validator.validate(database_path, key)
-            if not key_result.usable:
+            if not key_result.may_attempt:
                 source_status = "needs_key" if key_result.error_code == "DB_KEY_INVALID" else "error"
                 _upsert_local_source(store, config, status=source_status)
                 print(f"error: {key_result.error_code}: {key_result.detail}", file=sys.stderr)
@@ -407,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
                 database = ReadOnlySQLiteDatabase(
                     target_path,
                     immutable=snapshot is not None,
-                    key=key if key_result.status == "valid" else None,
+                    key=key if key_result.requires_key else None,
                     cipher=cipher,
                 )
                 report = QQNTReader(database).probe()

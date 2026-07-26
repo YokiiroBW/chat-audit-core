@@ -122,9 +122,11 @@ class QQNTScanner:
         if validation.error_code == "DB_KEY_INVALID":
             key = self.credential_getter("qqnt_database_key")
             validation = validator.validate(database_path, key)
-        if not validation.usable:
+        # may_attempt, not usable: a custom-VFS database is only proven readable by the real
+        # open a few lines below, whose failure is recorded as a ScanIssue.
+        if not validation.may_attempt:
             return None, validation.error_code or "DB_OPEN_FAILED", validation.detail or "database is not usable"
-        return key if validation.status == "valid" else None, None, None
+        return key if validation.requires_key else None, None, None
 
     def scan(
         self,

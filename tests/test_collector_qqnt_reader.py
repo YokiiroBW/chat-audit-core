@@ -12,6 +12,13 @@ from collector.qqnt.reader import ReadOnlyDatabaseError, ReadOnlySQLiteDatabase
 from collector.qqnt.schema_probe import probe_schema
 from collector.qqnt.snapshot import DatabaseSnapshotManager
 from collector.qqnt.snapshot import detect_database_format
+from collector.qqnt.sqlcipher import (
+    QQNT_HEADER_SIZE,
+    body_looks_encrypted,
+    configure_connection,
+    materialize_clear_database,
+    sqlcipher_available,
+)
 from collector.qqnt.versions import select_adapter
 from collector.sync.cursor import CursorRepository, IncrementalCursor
 from collector.sync.state import CollectorStateStore
@@ -223,10 +230,27 @@ def test_database_key_validation_and_cursor_repository(tmp_path):
 
     qqnt_custom = tmp_path / "nt_msg.db"
     qqnt_custom.write_bytes(b"SQLite header 3\x00" + b"\x00" * 16 + b"QQ_NT DB" + b"\x00" * 32)
-    qqnt_result = SQLiteKeyValidator().validate(qqnt_custom, "unused")
     assert detect_database_format(qqnt_custom) == "qqnt_custom_vfs"
-    assert qqnt_result.status == "unsupported"
-    assert qqnt_result.error_code == "DB_SQLCIPHER_UNAVAILABLE"
+    validator = SQLiteKeyValidator()
+    if not sqlcipher_available():
+        # 没有 SQLCipher runtime 时，自定义 VFS 库必须直接判为不支持，不能谎称可读。
+        unavailable = validator.validate(qqnt_custom, "0123456789abcdef")
+        assert unavailable.status == "unsupported"
+        assert unavailable.error_code == "DB_SQLCIPHER_UNAVAILABLE"
+    else:
+        # 有 runtime 时密钥门仍然生效，且必须排在剥头可行性门之前：用户只是还没填密钥时，
+        # 应该得到可操作的"需要密钥"，而不是笼统的"不支持"。
+        assert validator.validate(qqnt_custom, None).error_code == "DB_KEY_INVALID"
+        short_key = validator.validate(qqnt_custom, "unused")
+        assert short_key.status == "invalid"
+        assert short_key.error_code == "DB_KEY_INVALID"
+        # 这个桩件只有 56 字节，装不下 1024 字节自定义头，因此剥头不可行 → 停止码必须产出。
+        infeasible = validator.validate(qqnt_custom, "0123456789abcdef")
+        assert infeasible.status == "unsupported"
+        assert infeasible.error_code == "DB_VFS_UNSUPPORTED"
+        assert infeasible.usable is False
+        assert infeasible.may_attempt is False
+    assert validator.validate(qqnt_custom, "unused").usable is False
 
     store = CollectorStateStore(tmp_path / "state.sqlite3")
     store.initialize()
@@ -241,6 +265,67 @@ def test_database_key_validation_and_cursor_repository(tmp_path):
     cursors.save_table("group_msg_001", cursor)
     assert cursors.load_table("group_msg_001") == cursor
     assert IncrementalCursor(1783000000000).overlap_start(3600) == 1782996400000
+
+
+def _qqnt_custom_header() -> bytes:
+    return b"SQLite header 3\x00" + b"\x00" * 16 + b"QQ_NT DB" + b"\x00" * (QQNT_HEADER_SIZE - 40)
+
+
+def _wrap_with_qqnt_header(body: Path, target: Path) -> Path:
+    target.write_bytes(_qqnt_custom_header() + body.read_bytes())
+    return target
+
+
+@pytest.mark.skipif(not sqlcipher_available(), reason="需要 sqlcipher3 才能构造加密库")
+def test_custom_vfs_readability_is_never_claimed_without_actually_opening(tmp_path):
+    """密钥长度正确不代表密钥正确，validate() 不得据此声称可读。
+
+    这条锁定 `DB_VFS_UNSUPPORTED` 确实会由代码产出（此前它只存在于文档里），并锁定
+    "通过全部廉价门"只能得到 unverified —— 可读性必须由真实打开来证明。
+    """
+    import sqlcipher3.dbapi2 as sqlcipher
+
+    key = "0123456789abcdef"
+    body = tmp_path / "body.db"
+    connection = sqlcipher.connect(str(body))
+    configure_connection(connection, key)
+    connection.execute("CREATE TABLE group_msg_001 (msgId TEXT, msgSeq INTEGER)")
+    connection.execute("INSERT INTO group_msg_001 VALUES ('m1', 1)")
+    connection.commit()
+    connection.close()
+
+    validator = SQLiteKeyValidator()
+
+    encrypted = _wrap_with_qqnt_header(body, tmp_path / "nt_msg_encrypted.db")
+    assert detect_database_format(encrypted) == "qqnt_custom_vfs"
+    assert body_looks_encrypted(encrypted) is True
+    result = validator.validate(encrypted, key)
+    assert result.status == "unverified"
+    assert result.error_code is None
+    assert result.usable is False, "未实际打开就不能算可读"
+    assert result.may_attempt is True, "廉价门全过，应允许扫描器去真实打开"
+    assert result.requires_key is True, "打开剥头副本时必须带上密钥"
+
+    # 自定义头后面跟的是明文 SQLite 体：剥头后根本解不开，必须给出停止码而不是 unverified。
+    plain_body = tmp_path / "plain_body.db"
+    plain = sqlite3.connect(plain_body)
+    plain.execute("CREATE TABLE t (a)")
+    plain.commit()
+    plain.close()
+    plaintext = _wrap_with_qqnt_header(plain_body, tmp_path / "nt_msg_plaintext.db")
+    assert detect_database_format(plaintext) == "qqnt_custom_vfs"
+    assert body_looks_encrypted(plaintext) is False
+    rejected = validator.validate(plaintext, key)
+    assert rejected.status == "unsupported"
+    assert rejected.error_code == "DB_VFS_UNSUPPORTED"
+    assert rejected.may_attempt is False
+
+    # 剥头后的密文副本用正确密钥能真实打开，说明 unverified 不是在掩盖坏数据。
+    clear = materialize_clear_database(encrypted, tmp_path / "clear.db")
+    opened = sqlcipher.connect(str(clear))
+    configure_connection(opened, key)
+    assert opened.execute("SELECT count(*) FROM group_msg_001").fetchone()[0] == 1
+    opened.close()
 
 
 def test_runtime_capabilities_do_not_mistake_stdlib_sqlite_for_sqlcipher():

@@ -7,9 +7,14 @@ from pathlib import Path
 import pytest
 
 from collector.gui.app import build_parser
-from collector.gui.controller import CollectorGuiController, GuiSettings
+from collector.gui.controller import (
+    SYNCABLE_COMPATIBILITY_STATUSES,
+    CollectorGuiController,
+    GuiSettings,
+)
 from collector.gui.tray import create_tray_image
 from collector.gui.single_instance import AlreadyRunningError, SingleInstance
+from collector.qqnt.sqlcipher import sqlcipher_available
 
 
 class FakeCredentialStore:
@@ -167,6 +172,48 @@ def test_gui_reports_real_qqnt_header_as_incompatible(tmp_path):
     assert "16" in report.message
     with pytest.raises(RuntimeError, match="16"):
         controller.start()
+
+
+@pytest.mark.skipif(not sqlcipher_available(), reason="需要 sqlcipher3 才能构造加密库")
+def test_gui_does_not_claim_encrypted_database_readable_before_it_is_opened(tmp_path):
+    """托盘不得仅凭密钥长度就报"可读取"，但也不能因此永久禁用 QQNT 单来源同步。
+
+    此前 `readable_count` 会把只通过密钥长度检查的加密库计入，托盘显示"ready / 可读取"，
+    与 CODEX_HANDOFF.md 描述的安全边界不符。
+    """
+    import sqlcipher3.dbapi2 as sqlcipher
+
+    from collector.qqnt.sqlcipher import QQNT_HEADER_SIZE, configure_connection
+
+    FakeCredentialStore.values_by_path.clear()
+    key = "0123456789abcdef"
+    data_root = tmp_path / "qqnt"
+    database_dir = data_root / "nt_db"
+    database_dir.mkdir(parents=True)
+
+    body = tmp_path / "body.db"
+    connection = sqlcipher.connect(str(body))
+    configure_connection(connection, key)
+    connection.execute("CREATE TABLE group_msg_001 (msgId TEXT, msgSeq INTEGER)")
+    connection.commit()
+    connection.close()
+    header = b"SQLite header 3\x00" + b"\x00" * 16 + b"QQ_NT DB" + b"\x00" * (QQNT_HEADER_SIZE - 40)
+    (database_dir / "nt_msg.db").write_bytes(header + body.read_bytes())
+
+    controller = CollectorGuiController(
+        tmp_path / "collector.toml",
+        credential_store_factory=FakeCredentialStore,
+    )
+    controller.save_settings(_settings(data_root, database_key=key))
+
+    report = controller.inspect_databases()
+
+    assert report.status == "needs_verification"
+    assert report.readable_count == 0, "未实际打开就不能计入可读"
+    assert report.qqnt_custom_count == 1
+    assert "实测" in report.message
+    # 仍须允许启动：可读性只能由扫描器真实打开剥头副本来证明，拦在这里等于废掉该部署形态。
+    assert report.status in SYNCABLE_COMPATIBILITY_STATUSES
 
 
 def test_gui_reports_plain_fixture_database_as_ready(tmp_path):

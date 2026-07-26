@@ -63,8 +63,21 @@ def _powershell_single_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+# 允许启动同步的兼容性状态。needs_verification 也放行:QQNT 加密库的可读性只能由扫描器
+# 真实打开剥头副本来证明,拦在这里等于永久禁用 QQNT 单来源部署。真实失败会以 ScanIssue
+# 的 DB_* 停止码上报。
+SYNCABLE_COMPATIBILITY_STATUSES = frozenset({"ready", "needs_verification"})
+
+
 @dataclass(frozen=True)
 class CompatibilityReport:
+    """兼容性检测结果。
+
+    ``status`` 取值:``ready``(有已证实可读的库)、``needs_verification``(QQNT 加密库通过了
+    格式/runtime/密钥形态检查,但可读性尚未实测)、``needs_key``、``unsupported``、``missing``、
+    ``unconfigured``。``readable_count`` 只统计**已证实可读**的库,不含待实测的。
+    """
+
     status: str
     message: str
     database_count: int
@@ -397,20 +410,37 @@ exit /b %exit_code%
         database_key = self._credentials_for_config(config).get("qqnt_database_key")
         readable = 0
         custom = 0
+        pending = 0
         for database, database_format in zip(databases, formats):
             if database_format == "sqlite":
                 readable += 1
             elif database_format == "qqnt_custom_vfs":
                 custom += 1
-                if SQLiteKeyValidator().validate(database.path, database_key).usable:
+                # 只有真正打开成功才算 readable。密钥长度正确不等于密钥正确，而证明它需要
+                # 整库剥头复制(真实库数百 MB),不能放在每次兼容性检测里做,所以这里只统计
+                # "待实测",由首次同步时扫描器的真实打开来确认。
+                result = SQLiteKeyValidator().validate(database.path, database_key)
+                if result.usable:
                     readable += 1
-        unsupported = len(formats) - readable
+                elif result.status == "unverified":
+                    pending += 1
+        unsupported = len(formats) - readable - pending
         if not databases:
             return CompatibilityReport("missing", "未发现 QQNT 消息数据库", 0, 0, 0, 0)
         if readable:
             return CompatibilityReport(
                 "ready",
                 f"发现 {len(databases)} 个消息库，其中 {readable} 个可读取",
+                len(databases),
+                readable,
+                unsupported,
+                custom,
+            )
+        if pending:
+            return CompatibilityReport(
+                "needs_verification",
+                f"发现 {len(databases)} 个消息库，其中 {pending} 个是 QQNT 加密库，"
+                "密钥格式已通过；能否读取将在首次同步时实测确认",
                 len(databases),
                 readable,
                 unsupported,
@@ -472,7 +502,7 @@ exit /b %exit_code%
     def run_once(self, mode: str = "incremental") -> dict[str, Any]:
         if mode != "media_rescan":
             compatibility = self.inspect_databases()
-            if compatibility.status != "ready":
+            if compatibility.status not in SYNCABLE_COMPATIBILITY_STATUSES:
                 raise RuntimeError(compatibility.message)
         return asyncio.run(_run_once(self.config_path, mode, progress_callback=self.event_callback))
 
@@ -519,7 +549,7 @@ exit /b %exit_code%
         if not self.configured:
             raise RuntimeError("请先完成配置")
         compatibility = self.inspect_databases()
-        if compatibility.status != "ready":
+        if compatibility.status not in SYNCABLE_COMPATIBILITY_STATUSES:
             raise RuntimeError(compatibility.message)
         if not self.has_api_token():
             raise RuntimeError("请先保存 API Token")
