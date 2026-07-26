@@ -240,24 +240,28 @@ class QQNTScanner:
                         first_page = False
                         if not page.rows:
                             break
-                        for row in page.rows:
-                            parsed = parse_source_message(row, context, resolver=resolver)
-                            enqueue_parsed_message(
-                                parsed,
-                                source_id=self.source_id,
-                                queue=self.queue,
-                                store=self.store,
-                                staging=staging,
-                                force_refresh=mode == "reconcile",
-                            )
-                            result.scanned_messages += 1
-                            result.enqueued_messages += 1
-                            if result.scanned_messages % 100 == 0:
-                                self._emit_progress(
-                                    "scan.progress",
-                                    f"{result.scanned_messages}|{result.enqueued_messages}|{result.parser_failures}",
+                        # One transaction per page: enqueueing used to open a
+                        # connection and fsync per message, which made a large
+                        # initial import disk-bound rather than parse-bound.
+                        with self.store.transaction():
+                            for row in page.rows:
+                                parsed = parse_source_message(row, context, resolver=resolver)
+                                enqueue_parsed_message(
+                                    parsed,
+                                    source_id=self.source_id,
+                                    queue=self.queue,
+                                    store=self.store,
+                                    staging=staging,
+                                    force_refresh=mode == "reconcile",
                                 )
-                            result.parser_failures += len(parsed.failures)
+                                result.scanned_messages += 1
+                                result.enqueued_messages += 1
+                                if result.scanned_messages % 100 == 0:
+                                    self._emit_progress(
+                                        "scan.progress",
+                                        f"{result.scanned_messages}|{result.enqueued_messages}|{result.parser_failures}",
+                                    )
+                                result.parser_failures += len(parsed.failures)
                         page_cursor = page.next_cursor
                         if adapter.cursor_after(database, candidate, page_cursor, saved_cursor):
                             saved_cursor = page_cursor

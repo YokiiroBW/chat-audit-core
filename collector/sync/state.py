@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS parser_failures (
 class CollectorStateStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser().resolve()
+        self._active_connection: sqlite3.Connection | None = None
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,15 +232,52 @@ class CollectorStateStore:
                 (key, value),
             )
 
-    @contextlib.contextmanager
-    def connect(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+    def _open(self, *, immediate: bool) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=30000")
         connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        return connection
+
+    @contextlib.contextmanager
+    def transaction(self, *, immediate: bool = True) -> Iterator[sqlite3.Connection]:
+        """Run a batch of queue writes as one connection and one commit.
+
+        Without this, every enqueued message opened its own connection, set
+        three pragmas, began a transaction and committed -- and under WAL each
+        of those commits is an fsync. Scanning a database meant one fsync per
+        message, which is what made a large initial import disk-bound rather
+        than parse-bound.
+
+        Reentrant: a nested scope joins the open transaction instead of
+        deadlocking against its own write lock.
+        """
+        if self._active_connection is not None:
+            yield self._active_connection
+            return
+        connection = self._open(immediate=immediate)
+        self._active_connection = connection
         try:
-            connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            self._active_connection = None
+            connection.close()
+
+    @contextlib.contextmanager
+    def connect(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+        # Inside a transaction() scope every write joins that one transaction,
+        # so callers need no changes to benefit from the batching.
+        if self._active_connection is not None:
+            yield self._active_connection
+            return
+        connection = self._open(immediate=immediate)
+        try:
             yield connection
             connection.commit()
         except Exception:
