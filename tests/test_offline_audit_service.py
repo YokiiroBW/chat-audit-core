@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
-from app.models import ImportSource, MediaAsset, Message, MessageSourceRecord, UserProfile
+from app.models import ImportSource, MediaAsset, Message, MessageMediaReference, MessageSourceRecord, UserProfile
 from app.services.message_service import MessageService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.offline_audit_service import OfflineAuditService
@@ -544,3 +544,59 @@ async def test_offline_audit_scans_imported_only_messages_for_the_account(db_ses
     assert report.offline_ready is False
     # The account scope still holds: another account sees none of it.
     assert other_account.messages_scanned == 0
+
+
+@pytest.mark.asyncio
+async def test_offline_audit_matches_media_references_by_ordinal_slot(db_session, tmp_path):
+    # Reference ordinals are slots over every media item in the message. Indexing
+    # a list that skips the archived ones shifts the positions as soon as any
+    # media is localised, so a covered URL and an uncovered one swap places.
+    local_path = await MessageService.save_media_asset(
+        db_session,
+        b"archived first image",
+        "image",
+        "jpg",
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+    remote_url = "http://media.local/second.jpg"
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "ordinal-slots",
+            "room_id": "group-ordinal",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": f"[CQ:image,file=a.jpg,url=http://media.local/first.jpg][CQ:image,file=b.jpg,url={remote_url}]",
+            "local_message": f"{local_path}[CQ:image,file=b.jpg,url={remote_url}]",
+            "timestamp": 1783000000,
+        },
+    )
+    message = (await db_session.execute(select(Message).where(Message.external_message_id == "ordinal-slots"))).scalar_one()
+    archived_asset = (await db_session.execute(select(MediaAsset).where(MediaAsset.local_path == local_path))).scalar_one()
+    # Slot 0 is the archived image; slot 1 is the one still pointing remote.
+    db_session.add(
+        MessageMediaReference(
+            msg_hash=message.msg_hash,
+            ordinal=0,
+            media_type="image",
+            source_state="downloaded",
+            archive_state="complete",
+            asset_file_hash=archived_asset.file_hash,
+        )
+    )
+    await db_session.commit()
+    await seed_profile_avatars(db_session, tmp_path, room_id="group-ordinal", sender_id="user-a")
+
+    report = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+
+    # The archived slot must not be credited against the remote one.
+    assert report.remote_media_urls == 1
+    assert [issue.target for issue in report.issues if issue.kind == "remote_media"] == [remote_url]

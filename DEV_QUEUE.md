@@ -19,7 +19,7 @@
 
 - [x] FQ-22 · 原子写盘 `atomic_write_bytes()`（S）— 已完成
 - [x] FQ-24 · `is_outgoing` 幂等统计（S）— 代码已在 W0/W1 顺带修复，本轮补回归锁定
-- [ ] FQ-25 · 离线审计 `covered_urls` 错位（S）
+- [x] FQ-25 · 离线审计 `covered_urls` 错位（S）— 已完成
 - [ ] FQ-30 · 默认端口绑定 127.0.0.1（S）
 - [ ] FQ-32 · 采集器 TLS 告警（S）
 - [ ] FQ-34 · 修复脚本硬编码 QQ 号与 SQL 方言（S）

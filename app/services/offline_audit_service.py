@@ -20,7 +20,7 @@ from app.services.media_backfill_service import (
     _find_uncached_forward_ids,
     _find_uncached_media_urls,
 )
-from app.services.media_service import parse_cq_media_segments
+from app.services.media_service import _parse_cq_media_segments_with_ordinals
 
 OFFLINE_ISSUE_DETAILS = {
     "message_still_references_remote_media": (
@@ -166,11 +166,18 @@ class OfflineAuditService:
             references = references_by_message.get(message.msg_hash, [])
             remote_media_urls = _find_uncached_media_urls(message.local_message)
             if references and remote_media_urls:
-                cq_media_segments = parse_cq_media_segments(message.local_message)
+                # Reference ordinals are slots over *all* media in the message,
+                # archived or not, so they cannot index a list that skips the
+                # archived ones: once any media has been localised the positions
+                # shift and the wrong URL gets marked as covered.
+                url_by_ordinal = {
+                    ordinal: segment.url
+                    for ordinal, segment in _parse_cq_media_segments_with_ordinals(message.local_message, public_storage_prefix)
+                }
                 covered_urls = {
-                    cq_media_segments[reference.ordinal].url
+                    url
                     for reference in references
-                    if 0 <= reference.ordinal < len(cq_media_segments)
+                    if (url := url_by_ordinal.get(reference.ordinal)) is not None
                 }
                 remote_media_urls = [url for url in remote_media_urls if url not in covered_urls]
             card_page_urls = _find_uncached_card_page_urls(message.local_message)
