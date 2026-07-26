@@ -165,6 +165,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "runManualBackup" in page_bundle
     assert "backupStatusReport" in page_bundle
     assert "backupCronInput" in page_bundle
+    # 计划无法执行时界面必须说出来，否则备份停摆而状态仍显示"开启"。
+    assert "cron_error" in page_bundle
+    assert "开启（计划无法执行）" in page_bundle
+    assert "下次运行" in page_bundle
     assert "backupKeepLatestInput" in page_bundle
     assert "saveBackupSettings" in page_bundle
     assert "resetBackupSettings" in page_bundle

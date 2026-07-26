@@ -104,7 +104,11 @@ async def test_backup_status_api_returns_scheduler_settings(db_session, tmp_path
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    # next_run_at moves with the clock, so compare it separately from the
+    # settings the endpoint is really reporting.
+    next_run_at = payload.pop("next_run_at")
+    assert payload == {
         "enabled": True,
         "cron": "15 3 * * *",
         "keep_latest": 3,
@@ -114,7 +118,34 @@ async def test_backup_status_api_returns_scheduler_settings(db_session, tmp_path
         "config_source": "env",
         "cron_source": "env",
         "keep_latest_source": "env",
+        "cron_error": None,
     }
+    assert next_run_at.endswith("T03:15:00Z")
+
+
+@pytest.mark.asyncio
+async def test_backup_status_api_reports_a_cron_it_cannot_schedule(db_session, tmp_path):
+    # "enabled" only means backups are switched on. Without cron_error the
+    # console showed a healthy schedule while the loop could not run a single
+    # backup, which is exactly how a mis-set AUTO_BACKUP_CRON stayed invisible.
+    settings = Settings(backup_root=tmp_path, auto_backup_cron="0 3 * * 1", auto_backup_keep_latest=3)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/backup/status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is True
+    assert payload["next_run_at"] is None
+    assert "day/month/weekday" in payload["cron_error"]
 
 
 @pytest.mark.asyncio

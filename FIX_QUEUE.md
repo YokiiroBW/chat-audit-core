@@ -2,7 +2,7 @@
 
 配套《chat\-audit\-core 代码审计报告》。这是一份可按序执行、可勾选的修复 backlog:自上而下推进即可,每项标注了对应审计编号、动作、文件:行号、依赖关系与粗略工作量(S≈\<1h / M≈半天 / L≈1 天以上)。分四个波次:**W0 发布阻断** → **W1 数据/功能/崩溃(P0)** → **W2 安全与一致性(P1)** → **W3 健壮性/性能/迁移(P2)** → **W4 低危与清理(P3)**。
 
-> **进度看这份文档的勾选状态。** 阶段交接见 `HANDOFF_2026-07-26-B.md`(最新现状、复现命令、陷阱清单)。当前进度:W0 / W1 / W1b / V1–V3 / FQ\-14 / FQ\-15 已完成,**下一步从 FQ\-16 开始**。
+> **进度看这份文档的勾选状态。** 阶段交接见 `HANDOFF_2026-07-26-B.md`(最新现状、复现命令、陷阱清单)。当前进度:W0 / W1 / W1b / V1–V3 / FQ\-14 / FQ\-15 / FQ\-27 已完成,**下一步建议 FQ\-19(媒体下载 SSRF)**。
 
 > 关键提示:W1 中先做两项"地基重构"(FQ\-2 前缀集中、FQ\-3 身份/方向统一),它们是 H1、H3、M1 等多个 bug 的共同漂移根源,先抽取再改能一次性收敛。
 
@@ -87,7 +87,19 @@
 - [ ] **FQ\-24 · M14 is\_outgoing 幂等统计** —— `import_service.py:493-496` 改为先比较值再置 `changed=True`。工作量 S。
 - [ ] **FQ\-25 · M15 离线审计 covered\_urls 错位** —— `offline_audit_service.py:163-172` 改用 `ordinal→url` 映射比对(`_parse_cq_media_segments_with_ordinals`)。工作量 S。
 - [ ] **FQ\-26 · M16 回填队头饿死** —— `media_backfill_service.py:248-262` 引入推进游标/失败退避标记;清理冗余 `contains` OR;为 `media_assets.local_path` 建索引(顺带修性能)。工作量 M。
-- [ ] **FQ\-27 · M17 备份 cron** —— `backup_service.py:697-712` 实现受限 cron 子集(至少支持每 N 小时),或修 `DISASTER_RECOVERY.md:15` 文档使其与实现一致。工作量 M。
+- [x] **FQ\-27 · M17 备份 cron** —— 已完成,两条路都走了(实现 \+ 文档),因为原问题不只是"支持的表达式太少"。
+
+  **完整故障链**\:`next_run_from_cron` 只接受 `M H * * *` 的纯数字形式,而 `DISASTER_RECOVERY.md:15` 让运维"提高 `AUTO_BACKUP_CRON` 频率"。照做写 `0 */6 * * *` → 抛 `ValueError` → `_auto_backup_loop` 的外层 `except Exception` 捕获 → 记日志 \+ **append** 一条 `failures.log` \+ `sleep 60` → **永远循环**。后果有三层:自动备份**一次都不再执行**;`failures.log` 每天多 1440 行、无上限增长;而 `GET /api/backup/status` 仍然返回 `enabled: true`,Web 控制台显示"开启",**运维完全看不出备份已经停摆**。
+
+  **实现**\:新增 `_parse_cron_field`,分钟与小时字段支持 `*`、数字、`a-b`、`*/步长`、`a-b/步长` 及逗号列表;日/月/星期仍必须为 `*`(即只支持"每天重复")。**刻意拒绝 `5/10`**——各实现对它的含义不一致(是"5 起每 10"还是"就是 5"),猜错等于在运维没要求的时间点跑备份,不如明确报错。
+
+  **止血**\:cron 解析失败从"外层通吃"里拆出来单独处理,按 cron 值去重,只在**值变化时**报一次(日志 \+ `failures.log`),仍继续轮询以便改回正确值后自动恢复、无需重启。顺带修了外层 except 记的是 `settings.auto_backup_cron`(环境值)而非实际生效值——数据库覆盖优先,原来会指向运维根本没设过的配置。
+
+  **可见性**\:`BackupStatusResponse` 增加 `cron_error` 与 `next_run_at`。`enabled` 只表示"开关打开",不代表能跑,所以坏 cron 时前端状态行显示"开启(计划无法执行)"并用 `.bad` 样式,附一行具体错误;正常时显示"下次运行"时间,改完频率能立刻确认是否生效。
+
+  **文档**\:`DISASTER_RECOVERY.md` 写明受支持的 cron 子集与不支持的例子,并把 RPO 那条的建议具体化为 `0 */6 * * *`。
+
+  **回归**\:4 组测试 —— DR 文档里的各种子日频率均可解析、`0 */6` 跨午夜正确进位、9 种无法调度的表达式一律抛错、以及 `_auto_backup_loop` 跑 5 轮后 `failures.log` **只有 1 条**记录(修复前是每轮 1 条),外加 API 层的 `cron_error` 断言与前端契约断言。
 - [ ] **FQ\-28 · M18 /metrics 鉴权** —— `main.py:293` 的 `/metrics` 纳入 admin 鉴权或独立监听;404(`main.py:159,177`)归并为固定标签 `unmatched`,避免无界基数与 actor 泄露。工作量 S。
 - [ ] **FQ\-29 · M19 X\-Forwarded\-For 信任** —— `api.py:219-223` 仅在配置了可信代理时解析 XFF(uvicorn `--proxy-headers` \+ 信任列表)。工作量 S。
 - [ ] **FQ\-30 · M20 默认端口绑定** —— `docker-compose.yml:39-41` 默认绑 `127.0.0.1:8000`,第二端口 25810 移入可选 override;文档标注公网需反代 \+ TLS。工作量 S。

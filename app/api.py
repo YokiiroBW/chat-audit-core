@@ -63,6 +63,7 @@ from app.schemas import (
     RoomResponse,
     RuntimeStatusResponse,
 )
+from app.time_utils import format_utc_z
 from app.services.adapter_service import AdapterService
 from app.services.admin_token_service import AdminTokenService, VALID_ADMIN_ROLES
 from app.services.audit_log_service import AuditLogService
@@ -597,6 +598,13 @@ def _backup_status_response(settings: Settings, backup_config: EffectiveBackupCo
     backup_root = settings.backup_root
     backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name)) if backup_root.exists() else []
     latest = backups[-1].name if backups else None
+    cron_error: str | None = None
+    next_run_at: str | None = None
+    if backup_config.enabled:
+        try:
+            next_run_at = format_utc_z(BackupService.next_run_from_cron(backup_config.cron))
+        except ValueError as exc:
+            cron_error = str(exc)
     return BackupStatusResponse(
         enabled=backup_config.enabled,
         cron=backup_config.cron,
@@ -607,6 +615,8 @@ def _backup_status_response(settings: Settings, backup_config: EffectiveBackupCo
         config_source=backup_config.config_source,
         cron_source=backup_config.cron_source,
         keep_latest_source=backup_config.keep_latest_source,
+        cron_error=cron_error,
+        next_run_at=next_run_at,
     )
 
 

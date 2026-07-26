@@ -849,3 +849,89 @@ def test_backup_service_writes_failure_log(tmp_path):
     assert record["error"] == "checksum mismatch"
     assert record["context"] == {"schema": "chat-audit-core.backup.v1"}
     assert record["created_at"].endswith("Z")
+
+
+def test_backup_service_supports_sub_daily_cron_from_the_recovery_guide():
+    # DISASTER_RECOVERY.md tells operators to raise AUTO_BACKUP_CRON for a lower
+    # RPO. The obvious way to write that used to raise, which sent the scheduler
+    # into a failure loop and silently stopped every backup.
+    datetime = __import__("datetime")
+    now = datetime.datetime(2026, 7, 3, 2, 30, 0)
+
+    assert BackupService.next_run_from_cron("0 */6 * * *", now) == datetime.datetime(2026, 7, 3, 6, 0, 0)
+    assert BackupService.next_run_from_cron("0 0,6,12,18 * * *", now) == datetime.datetime(2026, 7, 3, 6, 0, 0)
+    assert BackupService.next_run_from_cron("*/30 * * * *", now) == datetime.datetime(2026, 7, 3, 3, 0, 0)
+    assert BackupService.next_run_from_cron("30 1-5 * * *", now) == datetime.datetime(2026, 7, 3, 3, 30, 0)
+
+
+def test_backup_service_rolls_sub_daily_cron_over_midnight():
+    datetime = __import__("datetime")
+
+    now = datetime.datetime(2026, 7, 3, 18, 30, 0)
+
+    assert BackupService.next_run_from_cron("0 */6 * * *", now) == datetime.datetime(2026, 7, 4, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "cron",
+    [
+        "0 3 * * 1",       # weekday restrictions are out of scope
+        "0 3 5 * *",       # so are day-of-month restrictions
+        "0 25 * * *",      # hour out of range
+        "60 3 * * *",      # minute out of range
+        "5/10 * * * *",    # ambiguous between implementations, rejected on purpose
+        "0 */0 * * *",     # zero step
+        "0 5-3 * * *",     # inverted range
+        "0 3 * *",         # wrong field count
+        "every 6 hours",   # not cron at all
+    ],
+)
+def test_backup_service_rejects_cron_it_cannot_schedule(cron):
+    with pytest.raises(ValueError):
+        BackupService.next_run_from_cron(cron)
+
+
+@pytest.mark.asyncio
+async def test_auto_backup_loop_reports_an_unusable_cron_once_not_every_minute(tmp_path, monkeypatch):
+    # The loop used to log and append a failures.log record on every pass, so a
+    # cron it could not parse produced 1440 records a day forever while no
+    # backup ever ran.
+    import asyncio
+
+    from app.config import Settings
+    from app.services import backup_service as backup_service_module
+    from app.services.backup_config_service import BackupConfigService, EffectiveBackupConfig
+
+    config = EffectiveBackupConfig(cron="0 3 * * 1", keep_latest=3, cron_source="env", keep_latest_source="env")
+
+    async def fake_get_effective_config(db, settings):
+        return config
+
+    monkeypatch.setattr(BackupConfigService, "get_effective_config", staticmethod(fake_get_effective_config))
+
+    class _NullSession:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    sleeps = 0
+
+    async def fake_sleep(seconds):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps >= 5:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(backup_service_module.asyncio, "sleep", fake_sleep)
+
+    settings = Settings(backup_root=tmp_path, auto_backup_cron="0 3 * * 1", auto_backup_keep_latest=3)
+    with pytest.raises(asyncio.CancelledError):
+        await backup_service_module._auto_backup_loop(settings, _NullSession)
+
+    assert sleeps == 5
+    records = [json.loads(line) for line in (tmp_path / "failures.log").read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 1
+    assert records[0]["event"] == "auto_backup_cron"
+    assert records[0]["context"]["cron"] == "0 3 * * 1"

@@ -1100,8 +1100,11 @@
       el('backupKeepLatestInput').value = status.keep_latest === null || status.keep_latest === undefined ? '' : status.keep_latest;
       el('saveBackupSettingsButton').disabled = state.backupSettingsSaving;
       el('resetBackupSettingsButton').disabled = state.backupSettingsSaving;
+      // 计划无法解析时，自动备份一次都不会执行，所以"开启"必须同时说明这一点，
+      // 否则界面会在备份实际停摆的情况下显示一切正常。
+      const cronBroken = Boolean(status.cron_error);
       const rows = [
-        ['状态', status.enabled ? '开启' : '关闭', status.enabled ? 'ok' : undefined],
+        ['状态', status.enabled ? (cronBroken ? '开启（计划无法执行）' : '开启') : '关闭', status.enabled ? (cronBroken ? 'bad' : 'ok') : undefined],
         ['计划', status.cron || '-'],
         ['保留', status.keep_latest],
         ['配置来源', status.config_source || '-'],
@@ -1110,6 +1113,12 @@
         ['备份数量', status.backups],
         ['最近备份', status.latest_backup || '-'],
       ];
+      if (cronBroken) {
+        rows.push(['计划错误', status.cron_error, 'bad']);
+      } else if (status.next_run_at) {
+        // next_run_at 是 ISO 字符串，不是 formatTs 期待的 unix 秒。
+        rows.push(['下次运行', new Date(status.next_run_at).toLocaleString()]);
+      }
       if (state.backupRunResult) {
         rows.push(['手动备份', state.backupRunResult.filename || '-', 'ok']);
       }
