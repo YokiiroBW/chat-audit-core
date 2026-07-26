@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from collector.app.config import CollectorConfig
+from collector.app.logging import redact
 from collector.media.indexer import MediaFileIndex
 from collector.media.resolver import MediaResolver
 from collector.media.staging import MediaStagingStore
@@ -105,7 +106,11 @@ class QQNTScanner:
         self.progress_callback = progress_callback or (lambda _event, _detail: None)
 
     def _emit_progress(self, event: str, detail: str) -> None:
-        self.progress_callback(event, detail)
+        # Progress details are database paths, and a QQ data directory is named
+        # after the account. These reach the tray log, which users screenshot
+        # and paste into issue reports, so they get the same redaction the log
+        # file already applies.
+        self.progress_callback(event, str(redact(detail)))
 
     def _resolver(self, database_paths: tuple[Path, ...], result: ScanResult) -> MediaResolver:
         roots = _media_roots(self.config, database_paths)

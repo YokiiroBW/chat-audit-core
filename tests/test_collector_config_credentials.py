@@ -151,3 +151,36 @@ def test_logging_rotates_and_diagnostic_bundle_excludes_credentials(tmp_path):
     assert "credentials.dpapi" not in names
     assert manifest["account_fingerprint"] != config.collector.account_id
     assert "credentials.dpapi" in manifest["excluded"]
+
+
+def test_log_redaction_covers_every_key_the_config_loader_refuses():
+    # The two rules had drifted: the log filter listed seven exact names while
+    # the loader also rejected api_key, client_private_key, qqnt_database_key
+    # and every _token/_secret suffix, so values the loader will not even accept
+    # in TOML could still be written to a log in the clear.
+    from collector.app.config import SENSITIVE_CONFIG_KEYS
+    from collector.app.logging import redact
+
+    payload = {key: "leaked" for key in SENSITIVE_CONFIG_KEYS}
+    payload.update({"upload_token": "leaked", "signing_secret": "leaked", "room_id": "kept"})
+
+    redacted = redact(payload)
+
+    assert all(redacted[key] == "[REDACTED]" for key in SENSITIVE_CONFIG_KEYS)
+    assert redacted["upload_token"] == "[REDACTED]"
+    assert redacted["signing_secret"] == "[REDACTED]"
+    assert redacted["room_id"] == "kept"
+
+
+def test_log_redaction_hides_the_qq_account_in_database_paths():
+    # A QQ data directory is named after the account, so every logged database
+    # path carried the operator's QQ number.
+    from collector.app.logging import redact
+
+    redacted = redact(r"C:\Users\Administrator\Documents\Tencent Files\1248465005\nt_qq\nt_db\nt_msg.db")
+
+    assert "1248465005" not in redacted
+    assert "Administrator" not in redacted
+    assert "[ACCOUNT]" in redacted
+    # The rest of the path stays readable, which is the point of the log line.
+    assert redacted.endswith(r"nt_qq\nt_db\nt_msg.db")

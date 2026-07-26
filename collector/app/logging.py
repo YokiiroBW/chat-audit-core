@@ -8,22 +8,40 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from collector.app.config import SENSITIVE_CONFIG_KEYS
+
 
 _BEARER_PATTERN = re.compile(r"(?i)bearer\s+[a-z0-9._~+/=-]+")
 _USER_PATH_PATTERN = re.compile(r"(?i)([a-z]:\\users\\)[^\\\s]+")
-_SENSITIVE_KEYS = frozenset({"api_token", "database_key", "db_key", "password", "secret", "token"})
+# QQ data lives under a directory named after the account, so the number sits in
+# every database path the collector logs or ships in a diagnostic bundle.
+_QQ_ACCOUNT_PATH_PATTERN = re.compile(r"(?i)((?:tencent files|nt_qq|qq)[\\/])\d{5,12}")
+_SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_key", "_password")
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """Same rule the config loader refuses to load, applied to what we write out.
+
+    The two had drifted: this filter listed seven exact names while the loader
+    also rejected api_key, client_private_key, qqnt_database_key and every
+    _token/_secret suffix, so a value the loader will not even accept in TOML
+    could still be written to a log in the clear.
+    """
+    normalized = str(key).lower()
+    return normalized in SENSITIVE_CONFIG_KEYS or normalized.endswith(_SENSITIVE_KEY_SUFFIXES)
 
 
 def redact(value: Any) -> Any:
     if isinstance(value, dict):
-        return {key: "[REDACTED]" if str(key).lower() in _SENSITIVE_KEYS else redact(nested) for key, nested in value.items()}
+        return {key: "[REDACTED]" if _is_sensitive_key(key) else redact(nested) for key, nested in value.items()}
     if isinstance(value, list):
         return [redact(item) for item in value]
     if isinstance(value, tuple):
         return tuple(redact(item) for item in value)
     if isinstance(value, str):
         sanitized = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
-        return _USER_PATH_PATTERN.sub(r"\1[USER]", sanitized)
+        sanitized = _USER_PATH_PATTERN.sub(r"\1[USER]", sanitized)
+        return _QQ_ACCOUNT_PATH_PATTERN.sub(r"\1[ACCOUNT]", sanitized)
     return value
 
 
