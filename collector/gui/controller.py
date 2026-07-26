@@ -102,6 +102,9 @@ class CollectorGuiController:
         self._stop_event: asyncio.Event | None = None
         self._stop_requested = threading.Event()
         self._lock = threading.Lock()
+        self._config_cache: tuple[Any, Any] | None = None
+        self._store_cache: tuple[Any, Any] | None = None
+        self._api_token_present: bool | None = None
         self._recover_interrupted_runs()
 
     def _recover_interrupted_runs(self) -> None:
@@ -193,6 +196,9 @@ class CollectorGuiController:
         if source.is_dir() and (source / "collector_state.sqlite3").exists():
             if not (target / "collector_state.sqlite3").exists():
                 raise RuntimeError("迁移校验失败：状态数据库未复制到新目录")
+        # The state database just moved; anything cached still points at the old
+        # location, where only leftovers remain.
+        self._invalidate_runtime_cache()
         self.event_callback("storage.migrated", f"{source}|{target}")
 
     @staticmethod
@@ -315,6 +321,8 @@ rescan_not_downloaded_days = 30
             credentials.set("api_token", settings.api_token)
         if settings.qqnt_database_key:
             credentials.set("qqnt_database_key", settings.qqnt_database_key)
+        # The config on disk just changed, so anything derived from it is stale.
+        self._invalidate_runtime_cache()
         self.event_callback("settings.saved", "配置已保存")
         # Told at the moment the address is set, where it can still be changed,
         # rather than only in a log file nobody opens.
@@ -404,11 +412,53 @@ exit /b %exit_code%
         self.event_callback("unlock_script.generated", f"{output}|{launcher}")
         return launcher
 
+    def _config_signature(self) -> int | None:
+        return self.config_path.stat().st_mtime_ns if self.config_path.exists() else None
+
+    def _cached_config(self) -> Any:
+        """The parsed config, reused until the file on disk changes.
+
+        The tray polls status every three seconds on the Tk main thread, and
+        each poll reparsed the TOML twice -- once directly and once inside
+        has_api_token().
+        """
+        signature = self._config_signature()
+        if self._config_cache is not None and self._config_cache[0] == signature:
+            return self._config_cache[1]
+        config = load_config(self.config_path)
+        self._config_cache = (signature, config)
+        return config
+
+    def _cached_store(self) -> tuple[Any, Any]:
+        """Config plus an initialised state store, reused between polls.
+
+        Kept separate from :meth:`_cached_config` on purpose: opening the state
+        database is the expensive half, and callers that only need settings --
+        has_api_token() among them -- must not be made to touch it.
+        """
+        signature = self._config_signature()
+        config = self._cached_config()
+        if self._store_cache is not None and self._store_cache[0] == signature:
+            return config, self._store_cache[1]
+        config.paths.ensure()
+        store = CollectorStateStore(config.paths.state_db)
+        store.initialize()
+        self._store_cache = (signature, store)
+        return config, store
+
+    def _invalidate_runtime_cache(self) -> None:
+        self._config_cache = None
+        self._store_cache = None
+        self._api_token_present = None
+
     def has_api_token(self) -> bool:
         if not self.configured:
             return False
-        config = load_config(self.config_path)
-        return bool(self._credentials_for_config(config).get("api_token"))
+        if self._api_token_present is None:
+            # DPAPI decryption is not free and nothing about it changes between
+            # polls; saving settings clears this.
+            self._api_token_present = bool(self._credentials_for_config(self._cached_config()).get("api_token"))
+        return self._api_token_present
 
     def has_database_key(self) -> bool:
         if not self.configured:
@@ -505,10 +555,7 @@ exit /b %exit_code%
                 "unresolved_parser_failures": 0,
                 "last_run": None,
             }
-        config = load_config(self.config_path)
-        config.paths.ensure()
-        store = CollectorStateStore(config.paths.state_db)
-        store.initialize()
+        config, store = self._cached_store()
         snapshot = store.status_snapshot()
         snapshot.update(
             {

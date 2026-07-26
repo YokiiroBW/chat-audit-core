@@ -66,6 +66,18 @@ def _plain_message_database(path):
         )
 
 
+
+def _configured_controller(tmp_path):
+    """A controller with settings already written, ready to poll status."""
+    FakeCredentialStore.values_by_path.clear()
+    data_root = tmp_path / "qqnt"
+    (data_root / "nt_db").mkdir(parents=True)
+    controller = CollectorGuiController(tmp_path / "collector.toml", credential_store_factory=FakeCredentialStore)
+    controller.save_settings(_settings(data_root))
+    controller._invalidate_runtime_cache()
+    return controller
+
+
 def test_gui_settings_write_toml_without_plaintext_token(tmp_path):
     FakeCredentialStore.values_by_path.clear()
     data_root = tmp_path / "qqnt"
@@ -395,3 +407,59 @@ def test_autostart_takes_over_the_installer_startup_shortcut(tmp_path, monkeypat
     controller._set_autostart(False)
     assert not shortcut.exists(), "disabling autostart has to clear both sources"
     assert deleted == ["ChatAuditQQCollector"]
+
+
+def test_status_polling_does_not_reparse_and_reinitialise_every_tick(tmp_path, monkeypatch):
+    # The tray polls status every three seconds on the Tk main thread. Each poll
+    # reparsed the TOML, re-ran the whole schema script and opened a fresh
+    # database -- twice, because has_api_token() loaded the config again.
+    from collector.gui import controller as controller_module
+
+    loads = 0
+    real_load_config = controller_module.load_config
+
+    def counting_load_config(path):
+        nonlocal loads
+        loads += 1
+        return real_load_config(path)
+
+    initialises = 0
+    real_initialize = controller_module.CollectorStateStore.initialize
+
+    def counting_initialize(self):
+        nonlocal initialises
+        initialises += 1
+        return real_initialize(self)
+
+    # Built before the counters go in, so setup work is not mistaken for polling.
+    controller = _configured_controller(tmp_path)
+    monkeypatch.setattr(controller_module, "load_config", counting_load_config)
+    monkeypatch.setattr(controller_module.CollectorStateStore, "initialize", counting_initialize)
+
+    for _ in range(5):
+        controller.status_snapshot()
+
+    assert loads == 1
+    assert initialises == 1
+
+
+def test_saving_settings_invalidates_the_cached_runtime(tmp_path, monkeypatch):
+    from collector.gui import controller as controller_module
+
+    controller = _configured_controller(tmp_path)
+    controller.status_snapshot()
+
+    loads = 0
+    real_load_config = controller_module.load_config
+
+    def counting_load_config(path):
+        nonlocal loads
+        loads += 1
+        return real_load_config(path)
+
+    monkeypatch.setattr(controller_module, "load_config", counting_load_config)
+    controller._invalidate_runtime_cache()
+    controller.status_snapshot()
+
+    # A config that changed on disk must not be served from the cache.
+    assert loads == 1

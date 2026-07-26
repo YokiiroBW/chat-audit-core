@@ -690,9 +690,13 @@ class CollectorTrayApp:
         self._refresh_status()
 
     def stop_sync(self) -> None:
-        stopped = self.controller.stop()
-        self._append_log("后台同步已停止" if stopped else "后台同步未运行或仍在结束当前操作")
-        self._refresh_status()
+        # stop() waits for the sync thread to wind down. Doing that here froze
+        # the window for as long as the wait took.
+        def success(stopped: bool) -> None:
+            self._append_log("后台同步已停止" if stopped else "后台同步未运行或仍在结束当前操作")
+            self._refresh_status()
+
+        self._run_task(self.controller.stop, success)
 
     def sync_once(self) -> None:
         self._run_task(
