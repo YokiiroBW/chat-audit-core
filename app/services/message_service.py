@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.atomic_io import atomic_write_bytes
 from app.config import get_settings
 from app.storage_paths import count_local_storage_paths, known_storage_prefixes
-from app.models import MediaAsset, Message, MessageMediaReference, MessagePart, MessageSourceRecord, RobotMessage
+from app.models import IdentityAlias, MediaAsset, Message, MessageMediaReference, MessagePart, MessageSourceRecord, RobotMessage
 from app.services.capture_policy_service import CapturePolicyService
 from app.time_utils import utc_now
 
@@ -199,8 +199,14 @@ class MessageService:
             return None
 
         raw_message = msg_data["raw_message"]
-        room_id = msg_data["room_id"]
-        sender_id = msg_data["sender_id"]
+        # The ingest endpoint accepts canonical ids and the importer keys on
+        # them, but this path dropped them, so the same private conversation
+        # arriving under two identity variants split into two rooms. Falling
+        # back to the raw value keeps callers that send neither unaffected.
+        raw_room_id = msg_data["room_id"]
+        raw_sender_id = msg_data["sender_id"]
+        room_id = str(msg_data.get("canonical_room_id") or raw_room_id)
+        sender_id = str(msg_data.get("canonical_sender_id") or raw_sender_id)
         event_identity = msg_data.get("message_id")
         if event_identity is None:
             event_identity = f"{msg_data['timestamp']}_{raw_message}"
@@ -299,8 +305,51 @@ class MessageService:
         if assoc_result.scalar_one_or_none() is None:
             db.add(RobotMessage(robot_id=robot_id, msg_hash=msg_hash))
 
+        # Record how the raw identity maps to the canonical one, the same way
+        # the importer does, so the mapping survives for later reconciliation
+        # instead of being silently discarded at the door.
+        await MessageService._record_identity_alias(
+            db, platform=platform, identity_type="user",
+            canonical_id=sender_id, alias_id=raw_sender_id, alias_type="realtime_sender_id",
+        )
+        await MessageService._record_identity_alias(
+            db, platform=platform, identity_type="conversation",
+            canonical_id=room_id, alias_id=raw_room_id, alias_type="realtime_room_id",
+        )
+
         await db.commit()
         return msg_hash
+
+    @staticmethod
+    async def _record_identity_alias(
+        db: AsyncSession,
+        *,
+        platform: str,
+        identity_type: str,
+        canonical_id: str,
+        alias_id: str,
+        alias_type: str,
+    ) -> None:
+        if not alias_id or alias_id == canonical_id:
+            return
+        result = await db.execute(
+            select(IdentityAlias).where(
+                IdentityAlias.platform == platform,
+                IdentityAlias.identity_type == identity_type,
+                IdentityAlias.alias_id == alias_id,
+                IdentityAlias.source_id.is_(None),
+            ).with_for_update()
+        )
+        alias = result.scalar_one_or_none()
+        if alias is None:
+            db.add(IdentityAlias(
+                platform=platform, identity_type=identity_type, canonical_id=canonical_id,
+                alias_id=alias_id, alias_type=alias_type, source_id=None, confidence="observed",
+            ))
+            return
+        alias.canonical_id = canonical_id
+        alias.alias_type = alias_type
+        alias.last_seen_at = utc_now()
 
     @staticmethod
     def normalize_message_segment(segment: dict[str, Any]) -> dict[str, Any]:
