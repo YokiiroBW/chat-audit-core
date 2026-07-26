@@ -9,13 +9,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.api import media_router, public_router as public_api_router, router as api_router
+from app.api import media_router, public_router as public_api_router, require_admin_api_token, router as api_router
 from app.config import Settings, get_settings
 from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
 from app.logging_config import setup_logging
@@ -117,6 +117,17 @@ def validate_production_settings(settings: Settings) -> None:
             raise ValueError(f"{name} {path} is not writable")
 
 
+def _metrics_endpoint(request: Request) -> str:
+    """Metric label for a request, collapsing anything that matched no route.
+
+    Falling back to the raw path made every unmatched URL its own time series,
+    so a scanner walking random paths grew the registry without bound and wrote
+    caller-chosen strings into the export.
+    """
+    route = request.scope.get("route")
+    return route.path if route is not None else "unmatched"
+
+
 def create_app(
     settings: Settings | None = None,
     engine: AsyncEngine | None = None,
@@ -156,7 +167,7 @@ def create_app(
             response = await call_next(request)
         except Exception:
             duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-            endpoint = request.scope.get("route").path if request.scope.get("route") else request.url.path
+            endpoint = _metrics_endpoint(request)
             metrics_registry.record_http_request(
                 method=request.method,
                 endpoint=endpoint,
@@ -174,7 +185,7 @@ def create_app(
             )
             raise
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-        endpoint = request.scope.get("route").path if request.scope.get("route") else request.url.path
+        endpoint = _metrics_endpoint(request)
         metrics_registry.record_http_request(
             method=request.method,
             endpoint=endpoint,
@@ -290,7 +301,11 @@ def create_app(
             return JSONResponse(payload, status_code=503)
         return HealthResponse(**payload)
 
-    @app.get("/metrics", include_in_schema=False)
+    # Behind the same admin auth as every other operational endpoint: the
+    # export names actors, so leaving it open published who operates this
+    # deployment to anyone who could reach the port. A scraper authenticates
+    # with the admin token like any other client.
+    @app.get("/metrics", include_in_schema=False, dependencies=[Depends(require_admin_api_token)])
     async def metrics() -> Response:
         return Response(content=metrics_registry.render_prometheus(), media_type="text/plain; version=0.0.4")
 
