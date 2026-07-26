@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -284,11 +284,45 @@ def _is_public_ip_address(value: str) -> bool:
     ))
 
 
-async def _validate_download_url(url: str, *, resolve_host: bool) -> str | None:
+@dataclass(frozen=True)
+class _DownloadTarget:
+    """Where the request actually goes, and how it stays addressed correctly.
+
+    Once a hostname has been resolved and every answer checked, ``url`` points
+    at the literal address that was checked. Validating a name and then letting
+    the HTTP client resolve it a second time leaves a window in which DNS can
+    answer differently -- classic rebinding -- and the request lands on the
+    private address the check was supposed to prevent.
+    """
+
+    url: str
+    headers: dict[str, str]
+    extensions: dict[str, Any]
+
+    @property
+    def is_pinned(self) -> bool:
+        return bool(self.headers or self.extensions)
+
+
+def _pin_download_target(parsed: Any, address: str) -> _DownloadTarget:
+    literal = f"[{address}]" if ":" in address else address
+    netloc = f"{literal}:{parsed.port}" if parsed.port else literal
+    pinned_url = urlunparse(parsed._replace(netloc=netloc))
+    # The origin still has to see its own name, and for TLS the certificate has
+    # to be verified against that name rather than against the address.
+    headers = {"Host": parsed.netloc}
+    extensions: dict[str, Any] = {}
+    if parsed.scheme == "https":
+        extensions["sni_hostname"] = parsed.hostname
+    return _DownloadTarget(pinned_url, headers, extensions)
+
+
+async def _resolve_download_target(url: str, *, resolve_host: bool) -> _DownloadTarget | None:
     normalized = _normalize_http_url(url)
     if normalized is None:
         return None
-    host = urlparse(normalized).hostname
+    parsed = urlparse(normalized)
+    host = parsed.hostname
     if not host:
         return None
     try:
@@ -297,17 +331,34 @@ async def _validate_download_url(url: str, *, resolve_host: bool) -> str | None:
         literal_is_public = None
     if literal_is_public is False:
         return None
-    if not resolve_host:
-        return normalized
+    if literal_is_public is True or not resolve_host:
+        # Already an address, or the caller injected a transport that does its
+        # own routing; there is nothing to pin.
+        return _DownloadTarget(normalized, {}, {})
     try:
-        if literal_is_public is None:
-            loop = asyncio.get_running_loop()
-            resolved = await loop.run_in_executor(None, lambda: socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
-            if not resolved or any(not _is_public_ip_address(item[4][0]) for item in resolved):
-                return None
+        loop = asyncio.get_running_loop()
+        resolved = await loop.run_in_executor(None, lambda: socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+        addresses = [item[4][0] for item in resolved]
+        if not addresses or any(not _is_public_ip_address(address) for address in addresses):
+            return None
     except (OSError, ValueError):
         return None
-    return normalized
+    return _pin_download_target(parsed, addresses[0])
+
+
+async def _send_download_request(client: Any, target: _DownloadTarget) -> Any:
+    if target.is_pinned:
+        return await client.get(
+            target.url,
+            headers=target.headers,
+            extensions=target.extensions,
+            follow_redirects=False,
+        )
+    # Injected stubs accept only the URL.
+    try:
+        return await client.get(target.url, follow_redirects=False)
+    except TypeError:
+        return await client.get(target.url)
 
 
 async def _read_response_bytes(response: Any, max_bytes: int) -> bytes | None:
@@ -647,16 +698,17 @@ class MediaService:
         client = http_client or httpx.AsyncClient()
         download_status = "unknown"
         try:
-            normalized_url = await _validate_download_url(url, resolve_host=owns_client or type(client).__module__.startswith("httpx"))
-            if normalized_url is None:
+            target = await _resolve_download_target(url, resolve_host=owns_client or type(client).__module__.startswith("httpx"))
+            if target is None:
                 download_status = "unsafe_url"
                 logger.warning("Media download rejected unsafe URL", extra={"url": url, "media_type": media_type})
                 return None
+            # Keep logging and downstream checks keyed on the name, not on the
+            # pinned address, so messages stay readable and host allowlists
+            # (trusted QQ media domains) still match.
+            normalized_url = _normalize_http_url(url) or url
             try:
-                try:
-                    response = await client.get(normalized_url, follow_redirects=False)
-                except TypeError:
-                    response = await client.get(normalized_url)
+                response = await _send_download_request(client, target)
             except (httpx.HTTPError, KeyError) as exc:
                 download_status = "request_error"
                 logger.warning(

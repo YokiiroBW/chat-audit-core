@@ -715,3 +715,85 @@ async def test_download_rejects_unrecognized_trusted_qq_generic_video(db_session
     )
 
     assert local_path is None
+
+
+@pytest.mark.asyncio
+async def test_download_target_pins_the_address_it_validated(monkeypatch):
+    # Validating a name and letting the HTTP client resolve it again leaves a
+    # window for DNS rebinding, so the checked address is what gets connected to.
+    from app.services import media_service
+
+    def fake_getaddrinfo(host, port, **kwargs):
+        assert host == "cdn.example.test"
+        return [(None, None, None, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(media_service.socket, "getaddrinfo", fake_getaddrinfo)
+
+    target = await media_service._resolve_download_target("https://cdn.example.test/a.jpg", resolve_host=True)
+
+    assert target is not None
+    assert target.url == "https://93.184.216.34/a.jpg"
+    assert target.headers == {"Host": "cdn.example.test"}
+    # Without this the TLS certificate would be checked against the address.
+    assert target.extensions == {"sni_hostname": "cdn.example.test"}
+
+
+@pytest.mark.asyncio
+async def test_download_target_rejects_a_name_resolving_to_a_private_address(monkeypatch):
+    from app.services import media_service
+
+    def fake_getaddrinfo(host, port, **kwargs):
+        return [(None, None, None, "", ("93.184.216.34", 0)), (None, None, None, "", ("169.254.169.254", 0))]
+
+    monkeypatch.setattr(media_service.socket, "getaddrinfo", fake_getaddrinfo)
+
+    assert await media_service._resolve_download_target("https://cdn.example.test/a.jpg", resolve_host=True) is None
+
+
+@pytest.mark.asyncio
+async def test_download_target_keeps_the_port_and_leaves_stub_clients_unpinned(monkeypatch):
+    from app.services import media_service
+
+    monkeypatch.setattr(
+        media_service.socket,
+        "getaddrinfo",
+        lambda host, port, **kwargs: [(None, None, None, "", ("93.184.216.34", 0))],
+    )
+
+    pinned = await media_service._resolve_download_target("http://cdn.example.test:80/a.jpg", resolve_host=True)
+    assert pinned is not None
+    assert pinned.url == "http://93.184.216.34:80/a.jpg"
+    assert pinned.headers == {"Host": "cdn.example.test:80"}
+    # Plain HTTP needs no SNI override.
+    assert pinned.extensions == {}
+
+    # An injected transport does its own routing, so there is nothing to pin and
+    # the request must stay addressed by name.
+    unpinned = await media_service._resolve_download_target("https://cdn.example.test/a.jpg", resolve_host=False)
+    assert unpinned is not None
+    assert unpinned.url == "https://cdn.example.test/a.jpg"
+    assert unpinned.is_pinned is False
+
+
+@pytest.mark.asyncio
+async def test_download_sends_the_pinned_request_to_a_real_client():
+    from app.services.media_service import _DownloadTarget, _send_download_request
+
+    class RecordingClient:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return httpx.Response(200, content=b"ok")
+
+    client = RecordingClient()
+    target = _DownloadTarget("https://93.184.216.34/a.jpg", {"Host": "cdn.example.test"}, {"sni_hostname": "cdn.example.test"})
+
+    await _send_download_request(client, target)
+
+    url, kwargs = client.calls[0]
+    assert url == "https://93.184.216.34/a.jpg"
+    assert kwargs["headers"] == {"Host": "cdn.example.test"}
+    assert kwargs["extensions"] == {"sni_hostname": "cdn.example.test"}
+    assert kwargs["follow_redirects"] is False
