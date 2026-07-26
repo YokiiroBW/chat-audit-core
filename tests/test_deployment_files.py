@@ -241,3 +241,36 @@ def test_identity_repair_script_has_no_baked_in_account_and_guards_its_dialect()
     assert "dialect not in SUPPORTED_DIALECTS" in script
     # No QQ-number-shaped literal left behind.
     assert not re.search(r"\b\d{9,11}\b", script)
+
+
+def test_alembic_config_declares_nothing_it_cannot_resolve():
+    # timezone = UTC made "alembic revision" fail outright: alembic resolves it
+    # through zoneinfo, which has no database on Windows without tzdata, and
+    # that package is in no requirements file. Revision generation cannot run
+    # here anyway, since migrations are hand-written and no script.py.mako
+    # ships, so the setting bought nothing and broke the command.
+    config = (ROOT / "alembic.ini").read_text(encoding="utf-8")
+
+    assert "script_location = migrations" in config
+    assert not re.search(r"^\s*timezone\s*=", config, re.M)
+    assert not (ROOT / "migrations/script.py.mako").exists()
+
+
+def test_gitattributes_export_rules_reference_files_that_exist():
+    # Seven export-ignore entries pointed at files removed long ago, so the
+    # rules read as protection that was not actually in force.
+    import subprocess
+
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    tracked = set(
+        subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split("\n")
+    )
+
+    for line in attributes.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        pattern = stripped.rsplit(" ", 1)[0].strip('"')
+        if pattern.endswith("/") or pattern.endswith("/**"):
+            continue
+        assert pattern in tracked, f"export rule points at a file that is not tracked: {pattern}"
