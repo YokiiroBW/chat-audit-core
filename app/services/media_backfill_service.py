@@ -4,10 +4,10 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Message, MessageMediaReference, RobotMessage
+from app.models import Message, MessageMediaReference, RobotMessage, SystemSetting
 from app.services.media_service import (
     MediaService,
     _CQ_PATTERN,
@@ -245,22 +245,41 @@ class MediaBackfillService:
     ) -> MediaBackfillReport:
         report = MediaBackfillReport()
         normalized_batch_size = max(1, batch_size)
-        result = await db.execute(
-            select(Message)
-            .where(
-                or_(
-                    Message.local_message.contains("http"),
-                    Message.local_message.contains("http://"),
-                    Message.local_message.contains("https://"),
-                    Message.local_message.contains("http:\\/\\/"),
-                    Message.local_message.contains("https:\\/\\/"),
-                    Message.local_message.contains("[CQ:forward,"),
-                )
-            )
-            .order_by(Message.timestamp.asc(), Message.msg_hash.asc())
-            .limit(limit)
+        # "http" already covers http://, https:// and the escaped forms; the
+        # extra terms only made the planner test the same column five times.
+        pending_media = or_(
+            Message.local_message.contains("http"),
+            Message.local_message.contains("[CQ:forward,"),
         )
+
+        def _page(after: tuple[int, str] | None):
+            statement = select(Message).where(pending_media)
+            if after is not None:
+                timestamp, msg_hash = after
+                statement = statement.where(
+                    or_(
+                        Message.timestamp > timestamp,
+                        and_(Message.timestamp == timestamp, Message.msg_hash > msg_hash),
+                    )
+                )
+            return statement.order_by(Message.timestamp.asc(), Message.msg_hash.asc()).limit(limit)
+
+        # Resume after the last message the previous run looked at. Always
+        # starting from the oldest meant a head of permanently dead URLs was
+        # rescanned every run while everything behind it was never reached.
+        cursor = await MediaBackfillService._load_cursor(db)
+        result = await db.execute(_page(cursor))
         messages = list(result.scalars().unique().all())
+        if len(messages) < limit and cursor is not None:
+            # Tail reached: wrap to the start so the run stays full-sized and the
+            # whole archive keeps being revisited.
+            seen = {message.msg_hash for message in messages}
+            wrapped = await db.execute(_page(None))
+            for message in wrapped.scalars().unique().all():
+                if len(messages) >= limit:
+                    break
+                if message.msg_hash not in seen:
+                    messages.append(message)
         structured_media_ordinals: dict[str, set[int]] = {}
         if messages:
             structured_result = await db.execute(
@@ -366,7 +385,35 @@ class MediaBackfillService:
 
         if not dry_run and batch_candidates:
             await db.commit()
+        if not dry_run and messages:
+            # A dry run must not move the cursor, or the next real run would skip
+            # everything the dry run merely looked at.
+            last = messages[-1]
+            await MediaBackfillService._save_cursor(db, (int(last.timestamp), str(last.msg_hash)))
+            await db.commit()
         return report
+
+    BACKFILL_CURSOR_KEY = "media_backfill.cursor"
+
+    @staticmethod
+    async def _load_cursor(db: AsyncSession) -> tuple[int, str] | None:
+        record = await db.get(SystemSetting, MediaBackfillService.BACKFILL_CURSOR_KEY)
+        if record is None:
+            return None
+        try:
+            timestamp, msg_hash = json.loads(record.value_json)
+        except (TypeError, ValueError):
+            return None
+        return int(timestamp), str(msg_hash)
+
+    @staticmethod
+    async def _save_cursor(db: AsyncSession, cursor: tuple[int, str]) -> None:
+        value_json = json.dumps([cursor[0], cursor[1]], ensure_ascii=False)
+        record = await db.get(SystemSetting, MediaBackfillService.BACKFILL_CURSOR_KEY)
+        if record is None:
+            db.add(SystemSetting(key=MediaBackfillService.BACKFILL_CURSOR_KEY, value_json=value_json))
+            return
+        record.value_json = value_json
 
     @staticmethod
     async def _robot_ids_for_message(db: AsyncSession, msg_hash: str) -> list[str]:

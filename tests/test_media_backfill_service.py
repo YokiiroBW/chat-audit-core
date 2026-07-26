@@ -442,3 +442,90 @@ async def test_media_backfill_api_supports_dry_run(db_session, tmp_path):
     assert payload["unchanged"] == 1
     assert payload["reason_summary"] == {}
     assert payload["failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_advances_past_a_head_of_unfetchable_messages(db_session, tmp_path):
+    # Always starting from the oldest message meant a head of permanently dead
+    # URLs was rescanned on every run and the messages behind it were never
+    # reached at all.
+    for index in range(4):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": f"starved-{index}",
+                "room_id": "group-starved",
+                "message_type": "group",
+                "sender_id": "user-a",
+                "nickname": "A",
+                "raw_message": f"[CQ:image,file={index}.jpg,url=http://media.local/dead-{index}.jpg]",
+                "timestamp": 1783000000 + index,
+            },
+        )
+
+    client = StubAsyncClient({})
+    first = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        limit=2,
+    )
+    second = await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        limit=2,
+    )
+
+    assert first.scanned == 2
+    assert second.scanned == 2
+    # The second run must look at the messages the first one did not reach.
+    assert {url.rsplit("/", 1)[-1] for url in client.requested_urls} == {
+        "dead-0.jpg",
+        "dead-1.jpg",
+        "dead-2.jpg",
+        "dead-3.jpg",
+    }
+
+
+@pytest.mark.asyncio
+async def test_backfill_dry_run_does_not_move_the_cursor(db_session, tmp_path):
+    for index in range(2):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": f"dry-{index}",
+                "room_id": "group-dry",
+                "message_type": "group",
+                "sender_id": "user-a",
+                "nickname": "A",
+                "raw_message": f"[CQ:image,file={index}.jpg,url=http://media.local/dry-{index}.jpg]",
+                "timestamp": 1783000000 + index,
+            },
+        )
+
+    await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=StubAsyncClient({}),
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        limit=1,
+        dry_run=True,
+    )
+    client = StubAsyncClient({})
+    await MediaBackfillService.backfill_historical_media(
+        db_session,
+        http_client=client,
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+        limit=1,
+    )
+
+    # The real run still starts at the oldest message the dry run only inspected.
+    assert [url.rsplit("/", 1)[-1] for url in client.requested_urls] == ["dry-0.jpg"]

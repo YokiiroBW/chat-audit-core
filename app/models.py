@@ -137,7 +137,9 @@ class MediaAsset(Base):
     content_sha256 = Column(String(64), nullable=True, unique=True, index=True)
     file_type = Column(String(20), nullable=False)
     file_size = Column(Integer, nullable=False)
-    local_path = Column(String(255), nullable=False)
+    # Six services resolve assets by this column, including per-message media
+    # resolution on every read, so it carries an index of its own.
+    local_path = Column(String(255), nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
 
