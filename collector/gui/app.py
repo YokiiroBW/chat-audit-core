@@ -644,10 +644,14 @@ class CollectorTrayApp:
             )
             messagebox.showinfo(_ui_text(r"\u811a\u672c\u5df2\u751f\u6210"), message)
 
+        # Tk variables belong to the main thread; _run_task runs its callable on
+        # a worker. Reading them inside the lambda touched Tk from that worker,
+        # which is undefined behaviour rather than a reliable crash -- so the
+        # values are captured here, exactly as auto_detect already does.
+        data_root = self.data_root_var.get()
+        qq_install_dir = self.qq_install_dir_var.get()
         self._run_task(
-            lambda: self.controller.generate_unlock_script(
-                self.data_root_var.get(), self.qq_install_dir_var.get(), output
-            ),
+            lambda: self.controller.generate_unlock_script(data_root, qq_install_dir, output),
             success,
         )
 
@@ -660,7 +664,10 @@ class CollectorTrayApp:
             self._append_log("配置已保存")
             self.inspect_databases()
 
-        self._run_task(lambda: self.controller.save_settings(self._settings_value()), success)
+        # Same reason: _settings_value() reads a dozen Tk variables, so it runs
+        # on the main thread and the worker only sees the resulting value.
+        settings_value = self._settings_value()
+        self._run_task(lambda: self.controller.save_settings(settings_value), success)
 
     def test_connection(self) -> None:
         self._run_task(

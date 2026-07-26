@@ -311,3 +311,28 @@ def test_transport_security_warnings_flag_plaintext_and_disabled_verification():
 
     both = transport_security_warnings(ServerSettings(base_url="http://192.168.31.210:8000", verify_tls=False))
     assert len(both) == 2
+
+
+def test_worker_tasks_never_read_tk_variables_from_the_worker_thread():
+    # _run_task hands its callable to a worker thread, and Tk variables belong
+    # to the main thread. Reading one inside the lambda is undefined behaviour
+    # rather than a reliable crash, so it has to be caught by inspection.
+    import ast
+    from pathlib import Path
+
+    source = Path("collector/gui/app.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_run_task"):
+            continue
+        for argument in node.args:
+            for inner in ast.walk(argument):
+                if not isinstance(inner, ast.Attribute):
+                    continue
+                # self.<something>_var.get() or self._settings_value()
+                if inner.attr.endswith("_var") or inner.attr == "_settings_value":
+                    offenders.append((node.lineno, inner.attr))
+
+    assert offenders == [], f"Tk state read inside a _run_task callable: {offenders}"
