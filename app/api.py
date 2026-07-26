@@ -366,6 +366,21 @@ def _storage_file_path(storage_root: Path, file_name: str) -> Path | None:
     return candidate
 
 
+# Archived card snapshots are attacker-controlled markup: the URL comes from a
+# QQ card message and the body is whatever that server returned. The console
+# opens them with a plain link, so without this they render as a document in the
+# console's own origin, with the session cookie attached.
+_ARCHIVED_DOCUMENT_SUFFIXES = {".htm", ".html", ".mhtml", ".shtml", ".svg", ".xhtml", ".xml"}
+# ``sandbox`` with no tokens drops the document into an opaque origin and
+# disables scripts outright, which keeps a snapshot readable while making it
+# unable to touch the console, its cookies or its API. The rest stops the
+# snapshot from reaching back out to the network when someone views it.
+_ARCHIVED_DOCUMENT_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+    "base-uri 'none'; form-action 'none'; sandbox"
+)
+
+
 @media_router.get("/media/{file_name:path}", include_in_schema=False)
 @media_router.get("/static/storage/{file_name:path}", include_in_schema=False)
 async def download_media_file(
@@ -375,10 +390,11 @@ async def download_media_file(
     file_path = _storage_file_path(settings.storage_root, file_name)
     if file_path is None or not file_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media file not found")
-    return FileResponse(
-        file_path,
-        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
-    )
+    headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    if file_path.suffix.lower() in _ARCHIVED_DOCUMENT_SUFFIXES:
+        headers["Content-Security-Policy"] = _ARCHIVED_DOCUMENT_CSP
+        headers["Referrer-Policy"] = "no-referrer"
+    return FileResponse(file_path, headers=headers)
 
 
 @public_router.post("/auth/login", response_model=AuthLoginResponse)

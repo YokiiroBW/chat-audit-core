@@ -316,3 +316,47 @@ async def test_password_login_sets_http_only_session_cookie(db_session):
     assert "HttpOnly" in login.headers["set-cookie"]
     assert me.status_code == 200
     assert me.json()["username"] == "cookie-user"
+
+
+@pytest.mark.asyncio
+async def test_archived_html_snapshot_cannot_run_scripts_in_the_console_origin(db_session, tmp_path):
+    # Card snapshots are fetched from URLs found in QQ card messages, so their
+    # markup is attacker-controlled, and the console opens them with a plain
+    # link. Served bare they would execute in the console's own origin with the
+    # session cookie attached.
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    (storage_root / "card.html").write_text("<script>fetch('/api/messages')</script>", encoding="utf-8")
+    (storage_root / "card.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>", encoding="utf-8")
+    (storage_root / "photo.jpg").write_bytes(b"\xff\xd8\xff\xe0 not really a jpeg")
+    settings = Settings(admin_api_token="bootstrap-admin", storage_root=storage_root)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post("/api/auth/session", headers={"Authorization": "Bearer bootstrap-admin"})
+            html_response = await client.get("/media/card.html")
+            svg_response = await client.get("/media/card.svg")
+            image_response = await client.get("/media/photo.jpg")
+    finally:
+        app.dependency_overrides.clear()
+
+    for response in (html_response, svg_response):
+        assert response.status_code == 200
+        policy = response.headers["content-security-policy"]
+        # sandbox without allow-scripts disables scripting and gives the
+        # document an opaque origin, so it cannot reach the cookie or the API.
+        assert "sandbox" in policy
+        assert "allow-scripts" not in policy
+        assert "default-src 'none'" in policy
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+    # Ordinary media keeps its existing headers and gains no needless policy.
+    assert image_response.status_code == 200
+    assert "content-security-policy" not in image_response.headers
+    assert image_response.headers["x-content-type-options"] == "nosniff"

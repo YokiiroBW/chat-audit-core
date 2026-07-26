@@ -10,7 +10,7 @@
 ## 阶段一 · 安全边界
 
 - [x] FQ-19 · 媒体下载 DNS rebinding SSRF（M）— 已完成
-- [ ] FQ-21 · 卡片 HTML/SVG 存储型 XSS（M）
+- [x] FQ-21 · 卡片 HTML/SVG 存储型 XSS（M）— 已完成
 - [ ] FQ-20 · 会话/令牌 TTL（M，含迁移）
 - [ ] FQ-29 · X-Forwarded-For 信任（S）
 - [ ] FQ-28 · /metrics 鉴权 + 404 标签基数（S）
