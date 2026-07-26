@@ -885,3 +885,89 @@ async def test_reply_preview_resolves_per_room_across_a_cross_room_page(db_sessi
     previews = {item.room_id: item.reply_preview_text for item in results}
     assert previews["group-p"] == "P Target: direct target body"
     assert previews["friend-p"] == "Q Target: aliased target body"
+
+
+@pytest.mark.asyncio
+async def test_messages_api_survives_a_sender_whose_avatar_cannot_be_fetched(db_session, monkeypatch):
+    # /rooms already isolated per item; /bots and /messages ran the whole page
+    # inside one try, so a single unreachable avatar returned 500 for the
+    # entire list and the console showed nothing at all.
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "hydration-1",
+            "room_id": "group-hydrate",
+            "message_type": "group",
+            "sender_id": "123456789",
+            "nickname": "Sender",
+            "raw_message": "hello",
+            "timestamp": 1783000000,
+        },
+    )
+
+    async def failing_cache_qq_user_profile(*args, **kwargs):
+        raise RuntimeError("avatar asset is not readable")
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", failing_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            messages = await client.get("/api/messages", params={"robot_id": "robot-a", "room_id": "group-hydrate", "limit": 50})
+            bots = await client.get("/api/bots")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert messages.status_code == 200
+    assert [item["raw_message"] for item in messages.json()] == ["hello"]
+    assert bots.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_avatar_hydration_is_capped_per_request(db_session, monkeypatch):
+    # An uncapped branch meant one serial outbound request per new private chat
+    # while the caller waited on the list.
+    from app.api import AVATAR_HYDRATION_LIMIT
+
+    for index in range(AVATAR_HYDRATION_LIMIT + 5):
+        room_id = str(900000000 + index)
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "room_id": room_id,
+                "message_type": "private",
+                "sender_id": room_id,
+                "nickname": f"Friend {index}",
+                "raw_message": "hi",
+                "timestamp": 1783000000 + index,
+            },
+        )
+
+    hydrated: list[str] = []
+
+    async def counting_cache_qq_user_profile(*args, **kwargs):
+        hydrated.append(kwargs["user_id"])
+
+    monkeypatch.setattr("app.api.UserProfileService.cache_qq_user_profile", counting_cache_qq_user_profile)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/rooms", params={"robot_id": "robot-a"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    # Every room is still returned; only the outbound work is bounded.
+    assert len(response.json()) == AVATAR_HYDRATION_LIMIT + 5
+    assert len(hydrated) == AVATAR_HYDRATION_LIMIT

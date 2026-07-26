@@ -1,7 +1,7 @@
 import asyncio
 from email.parser import BytesParser
 from email.policy import default as email_policy
-from functools import lru_cache
+from functools import lru_cache, partial
 import hashlib
 import ipaddress
 import json
@@ -539,6 +539,41 @@ async def list_bots(
     return [BotProfileResponse.model_validate(profile) for profile in profiles]
 
 
+# One page of a list request may not turn into an unbounded fan-out of outbound
+# HTTP calls, and one unreachable avatar may not take the list down with it.
+AVATAR_HYDRATION_LIMIT = 20
+
+
+async def _hydrate_profiles(
+    db: AsyncSession,
+    entries: list[tuple[str, Any]],
+    *,
+    kind: str,
+) -> bool:
+    """Run each hydration, isolated and capped.
+
+    Every caller had one of the two failure modes: /bots and /messages ran the
+    whole page inside a single try, so one profile that could not be fetched
+    returned 500 for the entire list, and the private branch of /rooms had no
+    cap at all, so a page of new private chats meant one serial outbound request
+    per chat while the caller waited.
+
+    True means "reload before using the rows you passed in". That covers a
+    successful hydration, and equally a failed one: the rollback that makes the
+    session usable again also expires whatever the caller is holding, and
+    serialising an expired ORM row raises rather than returning stale data.
+    """
+    touched = False
+    for label, run in entries[:AVATAR_HYDRATION_LIMIT]:
+        try:
+            await run()
+        except Exception:
+            await db.rollback()
+            logger.exception("Profile hydration failed", extra={"kind": kind, "target": label})
+        touched = True
+    return touched
+
+
 async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], settings: Settings) -> bool:
     missing_qq_avatars = [
         profile
@@ -551,18 +586,27 @@ async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], s
         return False
 
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for profile in missing_qq_avatars[:20]:
-            await UserProfileService.cache_qq_user_profile(
-                db,
-                user_id=str(profile.id),
-                platform="qq",
-                display_name=profile.display_name,
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-    return True
+        return await _hydrate_profiles(
+            db,
+            [
+                (
+                    str(profile.id),
+                    partial(
+                        UserProfileService.cache_qq_user_profile,
+                        db,
+                        user_id=str(profile.id),
+                        platform="qq",
+                        display_name=profile.display_name,
+                        http_client=client,
+                        storage_root=settings.storage_root,
+                        public_prefix=settings.public_storage_prefix,
+                        max_bytes=settings.media_max_bytes,
+                    ),
+                )
+                for profile in missing_qq_avatars
+            ],
+            kind="bot_avatar",
+        )
 
 
 def _needs_qq_avatar_refresh(avatar_path: str | None) -> bool:
@@ -1071,7 +1115,7 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
 
     changed = False
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for room in missing_group_rooms[:20]:
+        for room in missing_group_rooms[:AVATAR_HYDRATION_LIMIT]:
             room_id = str(room["room_id"])
             group_info = None
             try:
@@ -1095,7 +1139,9 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
             except Exception:
                 await db.rollback()
                 logger.exception("Room profile hydration failed", extra={"room_id": room_id, "platform": "qq"})
-        for room in missing_private_rooms:
+        # Capped like every other branch: a page full of new private chats used
+        # to mean one serial outbound request per chat while the caller waited.
+        for room in missing_private_rooms[:AVATAR_HYDRATION_LIMIT]:
             user_id = str(room.get("qq_number") or room["room_id"])
             try:
                 await UserProfileService.cache_qq_user_profile(
@@ -1170,18 +1216,27 @@ async def _hydrate_missing_message_sender_profiles(db: AsyncSession, messages: l
         return False
 
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for sender_id, display_name in list(missing_senders.items())[:20]:
-            await UserProfileService.cache_qq_user_profile(
-                db,
-                user_id=sender_id,
-                platform="qq",
-                display_name=display_name,
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-    return True
+        return await _hydrate_profiles(
+            db,
+            [
+                (
+                    sender_id,
+                    partial(
+                        UserProfileService.cache_qq_user_profile,
+                        db,
+                        user_id=sender_id,
+                        platform="qq",
+                        display_name=display_name,
+                        http_client=client,
+                        storage_root=settings.storage_root,
+                        public_prefix=settings.public_storage_prefix,
+                        max_bytes=settings.media_max_bytes,
+                    ),
+                )
+                for sender_id, display_name in missing_senders.items()
+            ],
+            kind="message_sender_avatar",
+        )
 
 
 @router.post(
