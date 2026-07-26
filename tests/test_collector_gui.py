@@ -289,3 +289,25 @@ def test_gui_unlock_script_requires_both_directories(tmp_path):
     data_root.mkdir()
     with pytest.raises(ValueError, match="QQ"):
         controller.generate_unlock_script(data_root, tmp_path / "missing-install", tmp_path / "unlock.ps1")
+
+
+def test_transport_security_warnings_flag_plaintext_and_disabled_verification():
+    # The collector carries an API token and archived chat content, so neither
+    # plain HTTP off-box nor a disabled certificate check may pass silently.
+    from collector.app.config import ServerSettings, transport_security_warnings
+
+    assert transport_security_warnings(ServerSettings(base_url="https://audit.example.test")) == []
+    # Loopback over HTTP is a legitimate local setup.
+    assert transport_security_warnings(ServerSettings(base_url="http://127.0.0.1:8000")) == []
+    assert transport_security_warnings(ServerSettings(base_url="http://localhost:8000")) == []
+
+    plaintext = transport_security_warnings(ServerSettings(base_url="http://192.168.31.210:8000"))
+    assert len(plaintext) == 1
+    assert "HTTP" in plaintext[0]
+
+    unverified = transport_security_warnings(ServerSettings(base_url="https://audit.example.test", verify_tls=False))
+    assert len(unverified) == 1
+    assert "verify_tls" in unverified[0]
+
+    both = transport_security_warnings(ServerSettings(base_url="http://192.168.31.210:8000", verify_tls=False))
+    assert len(both) == 2

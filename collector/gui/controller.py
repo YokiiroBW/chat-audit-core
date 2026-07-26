@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from collector.app.config import CollectorConfig, default_collector_root, load_config
+from collector.app.config import CollectorConfig, default_collector_root, load_config, transport_security_warnings
 from collector.app.credential_store import CredentialStore
 from collector.app.diagnostics import create_diagnostic_bundle
 from collector.app.main import (
@@ -288,6 +288,10 @@ rescan_not_downloaded_days = 30
         if settings.qqnt_database_key:
             credentials.set("qqnt_database_key", settings.qqnt_database_key)
         self.event_callback("settings.saved", "配置已保存")
+        # Told at the moment the address is set, where it can still be changed,
+        # rather than only in a log file nobody opens.
+        for warning in transport_security_warnings(config.server):
+            self.event_callback("server.insecure_transport", warning)
         return config
 
     def generate_unlock_script(self, data_root: str, qq_install_dir: str, output_path: str | Path) -> Path:

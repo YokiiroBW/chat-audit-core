@@ -9,7 +9,7 @@ from typing import Any, Callable
 import httpx
 
 from collector import __version__
-from collector.app.config import CollectorConfig
+from collector.app.config import CollectorConfig, transport_security_warnings
 from collector.sync.queue import CollectorQueue, QueueItem
 from collector.sync.state import CollectorStateStore
 
@@ -47,6 +47,11 @@ class CollectorApiClient:
 
     async def __aenter__(self) -> "CollectorApiClient":
         if self._client is None:
+            # Surfaced every time a connection is opened rather than once at
+            # startup: an operator who edits the server URL mid-session should
+            # see the consequence in the same log they are already watching.
+            for warning in transport_security_warnings(self.config.server):
+                logger.warning("Collector transport is not protected", extra={"warning": warning})
             self._client = httpx.AsyncClient(
                 base_url=self.config.server.base_url,
                 timeout=self.config.server.request_timeout_seconds,

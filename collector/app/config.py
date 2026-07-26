@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import tomllib
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,32 @@ class ServerSettings:
     source_id: str | None = None
     request_timeout_seconds: int = 60
     verify_tls: bool = True
+
+
+def transport_security_warnings(server: "ServerSettings") -> list[str]:
+    """Ways this server connection would expose the upload in transit.
+
+    The collector carries an API token and archived chat content, so plain HTTP
+    to anything but the local machine puts both on the wire, and disabling
+    certificate verification means a proxy in the middle is indistinguishable
+    from the real server. Neither is refused outright -- a lab or a loopback
+    tunnel is a legitimate setup -- but neither may pass silently either.
+    """
+    warnings: list[str] = []
+    parsed = urlparse(server.base_url)
+    host = (parsed.hostname or "").lower()
+    is_loopback = host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
+    if parsed.scheme == "http" and not is_loopback:
+        warnings.append(
+            f"服务器地址使用明文 HTTP（{server.base_url}），API Token 与聊天内容会以明文经过网络，"
+            "请改用 https:// 或仅在本机回环使用。"
+        )
+    if not server.verify_tls:
+        warnings.append(
+            "已关闭 TLS 证书校验（verify_tls=false），中间人与真实服务器无法区分，"
+            "仅应在自签证书的测试环境临时使用。"
+        )
+    return warnings
 
 
 @dataclass(frozen=True)
