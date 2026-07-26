@@ -600,3 +600,71 @@ async def test_offline_audit_matches_media_references_by_ordinal_slot(db_session
     # The archived slot must not be credited against the remote one.
     assert report.remote_media_urls == 1
     assert [issue.target for issue in report.issues if issue.kind == "remote_media"] == [remote_url]
+
+
+@pytest.mark.asyncio
+async def test_offline_services_hash_media_without_loading_it_whole(db_session, tmp_path, monkeypatch):
+    # Archived media runs to media_max_bytes, 100 MB by default. Reading each
+    # file whole to hash it made a pass scale with the largest file in the
+    # archive rather than with a fixed buffer.
+    from pathlib import Path
+
+    local_path = await MessageService.save_media_asset(
+        db_session,
+        b"a" * 4096,
+        "image",
+        "jpg",
+        storage_root=tmp_path,
+        public_prefix="/static/storage",
+    )
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "room_id": "group-chunked",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "chunked",
+            "local_message": local_path,
+            "timestamp": 1783000000,
+        },
+    )
+    await seed_profile_avatars(db_session, tmp_path, room_id="group-chunked", sender_id="user-a")
+
+    read_whole: list[str] = []
+    real_read_bytes = Path.read_bytes
+
+    def tracking_read_bytes(self):
+        read_whole.append(str(self))
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", tracking_read_bytes)
+
+    report = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+    monkeypatch.undo()
+
+    assert report.media_hash_mismatches == 0
+    assert report.missing_media_files == 0
+    stored_media = [path for path in read_whole if path.startswith(str(tmp_path))]
+    assert stored_media == [], f"media was still read whole: {stored_media}"
+
+
+@pytest.mark.asyncio
+async def test_repaired_paths_are_deduplicated_without_scanning_the_list(db_session):
+    # Membership was tested against the list itself, so a repair pass over a
+    # large archive spent its time re-scanning what it had already recorded.
+    from app.services.offline_repair_service import OfflineRepairReport, _record_repaired
+
+    report = OfflineRepairReport()
+    seen: set[str] = set()
+    for _ in range(3):
+        _record_repaired(report, seen, "/static/storage/a.jpg")
+    _record_repaired(report, seen, "/static/storage/b.jpg")
+
+    assert report.repaired_paths == ["/static/storage/a.jpg", "/static/storage/b.jpg"]

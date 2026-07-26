@@ -24,6 +24,14 @@ class OfflineRepairReport:
     repaired_paths: list[str] = field(default_factory=list)
 
 
+def _record_repaired(report: "OfflineRepairReport", seen: set[str], local_path: str) -> None:
+    """Append once, deciding membership against a set rather than the list."""
+    if local_path in seen:
+        return
+    seen.add(local_path)
+    report.repaired_paths.append(local_path)
+
+
 class OfflineRepairService:
     @staticmethod
     async def repair_local_media_integrity(
@@ -59,7 +67,11 @@ class OfflineRepairService:
         )
         report.repaired_profile_avatars = len(profile_paths)
         local_paths.update(profile_paths)
-        report.repaired_paths.extend(path for path in profile_paths if path not in report.repaired_paths)
+        # Membership was tested against the list itself, so a repair pass over a
+        # large archive spent its time re-scanning what it had already recorded.
+        repaired_seen: set[str] = set(report.repaired_paths)
+        for path in profile_paths:
+            _record_repaired(report, repaired_seen, path)
 
         asset_result = await db.execute(select(MediaAsset))
         assets = list(asset_result.scalars().all())
@@ -76,13 +88,13 @@ class OfflineRepairService:
                 unrepaired_paths.add(local_path)
                 continue
 
-            content = file_path.read_bytes()
-            if not content:
+            file_size = file_path.stat().st_size
+            if not file_size:
                 unrepaired_paths.add(local_path)
                 continue
             asset = asset_by_path.get(local_path)
             if asset is None:
-                file_hash = OfflineRepairService._file_hash_for(content)
+                file_hash = OfflineRepairService._file_hash_for_path(file_path)
                 if file_hash in used_hashes:
                     unrepaired_paths.add(local_path)
                     continue
@@ -90,22 +102,20 @@ class OfflineRepairService:
                 asset = MediaAsset(
                     file_hash=file_hash,
                     file_type=OfflineRepairService._file_type_for(local_path),
-                    file_size=len(content),
+                    file_size=file_size,
                     local_path=local_path,
                 )
                 db.add(asset)
                 asset_by_path[local_path] = asset
                 report.repaired_media_assets += 1
-                if local_path not in report.repaired_paths:
-                    report.repaired_paths.append(local_path)
-            elif not OfflineRepairService._content_matches_asset_hash(asset.file_hash, content):
+                _record_repaired(report, repaired_seen, local_path)
+            elif not OfflineRepairService._file_matches_asset_hash(asset.file_hash, file_path):
                 hash_mismatch_paths.add(local_path)
                 unrepaired_paths.add(local_path)
-            elif asset.file_size != len(content):
-                asset.file_size = len(content)
+            elif asset.file_size != file_size:
+                asset.file_size = file_size
                 report.repaired_file_sizes += 1
-                if local_path not in report.repaired_paths:
-                    report.repaired_paths.append(local_path)
+                _record_repaired(report, repaired_seen, local_path)
 
         for asset in assets:
             file_path = BackupService._local_media_file_path(asset.local_path, root, public_storage_prefix)
@@ -126,8 +136,7 @@ class OfflineRepairService:
             if asset.file_size != file_size:
                 asset.file_size = file_size
                 report.repaired_file_sizes += 1
-                if asset.local_path not in report.repaired_paths:
-                    report.repaired_paths.append(asset.local_path)
+                _record_repaired(report, repaired_seen, asset.local_path)
 
         report.unrepaired_media_files = len(unrepaired_paths)
         report.media_hash_mismatches = len(hash_mismatch_paths)
@@ -267,6 +276,21 @@ class OfflineRepairService:
         return hashlib.md5(content).hexdigest()
 
     @staticmethod
+    def _digest_file(file_path: Path, algorithm: str) -> str:
+        """Hash a file without holding it in memory.
+
+        Archived media runs to the configured media_max_bytes, 100 MB by
+        default. Reading each one whole just to hash it made a repair pass scale
+        with the largest file in the archive rather than with a fixed buffer.
+        """
+        with file_path.open("rb") as handle:
+            return hashlib.file_digest(handle, algorithm).hexdigest()
+
+    @staticmethod
+    def _file_hash_for_path(file_path: Path) -> str:
+        return OfflineRepairService._digest_file(file_path, "md5")
+
+    @staticmethod
     def _content_matches_asset_hash(file_hash: str, content: bytes) -> bool:
         if not all(char in "0123456789abcdefABCDEF" for char in file_hash):
             return True
@@ -274,6 +298,16 @@ class OfflineRepairService:
             return hashlib.md5(content).hexdigest().lower() == file_hash.lower()
         if len(file_hash) == 64:
             return hashlib.sha256(content).hexdigest().lower() == file_hash.lower()
+        return True
+
+    @staticmethod
+    def _file_matches_asset_hash(file_hash: str, file_path: Path) -> bool:
+        if not all(char in "0123456789abcdefABCDEF" for char in file_hash):
+            return True
+        if len(file_hash) == 32:
+            return OfflineRepairService._digest_file(file_path, "md5").lower() == file_hash.lower()
+        if len(file_hash) == 64:
+            return OfflineRepairService._digest_file(file_path, "sha256").lower() == file_hash.lower()
         return True
 
     @staticmethod
