@@ -184,6 +184,19 @@ class QQNTScanner:
             cipher = False
             try:
                 is_qqnt_custom = detect_database_format(source_path) == "qqnt_custom_vfs"
+                if not is_qqnt_custom and self.config.qq.read_mode != "snapshot_copy":
+                    # Reading the live file means the scan sees whatever QQ has
+                    # already flushed, and a busy WAL keeps moving underneath a
+                    # paged read. Not refused -- copying a multi-hundred-megabyte
+                    # database on every cycle is its own problem -- but the
+                    # operator should know which semantics they are getting.
+                    wal_path = source_path.with_name(source_path.name + "-wal")
+                    if wal_path.exists() and wal_path.stat().st_size > 0:
+                        self._emit_progress(
+                            "scan.live_read",
+                            f"{source_path}|QQ 正在写入该库，本次扫描只能看到已落盘的数据；"
+                            "需要一致性快照请设置 [qq].read_mode = \"snapshot_copy\"",
+                        )
                 if self.config.qq.read_mode == "snapshot_copy" or is_qqnt_custom:
                     snapshot = snapshot_manager.create(source_path)
                     target_path = snapshot.database_path

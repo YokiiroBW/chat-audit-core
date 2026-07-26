@@ -83,6 +83,19 @@ python -m collector --config collector.toml scan C:\path\to\nt_msg.db --mode ini
 `needs_verification`，能否读取由首次同步真实打开剥头副本来证明，失败会作为
 扫描问题上报，托盘不会仅凭密钥长度声称可读。
 
+## 读取一致性语义
+
+`[qq].read_mode` 决定普通（非自定义头）数据库怎么读，两种取值的语义不同：
+
+- `direct_readonly`（默认）：直接以只读方式打开 QQ 正在使用的文件。**只能看到 QQ 已经落盘的数据**，
+  仍在 WAL 里、尚未 checkpoint 的最新消息这一轮扫描读不到，下一轮增量回扫会补上。分页扫描期间
+  文件仍在被写入，因此看到的是一个移动中的目标，而不是某一时刻的一致快照。检测到 WAL 非空时，
+  托盘运行日志会明确提示本次是这种语义。
+- `snapshot_copy`：先连同 WAL/SHM 生成一致性快照再读，读到的是某一时刻的完整状态。代价是每次
+  扫描都要复制整个数据库——真实主消息库约 410 MB，按默认同步间隔计算磁盘开销可观。
+
+自定义头（`QQ_NT DB`）数据库**始终**走快照，因为剥头本身就需要完整副本。
+
 ## QQNT key helper
 
 The Windows GUI Settings page accepts both the QQNT data directory and the QQ install directory. Use **生成 QQ 解锁脚本** to save a PowerShell helper. The helper validates both paths, refuses to continue while QQ is running, locates the newest `versions\<version>\resources\app\wrapper.node`, downloads the upstream extractor to a temporary file, and runs it only after the user starts the generated script.
