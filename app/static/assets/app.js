@@ -52,6 +52,7 @@
       loadingHistory: false,
       loadingRoom: false,
       roomLoadToken: 0,
+      roomLoadError: '',
       accountLoadToken: 0,
       roomRequestController: null,
       historyLoadToken: 0,
@@ -1522,7 +1523,20 @@
         const empty = document.createElement('div');
         empty.className = 'empty';
         empty.style.textAlign = 'center';
-        empty.textContent = '暂无消息';
+        if (state.roomLoadError) {
+          // 加载失败时消息列表同样是空的。不区分的话，界面会把一次失败的请求
+          // 说成"这个会话没有消息"，而那正是审计视角下最不该出现的误导。
+          empty.textContent = `加载失败：${state.roomLoadError}`;
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.className = 'ghost';
+          retry.textContent = '重试';
+          retry.addEventListener('click', () => reloadCurrentRoom({}));
+          empty.appendChild(document.createElement('br'));
+          empty.appendChild(retry);
+        } else {
+          empty.textContent = '暂无消息';
+        }
         chat.appendChild(empty);
         renderSelectionToolbar();
         return;
@@ -2988,6 +3002,7 @@
       state.selectedMessageHashes.clear();
       state.currentRoom = room;
       state.messageList = [];
+      state.roomLoadError = '';
       state.loadingRoom = true;
       state.loadingHistory = false;
       if (updateRoute) writeRouteState();
@@ -3210,6 +3225,15 @@
         const messages = await loadMessages(null, '', 50, room, signal);
         if (loadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== room.room_id) return;
         state.messageList = messages;
+        state.roomLoadError = '';
+      } catch (error) {
+        // 不再抛出：错误已经记录在状态里并会渲染出来，而两个调用点（媒体筛选切换、
+        // 重试按钮）并不捕获，抛出只会变成未处理的 Promise 拒绝。
+        // 中止是切换会话的正常路径，不是加载失败，不应显示给用户。
+        const aborted = Boolean(error && (error.name === 'AbortError' || (signal && signal.aborted)));
+        if (!aborted && loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id) {
+          state.roomLoadError = (error && error.message) || String(error);
+        }
       } finally {
         if (loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id) {
           state.loadingRoom = false;

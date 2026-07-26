@@ -159,6 +159,10 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "room.display_name" in page_bundle
     assert "room.avatar_path" in page_bundle
     assert "roomDisplayName" in page_bundle
+    # 加载失败与"确无消息"必须可区分，否则一次失败的请求会被说成会话是空的。
+    assert "roomLoadError" in page_bundle
+    assert "加载失败：" in page_bundle
+    assert "暂无消息" in page_bundle
     assert "sender_avatar_path" in page_bundle
     assert "账号设置" in page_bundle
     assert "自动备份" in page_bundle
