@@ -231,10 +231,20 @@ class QueueUploader:
                     replacement_template = item.payload.get("replacement_template")
                     if not isinstance(replace_token, str) or not isinstance(replacement_template, str):
                         raise CollectorApiError("MEDIA_UPLOAD_FAILED", "artifact queue metadata is incomplete", retryable=False)
+                    local_path = response.get("local_path")
+                    if not isinstance(local_path, str) or not local_path:
+                        # A server reply without a stored path used to raise
+                        # KeyError here, which is not retryable and took the
+                        # upload loop with it instead of failing this one item.
+                        raise CollectorApiError(
+                            "MEDIA_UPLOAD_FAILED",
+                            "server accepted the upload without returning a stored path",
+                            retryable=True,
+                        )
                     patch_payload.update(
                         {
                             "replace_token": replace_token,
-                            "replacement": replacement_template.format(local_path=response["local_path"]),
+                            "replacement": replacement_template.format(local_path=local_path),
                         }
                     )
                 self.queue.patch_message_media(

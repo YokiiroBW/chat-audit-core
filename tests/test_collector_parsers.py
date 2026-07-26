@@ -422,3 +422,20 @@ def test_reply_preview_still_resolves_within_the_depth_limit():
 
     assert element["type"] == "reply"
     assert element["preview"] == "quoted text"
+
+
+def test_source_identity_falls_back_to_the_row_key_not_a_constant():
+    # A constant fallback made every row without msgRandom share one identity
+    # component, so two genuinely different messages could collapse onto one id.
+    first = parse_source_message(_row({"elements": [{"type": "text", "text": "a"}]}, msg_id="500", source_key="row-a", raw={"msgRandom": None}), _context())
+    second = parse_source_message(_row({"elements": [{"type": "text", "text": "b"}]}, msg_id="500", source_key="row-b", raw={"msgRandom": None}), _context())
+
+    assert first.item["message"]["message_id"] != second.item["message"]["message_id"]
+    assert "row:row-a" in first.item["source_record"]["metadata"]["source_identity"]
+    assert "row:row-b" in second.item["source_record"]["metadata"]["source_identity"]
+
+
+def test_source_identity_still_uses_msg_random_when_present():
+    parsed = parse_source_message(_row({"elements": [{"type": "text", "text": "a"}]}, raw={"msgRandom": 42}), _context())
+
+    assert ":42:" in parsed.item["source_record"]["metadata"]["source_identity"]

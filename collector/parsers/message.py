@@ -69,7 +69,12 @@ def _blob_base64(value: Any) -> str | None:
 
 
 def _source_identity(context: MessageParserContext, row: SourceMessageRow, chat_type: str) -> tuple[str, str]:
-    msg_random = str(_first(row.raw_columns, "msgRandom", "msg_random", "random") or 0)
+    # Falling back to a constant made every row that lacks msgRandom share one
+    # identity component, so two real messages could collapse onto one id. The
+    # source primary key is unique within its table by definition, which is what
+    # the fallback needs to be.
+    msg_random = _first(row.raw_columns, "msgRandom", "msg_random", "random")
+    msg_random = str(msg_random) if msg_random not in (None, "") else f"row:{row.source_primary_key}"
     identity = (
         f"qqnt:{context.account_id}:{chat_type}:{row.conversation_id}:"
         f"{row.msg_id}:{msg_random}:{row.msg_seq}"

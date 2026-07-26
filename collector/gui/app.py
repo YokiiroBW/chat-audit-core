@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import queue
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -791,7 +792,12 @@ def main(argv: list[str] | None = None) -> int:
                 app.root.after(750, app.start_sync)
             app.run()
     except AlreadyRunningError as exc:
-        ctypes.windll.user32.MessageBoxW(None, str(exc), "Chat Audit QQ Collector", 0x40)
+        # windll exists only on Windows, so this last-resort message box turned
+        # "another instance is running" into an AttributeError everywhere else.
+        if hasattr(ctypes, "windll"):
+            ctypes.windll.user32.MessageBoxW(None, str(exc), "Chat Audit QQ Collector", 0x40)
+        else:
+            print(str(exc), file=sys.stderr)
         return 1
     return 0
 
