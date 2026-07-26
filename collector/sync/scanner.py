@@ -113,7 +113,9 @@ class QQNTScanner:
             return MediaResolver()
         index = MediaFileIndex(roots)
         result.media_indexed_files = index.build()
-        return MediaResolver(index)
+        # Same roots bound the explicit paths read out of the database, so a row
+        # cannot point the collector at a file outside the QQ data tree.
+        return MediaResolver(index, allowed_roots=roots)
 
     def _database_key(self, database_path: Path) -> tuple[str | None, str | None, str | None]:
         validator = SQLiteKeyValidator()

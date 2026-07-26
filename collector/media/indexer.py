@@ -52,10 +52,16 @@ class MediaFileIndex:
         declared_size: int | None = None,
         source_md5: str | None = None,
     ) -> Path | None:
+        normalized_md5 = (source_md5 or "").lower()
+        if not file_name and not normalized_md5:
+            # Size alone does not identify a file. Scanning every indexed file
+            # for one within 5% of a declared size binds whatever happens to be
+            # close, and the collector then archives that file as the message's
+            # media. A name or a checksum is the minimum evidence.
+            return None
         candidates = self._by_name.get((file_name or "").lower(), []) if file_name else [
             item for values in self._by_name.values() for item in values
         ]
-        normalized_md5 = (source_md5 or "").lower()
         if len(candidates) > 1 and declared_size is None and not normalized_md5:
             return None
         for candidate in candidates:
