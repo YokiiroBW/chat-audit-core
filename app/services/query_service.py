@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
+from app.message_scope import (
+    apply_robot_message_scope,
+    robot_message_join,
+    robot_message_scope,
+)
 from app.qqnt_identity import (
     GROUP_SENDER_QQ_COLUMN,
     PRIVATE_PEER_QQ_COLUMN,
@@ -194,35 +199,6 @@ def _usable_profile_name(
     return name
 
 
-def _robot_message_join(robot_id: str):
-    """ON clause for the RobotMessage outer join.
-
-    The robot filter has to live in the JOIN, not only in the WHERE: a message
-    visible to several accounts has one RobotMessage row per account, so an
-    unrestricted join multiplies the message by that count. Rows that also
-    satisfy the imported-source branch of :func:`_robot_message_scope` then pass
-    the WHERE more than once and the message is returned repeatedly, eating the
-    caller's ``limit``.
-    """
-    return and_(RobotMessage.msg_hash == Message.msg_hash, RobotMessage.robot_id == robot_id)
-
-
-def _robot_message_scope(robot_id: str):
-    source_record = aliased(MessageSourceRecord)
-    import_source = aliased(ImportSource)
-    imported_message_scope = (
-        select(source_record.id)
-        .join(import_source, import_source.id == source_record.source_id)
-        .where(
-            source_record.msg_hash == Message.msg_hash,
-            import_source.account_id == robot_id,
-            import_source.platform == Message.platform,
-        )
-        .exists()
-    )
-    return or_(RobotMessage.robot_id == robot_id, imported_message_scope)
-
-
 async def _private_robot_display_name(
     db: AsyncSession,
     robot_id: str,
@@ -230,9 +206,9 @@ async def _private_robot_display_name(
 ) -> str | None:
     stmt = (
         select(Message.nickname)
-        .outerjoin(RobotMessage, _robot_message_join(robot_id))
+        .outerjoin(RobotMessage, robot_message_join(robot_id))
         .where(
-            _robot_message_scope(robot_id),
+            robot_message_scope(robot_id),
             Message.message_type == "private",
             Message.sender_id != Message.room_id,
             Message.nickname.is_not(None),
@@ -305,10 +281,10 @@ class QueryService:
                 func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
-            .outerjoin(RobotMessage, _robot_message_join(robot_id))
+            .outerjoin(RobotMessage, robot_message_join(robot_id))
             .outerjoin(RoomProfile, RoomProfile.room_id == Message.room_id)
             .outerjoin(UserProfile, UserProfile.user_id == Message.room_id)
-            .where(_robot_message_scope(robot_id))
+            .where(robot_message_scope(robot_id))
             .group_by(Message.room_id)
             .order_by(desc("last_timestamp"), Message.room_id.asc())
         )
@@ -326,9 +302,9 @@ class QueryService:
                         order_by=(Message.timestamp.desc(), func.coalesce(Message.source_sequence, -1).desc(), Message.msg_hash.desc()),
                     ).label("room_rank"),
                 )
-                .outerjoin(RobotMessage, _robot_message_join(robot_id))
+                .outerjoin(RobotMessage, robot_message_join(robot_id))
                 .outerjoin(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
-                .where(_robot_message_scope(robot_id), Message.room_id.in_(room_ids), Message.message_type == "private")
+                .where(robot_message_scope(robot_id), Message.room_id.in_(room_ids), Message.message_type == "private")
                 .subquery()
             )
             source_result = await db.execute(
@@ -406,9 +382,9 @@ class QueryService:
         if around_message_id:
             target_result = await db.execute(
                 select(Message)
-                .outerjoin(RobotMessage, _robot_message_join(robot_id))
+                .outerjoin(RobotMessage, robot_message_join(robot_id))
                 .where(
-                    _robot_message_scope(robot_id),
+                    robot_message_scope(robot_id),
                     Message.room_id == room_id,
                     Message.external_message_id == around_message_id,
                 )
@@ -418,10 +394,10 @@ class QueryService:
             if target is None:
                 alias_result = await db.execute(
                     select(Message)
-                    .outerjoin(RobotMessage, _robot_message_join(robot_id))
+                    .outerjoin(RobotMessage, robot_message_join(robot_id))
                     .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
                     .where(
-                        _robot_message_scope(robot_id),
+                        robot_message_scope(robot_id),
                         Message.room_id == room_id,
                         or_(
                             MessageSourceRecord.source_external_message_id == around_message_id,
@@ -441,9 +417,9 @@ class QueryService:
                 UserProfile.display_name.label("sender_display_name"),
                 UserProfile.avatar_path.label("sender_avatar_path"),
             )
-            .outerjoin(RobotMessage, _robot_message_join(robot_id))
+            .outerjoin(RobotMessage, robot_message_join(robot_id))
             .outerjoin(UserProfile, UserProfile.user_id == Message.sender_id)
-            .where(_robot_message_scope(robot_id), Message.room_id == room_id)
+            .where(robot_message_scope(robot_id), Message.room_id == room_id)
         )
         stmt = QueryService._apply_media_state_filter(stmt, media_state)
         if before_timestamp is not None:
@@ -556,7 +532,7 @@ class QueryService:
             if profile:
                 message.sender_avatar_path = _prefer_avatar_path(profile.avatar_path, message.sender_avatar_path)
         await QueryService._attach_parts(db, messages)
-        await QueryService._attach_reply_previews(db, messages)
+        await QueryService._attach_reply_previews(db, robot_id, messages)
         await QueryService._attach_import_details(db, messages)
         return messages
 
@@ -610,36 +586,70 @@ class QueryService:
 
 
     @staticmethod
-    async def _attach_reply_previews(db: AsyncSession, messages: list[Message]) -> None:
-        reply_ids = {
-            reply_id
+    async def _attach_reply_previews(db: AsyncSession, robot_id: str, messages: list[Message]) -> None:
+        """Fill in ``reply_to_message_id`` / ``reply_preview_text`` for ``messages``.
+
+        The lookup is keyed on ``(room_id, external_message_id)`` and restricted
+        to what ``robot_id`` may see, because neither half alone is enough.
+        ``external_message_id`` carries the OneBot message id, which is a small
+        per-connection integer with no uniqueness guarantee (``models.py`` only
+        indexes it): the same id routinely denotes different messages in
+        different accounts and different rooms. Resolving it globally therefore
+        rendered a foreign message's sender and body as the preview -- a wrong
+        preview at best, verbatim content from a conversation the caller cannot
+        open at worst. A reply always targets a message in its own room, so the
+        room is part of the identity, not an optional narrowing.
+        """
+        # Track (room, reply id) pairs rather than bare ids: the same id can be
+        # directly resolvable in one room of a cross-room search page while only
+        # the alias fallback can resolve it in another, and collapsing to ids
+        # would drop the second room's preview.
+        wanted = {
+            (message.room_id, reply_id)
             for message in messages
             if (reply_id := _message_reply_id(message))
         }
-        if not reply_ids:
+        if not wanted:
             return
-        result = await db.execute(select(Message).where(Message.external_message_id.in_(reply_ids)))
-        by_external_id = {message.external_message_id: message for message in result.scalars().all() if message.external_message_id}
-        unresolved_ids = reply_ids - set(by_external_id)
-        if unresolved_ids:
+        result = await db.execute(
+            apply_robot_message_scope(select(Message), robot_id)
+            .where(
+                Message.external_message_id.in_({reply_id for _, reply_id in wanted}),
+                Message.room_id.in_({room_id for room_id, _ in wanted}),
+            )
+            # Newest first, so the deterministic winner below is the most recent
+            # message carrying a reused id within the same room.
+            .order_by(Message.timestamp.desc(), Message.msg_hash.desc())
+        )
+        by_room_and_id: dict[tuple[str, str], Message] = {}
+        for candidate in result.scalars().all():
+            if candidate.external_message_id:
+                by_room_and_id.setdefault((candidate.room_id, candidate.external_message_id), candidate)
+        unresolved = wanted - set(by_room_and_id)
+        if unresolved:
+            unresolved_ids = {reply_id for _, reply_id in unresolved}
             alias_result = await db.execute(
-                select(MessageSourceRecord, Message)
-                .join(Message, Message.msg_hash == MessageSourceRecord.msg_hash)
+                apply_robot_message_scope(
+                    select(MessageSourceRecord, Message).join(Message, Message.msg_hash == MessageSourceRecord.msg_hash),
+                    robot_id,
+                )
                 .where(
                     or_(
                         MessageSourceRecord.source_external_message_id.in_(unresolved_ids),
                         MessageSourceRecord.platform_message_id.in_(unresolved_ids),
-                    )
+                    ),
+                    Message.room_id.in_({room_id for room_id, _ in unresolved}),
                 )
+                .order_by(Message.timestamp.desc(), Message.msg_hash.desc())
             )
             for record, source_message in alias_result.all():
                 for alias in (record.source_external_message_id, record.platform_message_id):
-                    if alias in unresolved_ids:
-                        by_external_id[alias] = source_message
+                    if (source_message.room_id, alias) in unresolved:
+                        by_room_and_id.setdefault((source_message.room_id, alias), source_message)
         for message in messages:
             reply_id = _message_reply_id(message)
             message.reply_to_message_id = reply_id
-            source = by_external_id.get(reply_id or "")
+            source = by_room_and_id.get((message.room_id, reply_id)) if reply_id else None
             if source is not None:
                 sender = source.nickname or source.sender_id
                 message.reply_preview_text = f"{sender}: {_plain_message_preview(source.local_message or source.raw_message)}"
@@ -658,8 +668,8 @@ class QueryService:
     ) -> list[Message]:
         stmt = (
             select(Message)
-            .outerjoin(RobotMessage, _robot_message_join(robot_id))
-            .where(_robot_message_scope(robot_id))
+            .outerjoin(RobotMessage, robot_message_join(robot_id))
+            .where(robot_message_scope(robot_id))
         )
         if keyword:
             pattern = f"%{keyword}%"
@@ -687,7 +697,7 @@ class QueryService:
         ).limit(limit)
         result = await db.execute(stmt)
         messages = list(result.scalars().unique().all())
-        await QueryService._attach_reply_previews(db, messages)
+        await QueryService._attach_reply_previews(db, robot_id, messages)
         await QueryService._attach_import_details(db, messages)
         return messages
 

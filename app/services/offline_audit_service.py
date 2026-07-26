@@ -5,12 +5,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.message_scope import apply_robot_message_scope
 from app.models import (
     MediaAsset,
     Message,
     MessageMediaReference,
     MessageSourceRecord,
-    RobotMessage,
     RoomProfile,
     UserProfile,
 )
@@ -125,7 +125,10 @@ class OfflineAuditService:
         report = OfflineAuditReport()
         stmt = select(Message)
         if robot_id is not None:
-            stmt = stmt.join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash).where(RobotMessage.robot_id == robot_id)
+            # Same account-visibility rule as the query layer: an inner join on
+            # robot_messages alone hides QQNT-imported conversations, which have
+            # no robot_messages row, so the audit silently reported them clean.
+            stmt = apply_robot_message_scope(stmt, robot_id)
         if room_id is not None:
             stmt = stmt.where(Message.room_id == room_id)
         stmt = stmt.order_by(Message.timestamp.asc(), Message.msg_hash.asc()).limit(limit)

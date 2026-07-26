@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
-from app.models import MediaAsset, UserProfile
+from app.models import ImportSource, MediaAsset, Message, MessageSourceRecord, UserProfile
 from app.services.message_service import MessageService
 from app.services.media_backfill_service import MediaBackfillService
 from app.services.offline_audit_service import OfflineAuditService
@@ -489,3 +489,58 @@ async def test_offline_repair_api_returns_counts_and_clears_audit(db_session, tm
     assert local_path in repair_payload["repaired_paths"]
     assert audit_response.status_code == 200
     assert audit_response.json()["offline_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_offline_audit_scans_imported_only_messages_for_the_account(db_session, tmp_path):
+    # An inner join on robot_messages hides QQNT-imported conversations, which
+    # have no robot_messages row at all, so the audit used to report a
+    # QQNT-only account as having nothing to scan.
+    source = ImportSource(
+        id="qqnt-source-audit",
+        source_type="qqnt_local_db",
+        platform="qq",
+        account_id="robot-a",
+        device_id="device-audit",
+        status="active",
+    )
+    message = Message(
+        msg_hash="audit-imported-only-hash",
+        platform="qq",
+        room_id="friend-7001",
+        message_type="private",
+        external_message_id="imported-audit-1",
+        sender_id="7001",
+        nickname="Imported Friend",
+        raw_message="[CQ:image,file=remote.jpg,url=http://media.local/remote.jpg]",
+        local_message="[CQ:image,file=remote.jpg,url=http://media.local/remote.jpg]",
+        timestamp=1783000100,
+    )
+    source_record = MessageSourceRecord(
+        msg_hash=message.msg_hash,
+        source_id=source.id,
+        source_table="messages",
+        source_primary_key="imported-audit-1",
+        source_external_message_id="imported-audit-1",
+    )
+    db_session.add_all([source, message, source_record])
+    await db_session.commit()
+
+    report = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        robot_id="robot-a",
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+    other_account = await OfflineAuditService.audit_offline_readiness(
+        db_session,
+        robot_id="robot-b",
+        storage_root=tmp_path,
+        public_storage_prefix="/static/storage",
+    )
+
+    assert report.messages_scanned == 1
+    assert report.remote_media_urls == 1
+    assert report.offline_ready is False
+    # The account scope still holds: another account sees none of it.
+    assert other_account.messages_scanned == 0

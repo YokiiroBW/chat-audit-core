@@ -629,3 +629,259 @@ async def test_query_includes_imported_messages_when_robot_view_link_is_missing(
 
     assert [room["room_id"] for room in rooms] == ["friend-9001"]
     assert [item.raw_message for item in messages] == ["historical imported message"]
+
+
+@pytest.mark.asyncio
+async def test_reply_preview_never_resolves_to_another_accounts_message(db_session):
+    # OneBot message ids are small per-connection integers, so two accounts
+    # reusing "1001" is the normal case, not an edge case. Resolving the reply
+    # target globally leaked the other account's sender and body.
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "1001",
+            "room_id": "group-a",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A Target",
+            "raw_message": "robot a target body",
+            "timestamp": 1783000000,
+        },
+    )
+    # Inserted after robot-a's row so that an unscoped lookup would pick this
+    # one: the old code kept whichever row the database happened to emit last.
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-b",
+        "qq",
+        {
+            "message_id": "1001",
+            "room_id": "group-b",
+            "message_type": "group",
+            "sender_id": "user-b",
+            "nickname": "B Secret",
+            "raw_message": "robot b confidential body",
+            "timestamp": 1783000005,
+        },
+    )
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "reply-a",
+            "room_id": "group-a",
+            "message_type": "group",
+            "sender_id": "user-a2",
+            "nickname": "A Replier",
+            "raw_message": "[CQ:reply,id=1001] agreed",
+            "timestamp": 1783000010,
+        },
+    )
+
+    messages = await QueryService.list_messages(
+        db_session,
+        robot_id="robot-a",
+        room_id="group-a",
+        limit=50,
+    )
+
+    reply = next(item for item in messages if item.external_message_id == "reply-a")
+    assert reply.reply_to_message_id == "1001"
+    assert reply.reply_preview_text == "A Target: robot a target body"
+    assert "confidential" not in (reply.reply_preview_text or "")
+    assert "B Secret" not in (reply.reply_preview_text or "")
+
+
+@pytest.mark.asyncio
+async def test_reply_preview_stays_inside_its_own_room_for_one_account(db_session):
+    # The robot scope alone is not enough: one account seeing two rooms that
+    # both carry message id "2002" still needs the room to disambiguate.
+    for room_id, nickname, body, timestamp in (
+        ("group-x", "X Target", "room x target body", 1783000000),
+        ("group-y", "Y Target", "room y target body", 1783000005),
+    ):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": "2002",
+                "room_id": room_id,
+                "message_type": "group",
+                "sender_id": f"user-{room_id}",
+                "nickname": nickname,
+                "raw_message": body,
+                "timestamp": timestamp,
+            },
+        )
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "reply-x",
+            "room_id": "group-x",
+            "message_type": "group",
+            "sender_id": "user-x2",
+            "nickname": "X Replier",
+            "raw_message": "[CQ:reply,id=2002] same id, other room",
+            "timestamp": 1783000010,
+        },
+    )
+
+    messages = await QueryService.list_messages(
+        db_session,
+        robot_id="robot-a",
+        room_id="group-x",
+        limit=50,
+    )
+
+    reply = next(item for item in messages if item.external_message_id == "reply-x")
+    assert reply.reply_preview_text == "X Target: room x target body"
+
+
+@pytest.mark.asyncio
+async def test_reply_preview_alias_lookup_is_scoped_to_the_account(db_session):
+    # The alias fallback resolves through message_source_records and carried the
+    # same unscoped defect as the primary lookup. Both accounts here use the
+    # *same* room id, which is what a private chat with QQ 7001 looks like from
+    # two different accounts, so only the account scope can tell them apart --
+    # the room filter cannot.
+    for account_id, room_id, nickname, body, hash_suffix in (
+        ("robot-a", "friend-7001", "A Imported", "account a imported body", "a"),
+        ("robot-b", "friend-7001", "B Imported", "account b confidential body", "b"),
+    ):
+        source = ImportSource(
+            id=f"qqnt-source-{hash_suffix}",
+            source_type="qqnt_local_db",
+            platform="qq",
+            account_id=account_id,
+            device_id=f"device-{hash_suffix}",
+            status="active",
+        )
+        message = Message(
+            msg_hash=f"aliased-target-{hash_suffix}",
+            platform="qq",
+            room_id=room_id,
+            message_type="private",
+            sender_id=f"sender-{hash_suffix}",
+            nickname=nickname,
+            raw_message=body,
+            local_message=body,
+            timestamp=1783000000,
+        )
+        source_record = MessageSourceRecord(
+            msg_hash=message.msg_hash,
+            source_id=source.id,
+            source_table="messages",
+            source_primary_key=f"row-{hash_suffix}",
+            source_external_message_id="3003",
+        )
+        db_session.add_all([source, message, source_record])
+    await db_session.commit()
+
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "reply-aliased",
+            "room_id": "friend-7001",
+            "message_type": "private",
+            "sender_id": "sender-a",
+            "nickname": "A Imported",
+            "raw_message": "[CQ:reply,id=3003] follow up",
+            "timestamp": 1783000010,
+        },
+    )
+
+    messages = await QueryService.list_messages(
+        db_session,
+        robot_id="robot-a",
+        room_id="friend-7001",
+        limit=50,
+    )
+
+    reply = next(item for item in messages if item.external_message_id == "reply-aliased")
+    assert reply.reply_preview_text == "A Imported: account a imported body"
+    assert "confidential" not in (reply.reply_preview_text or "")
+
+
+@pytest.mark.asyncio
+async def test_reply_preview_resolves_per_room_across_a_cross_room_page(db_session):
+    # A search page spans rooms. Reply id "5005" resolves directly in group-p
+    # but only through the alias table in friend-p; tracking bare ids instead of
+    # (room, id) pairs would treat it as already resolved and silently drop the
+    # second room's preview.
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "5005",
+            "room_id": "group-p",
+            "message_type": "group",
+            "sender_id": "user-p",
+            "nickname": "P Target",
+            "raw_message": "direct target body",
+            "timestamp": 1783000000,
+        },
+    )
+    source = ImportSource(
+        id="qqnt-source-cross-room",
+        source_type="qqnt_local_db",
+        platform="qq",
+        account_id="robot-a",
+        device_id="device-cross",
+        status="active",
+    )
+    imported_target = Message(
+        msg_hash="cross-room-alias-target",
+        platform="qq",
+        room_id="friend-p",
+        message_type="private",
+        sender_id="8001",
+        nickname="Q Target",
+        raw_message="aliased target body",
+        local_message="aliased target body",
+        timestamp=1783000001,
+    )
+    db_session.add_all(
+        [
+            source,
+            imported_target,
+            MessageSourceRecord(
+                msg_hash=imported_target.msg_hash,
+                source_id=source.id,
+                source_table="messages",
+                source_primary_key="row-cross",
+                source_external_message_id="5005",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    for room_id, message_type, sender_id in (("group-p", "group", "user-p2"), ("friend-p", "private", "8001")):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": f"reply-{room_id}",
+                "room_id": room_id,
+                "message_type": message_type,
+                "sender_id": sender_id,
+                "nickname": "Replier",
+                "raw_message": "[CQ:reply,id=5005] needle body",
+                "timestamp": 1783000010,
+            },
+        )
+
+    results = await QueryService.search_messages(db_session, robot_id="robot-a", keyword="needle", limit=50)
+
+    previews = {item.room_id: item.reply_preview_text for item in results}
+    assert previews["group-p"] == "P Target: direct target body"
+    assert previews["friend-p"] == "Q Target: aliased target body"
