@@ -336,3 +336,62 @@ def test_worker_tasks_never_read_tk_variables_from_the_worker_thread():
                     offenders.append((node.lineno, inner.attr))
 
     assert offenders == [], f"Tk state read inside a _run_task callable: {offenders}"
+
+
+def test_autostart_takes_over_the_installer_startup_shortcut(tmp_path, monkeypatch):
+    # The installer can create a Startup-folder shortcut and the tray writes a
+    # registry Run entry. With both live the collector launched twice at login,
+    # and clearing the checkbox removed only the registry value, so autostart
+    # could not be switched off at all.
+    from collector.gui import controller as controller_module
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    startup_dir = tmp_path / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    startup_dir.mkdir(parents=True)
+    shortcut = startup_dir / "Chat Audit QQ Collector.lnk"
+    shortcut.write_bytes(b"shortcut")
+
+    written: dict[str, str] = {}
+    deleted: list[str] = []
+
+    class _FakeKey:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+    class _FakeWinreg:
+        HKEY_CURRENT_USER = object()
+        KEY_SET_VALUE = 0
+        REG_SZ = 1
+
+        @staticmethod
+        def CreateKey(_root, _path):
+            return _FakeKey()
+
+        @staticmethod
+        def OpenKey(_root, _path, _reserved, _access):
+            return _FakeKey()
+
+        @staticmethod
+        def SetValueEx(_key, name, _reserved, _type, value):
+            written[name] = value
+
+        @staticmethod
+        def DeleteValue(_key, name):
+            deleted.append(name)
+
+    monkeypatch.setattr(controller_module, "winreg", _FakeWinreg)
+    controller = controller_module.CollectorGuiController.__new__(controller_module.CollectorGuiController)
+    controller.event_callback = lambda _event, _detail: None
+    controller.config_path = tmp_path / "collector.toml"
+
+    controller._set_autostart(True)
+    assert not shortcut.exists(), "the shortcut must not survive alongside the registry entry"
+    assert "ChatAuditQQCollector" in written
+
+    shortcut.write_bytes(b"shortcut came back with a repair install")
+    controller._set_autostart(False)
+    assert not shortcut.exists(), "disabling autostart has to clear both sources"
+    assert deleted == ["ChatAuditQQCollector"]

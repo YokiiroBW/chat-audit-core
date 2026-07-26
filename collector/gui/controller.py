@@ -195,11 +195,39 @@ class CollectorGuiController:
                 raise RuntimeError("迁移校验失败：状态数据库未复制到新目录")
         self.event_callback("storage.migrated", f"{source}|{target}")
 
+    @staticmethod
+    def _installer_startup_shortcut() -> Path | None:
+        """The Startup-folder shortcut the installer optionally creates.
+
+        It is a second, independent autostart source: with both active the
+        collector launches twice at login, and clearing the checkbox only
+        removed the registry value, so autostart could not actually be turned
+        off. The registry entry is kept as the single source because it carries
+        the config path this instance is actually using.
+        """
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Chat Audit QQ Collector.lnk"
+
+    def _remove_installer_startup_shortcut(self) -> None:
+        shortcut = self._installer_startup_shortcut()
+        if shortcut is None:
+            return
+        try:
+            shortcut.unlink(missing_ok=True)
+        except OSError:
+            # Not fatal: the registry entry still decides whether we start.
+            self.event_callback("autostart.shortcut_not_removed", str(shortcut))
+
     def _set_autostart(self, enabled: bool) -> None:
         if winreg is None:
             if enabled:
                 raise RuntimeError("开机自动启动仅支持 Windows")
             return
+        # Taken over either way: enabling makes the registry entry the only
+        # source, disabling has to clear both or nothing changes at login.
+        self._remove_installer_startup_shortcut()
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         value_name = "ChatAuditQQCollector"
         if enabled:
