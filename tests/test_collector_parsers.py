@@ -354,3 +354,71 @@ def test_qqnt_protobuf_type_7_decodes_as_reply_with_target_and_preview():
         "message_id": "7664973297536280880",
         "target_user_id": "1248465005",
     }
+
+def test_nested_reply_previews_stop_at_the_depth_limit():
+    # A reply quotes its target and the quote can itself be a reply. Nothing in
+    # the wire format bounds that, so a crafted row used to recurse until Python
+    # raised and the scan of the whole database died with it.
+    from collector.parsers.protobuf import MAX_CONTENT_DEPTH, _qqnt_content_element, _protobuf_fields
+
+    def _varint(value: int) -> bytes:
+        out = bytearray()
+        while True:
+            byte = value & 0x7F
+            value >>= 7
+            out.append(byte | (0x80 if value else 0))
+            if not value:
+                return bytes(out)
+
+    def _tag(field: int, wire: int) -> bytes:
+        return _varint((field << 3) | wire)
+
+    def _text_element(text: str) -> bytes:
+        body = text.encode("utf-8")
+        return _tag(45002, 0) + _varint(1) + _tag(45101, 2) + _varint(len(body)) + body
+
+    def _reply_element(quoted: bytes) -> bytes:
+        return (
+            _tag(45002, 0) + _varint(7)
+            + _tag(47422, 0) + _varint(123)
+            + _tag(47423, 2) + _varint(len(quoted)) + quoted
+        )
+
+    payload = _text_element("bottom")
+    for _ in range(MAX_CONTENT_DEPTH + 40):
+        payload = _reply_element(payload)
+
+    element = _qqnt_content_element(_protobuf_fields(payload))
+
+    # The reply itself still parses; only the quoted preview is given up.
+    assert element["type"] == "reply"
+    assert element["message_id"] == "123"
+
+
+def test_reply_preview_still_resolves_within_the_depth_limit():
+    from collector.parsers.protobuf import _qqnt_content_element, _protobuf_fields
+
+    def _varint(value: int) -> bytes:
+        out = bytearray()
+        while True:
+            byte = value & 0x7F
+            value >>= 7
+            out.append(byte | (0x80 if value else 0))
+            if not value:
+                return bytes(out)
+
+    def _tag(field: int, wire: int) -> bytes:
+        return _varint((field << 3) | wire)
+
+    body = "quoted text".encode("utf-8")
+    quoted = _tag(45002, 0) + _varint(1) + _tag(45101, 2) + _varint(len(body)) + body
+    payload = (
+        _tag(45002, 0) + _varint(7)
+        + _tag(47422, 0) + _varint(456)
+        + _tag(47423, 2) + _varint(len(quoted)) + quoted
+    )
+
+    element = _qqnt_content_element(_protobuf_fields(payload))
+
+    assert element["type"] == "reply"
+    assert element["preview"] == "quoted text"

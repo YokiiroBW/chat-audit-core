@@ -153,7 +153,14 @@ def _media_element(fields: dict[int, list[Any]], content_type: int) -> dict[str,
     return element
 
 
-def _reply_preview(fields: dict[int, list[Any]]) -> str:
+# A reply quotes its target, and the quoted content can itself be a reply.
+# Nothing in the wire format stops that nesting, so a malformed or crafted row
+# would recurse until Python gave up and the RecursionError aborted the scan of
+# the whole database, not just that one message.
+MAX_CONTENT_DEPTH = 3
+
+
+def _reply_preview(fields: dict[int, list[Any]], depth: int, max_depth: int) -> str:
     for value in fields.get(47423, []):
         if not isinstance(value, bytes):
             continue
@@ -161,7 +168,7 @@ def _reply_preview(fields: dict[int, list[Any]]) -> str:
             nested = _protobuf_fields(value)
         except ValueError:
             continue
-        element = _qqnt_content_element(nested)
+        element = _qqnt_content_element(nested, depth + 1, max_depth)
         element_type = element.get("type")
         if element_type == "text":
             return str(element.get("text") or "")
@@ -177,7 +184,7 @@ def _reply_preview(fields: dict[int, list[Any]]) -> str:
             return str(element.get("description") or "[表情]")
     return ""
 
-def _qqnt_content_element(fields: dict[int, list[Any]]) -> dict[str, Any]:
+def _qqnt_content_element(fields: dict[int, list[Any]], depth: int = 0, max_depth: int = MAX_CONTENT_DEPTH) -> dict[str, Any]:
     content_type = _first_integer(fields, 45002)
     if content_type == 7:
         reply_id = _first_integer(fields, 47422)
@@ -185,7 +192,9 @@ def _qqnt_content_element(fields: dict[int, list[Any]]) -> dict[str, Any]:
         target_user_id = _first_integer(fields, 47403)
         if target_user_id:
             element["target_user_id"] = str(target_user_id)
-        preview = _reply_preview(fields)
+        # Past the limit the reply is still returned, just without the quoted
+        # preview: losing one preview beats losing the rest of the database.
+        preview = _reply_preview(fields, depth, max_depth) if depth < max_depth else ""
         if preview:
             element["preview"] = preview
         return element
