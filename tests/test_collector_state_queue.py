@@ -137,3 +137,74 @@ def test_media_staging_copies_real_file_and_enforces_quota(tmp_path):
 
     os.utime(staged.path, (old_time, old_time))
     assert staging.delete_confirmed(staged.path) is True
+
+
+def test_transaction_scope_batches_queue_writes_into_one_commit(tmp_path, monkeypatch):
+    # Every enqueue opened its own connection and committed, and under WAL each
+    # commit is an fsync, so a large initial import was disk-bound per message.
+    import sqlite3
+
+    from collector.sync.queue import CollectorQueue
+    from collector.sync.state import CollectorStateStore
+
+    store = CollectorStateStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    store.upsert_source(source_id="source", source_type="qqnt_local_db", account_id="123456789", device_id="pc")
+    queue = CollectorQueue(store)
+
+    opened = 0
+    real_connect = sqlite3.connect
+
+    def counting_connect(*args, **kwargs):
+        nonlocal opened
+        opened += 1
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", counting_connect)
+
+    with store.transaction():
+        for index in range(10):
+            queue.enqueue_message(
+                source_id="source",
+                dedupe_key=f"key-{index}",
+                payload={"message": {"message_id": str(index)}},
+            )
+
+    assert opened == 1
+    monkeypatch.undo()
+
+    # Everything committed, not lost with the connection.
+    assert len(queue.lease_ready("message", limit=20)) == 10
+
+
+def test_transaction_scope_is_reentrant_and_rolls_back_as_one_unit(tmp_path):
+    from collector.sync.queue import CollectorQueue
+    from collector.sync.state import CollectorStateStore
+
+    store = CollectorStateStore(tmp_path / "state.sqlite3")
+    store.initialize()
+    store.upsert_source(source_id="source", source_type="qqnt_local_db", account_id="123456789", device_id="pc")
+    queue = CollectorQueue(store)
+
+    def queued_message_count() -> int:
+        # Counted directly: leasing an item takes it out of the ready set, so
+        # asking twice would answer a different question the second time.
+        with store.connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) FROM pending_messages").fetchone()[0])
+
+    # A nested scope must join the open transaction, not deadlock on its own
+    # write lock.
+    with store.transaction():
+        with store.transaction():
+            queue.enqueue_message(source_id="source", dedupe_key="nested", payload={"message": {"message_id": "n"}})
+    assert queued_message_count() == 1
+
+    try:
+        with store.transaction():
+            queue.enqueue_message(source_id="source", dedupe_key="doomed", payload={"message": {"message_id": "d"}})
+            raise RuntimeError("page failed halfway")
+    except RuntimeError:
+        pass
+
+    # The failed page leaves nothing behind rather than half a page.
+    assert queued_message_count() == 1

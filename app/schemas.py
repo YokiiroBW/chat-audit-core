@@ -153,6 +153,11 @@ class BackupStatusResponse(BaseModel):
     config_source: str = "env"
     cron_source: str = "env"
     keep_latest_source: str = "env"
+    # Set when the configured expression cannot be scheduled. ``enabled`` only
+    # says backups are switched on, so without this the status reported a
+    # healthy schedule while the loop was unable to run a single backup.
+    cron_error: str | None = None
+    next_run_at: str | None = None
 
 
 class BackupSettingsUpdateRequest(BaseModel):
@@ -473,6 +478,7 @@ class MessageMediaReferenceResponse(BaseModel):
     height: int | None = None
     failure_code: str | None = None
     failure_detail: str | None = None
+    availability_reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     first_seen_at: datetime
     last_checked_at: datetime

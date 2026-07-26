@@ -1,4 +1,4 @@
-const CACHE_NAME = 'chat-audit-static-v14';
+const CACHE_NAME = 'chat-audit-static-v15';
 const STATIC_ASSETS = [
   '/',
   '/assets/favicon.svg',
@@ -30,20 +30,26 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put('/', copy));
+        // 只缓存成功响应：把一次 500 或 401 存进来，之后即使服务恢复，
+        // 离线回退也会一直把那个错误页当成"首页"返回。
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put('/', copy));
+        }
         return response;
       }).catch(() => caches.match('/'))
     );
     return;
   }
-  if (!STATIC_ASSETS.includes(url.pathname)) {
+  if (!STATIC_ASSETS.some((asset) => new URL(asset, self.location.origin).pathname === url.pathname)) {
     return;
   }
   event.respondWith(
     caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+      if (response.ok) {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+      }
       return response;
     }))
   );

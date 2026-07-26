@@ -99,7 +99,22 @@ class CollectorScheduler:
                 mode = "initial"
             else:
                 mode = "reconcile" if now - self._last_reconcile_at >= reconcile_seconds else "incremental"
-            result = await self.run_once(mode)
+            try:
+                result = await self.run_once(mode)
+            except Exception:
+                # run_once already recorded the failed run and logged the traceback.
+                # A single bad cycle must not end the daemon: without this the next
+                # scheduled sync never happens and the queue silently stops draining
+                # until someone notices and restarts the process.
+                logger.exception(
+                    "collector cycle aborted; continuing with the next one",
+                    extra={"event": "sync.loop", "error_code": "COLLECTOR_INTERNAL_ERROR"},
+                )
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=sync_seconds)
+                except TimeoutError:
+                    pass
+                continue
             if result.status == "skipped":
                 await asyncio.sleep(min(5, sync_seconds))
                 continue

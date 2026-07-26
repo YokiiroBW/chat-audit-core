@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -6,6 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import MediaAsset, ProfileChangeRecord, RoomProfile
 from app.services.media_service import MediaService
+
+
+logger = logging.getLogger(__name__)
 
 
 class RoomProfileService:
@@ -68,16 +72,21 @@ class RoomProfileService:
         data = group_info or {}
         display_name = data.get("group_name") or data.get("group_memo") or data.get("name")
         avatar_url = f"https://p.qlogo.cn/gh/{room_id}/{room_id}/100"
-        avatar_path = await MediaService.download_url_to_local_path(
-            db,
-            avatar_url,
-            media_type="image",
-            file_name=f"{room_id}.jpg",
-            http_client=http_client,
-            storage_root=storage_root,
-            public_prefix=public_prefix,
-            max_bytes=max_bytes,
-        )
+        try:
+            avatar_path = await MediaService.download_url_to_local_path(
+                db,
+                avatar_url,
+                media_type="image",
+                file_name=f"{room_id}.jpg",
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+            )
+        except Exception:
+            await db.rollback()
+            avatar_path = None
+            logger.exception("QQ group avatar hydration failed", extra={"room_id": room_id})
         return await RoomProfileService.upsert_room_profile(
             db,
             room_id=room_id,

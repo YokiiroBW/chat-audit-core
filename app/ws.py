@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import secrets
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -49,7 +51,13 @@ def _is_authorized(websocket: WebSocket, configured_token: str) -> bool:
 
     query_token = websocket.query_params.get("access_token")
     bearer_token = _extract_bearer_token(websocket.headers.get("authorization"))
-    return query_token == configured_token or bearer_token == configured_token
+    # Constant time: a plain == returns as soon as two bytes differ, which leaks
+    # the shared token one character at a time to anyone who can measure the
+    # handshake.
+    return any(
+        candidate is not None and secrets.compare_digest(candidate, configured_token)
+        for candidate in (query_token, bearer_token)
+    )
 
 
 def _extract_robot_id(event: dict[str, Any]) -> str | None:
@@ -276,7 +284,14 @@ async def onebot11_reverse_ws(
             )
         )
         while True:
-            event = await websocket.receive_json()
+            try:
+                event = await websocket.receive_json()
+            except json.JSONDecodeError:
+                # One unparsable frame is not a reason to drop the connection
+                # and lose every message that would have followed it.
+                metrics_registry.record_onebot_message(status="invalid_json")
+                logger.warning("Discarding a OneBot frame that is not valid JSON")
+                continue
 
             robot_id = _extract_robot_id(event)
             if robot_id:
@@ -302,24 +317,41 @@ async def onebot11_reverse_ws(
             if normalized is None:
                 continue
 
-            display_name = None
-            if normalized.msg_data.get("sender_id") == normalized.robot_id:
-                display_name = normalized.msg_data.get("nickname")
-            await BotProfileService.upsert_bot_profile(
-                db,
-                robot_id=normalized.robot_id,
-                platform=normalized.platform,
-                display_name=display_name,
-                adapter_id=adapter_id,
-            )
+            try:
+                display_name = None
+                if normalized.msg_data.get("sender_id") == normalized.robot_id:
+                    display_name = normalized.msg_data.get("nickname")
+                await BotProfileService.upsert_bot_profile(
+                    db,
+                    robot_id=normalized.robot_id,
+                    platform=normalized.platform,
+                    display_name=display_name,
+                    adapter_id=adapter_id,
+                )
 
-            msg_hash = await MessageService.process_incoming_message(
-                db,
-                robot_id=normalized.robot_id,
-                platform=normalized.platform,
-                msg_data=normalized.msg_data,
-                media_http_client=media_http_client,
-            )
+                msg_hash = await MessageService.process_incoming_message(
+                    db,
+                    robot_id=normalized.robot_id,
+                    platform=normalized.platform,
+                    msg_data=normalized.msg_data,
+                    media_http_client=media_http_client,
+                )
+            except Exception:
+                await db.rollback()
+                metrics_registry.record_onebot_message(status="failed")
+                logger.exception(
+                    "OneBot message processing failed; keeping WebSocket alive",
+                    extra={
+                        "adapter_id": adapter_id,
+                        "robot_id": normalized.robot_id,
+                        "connection_id": connection_id,
+                        "message_id": normalized.msg_data.get("message_id"),
+                        "message_type": normalized.msg_data.get("message_type"),
+                    },
+                )
+                continue
+
+            metrics_registry.record_onebot_message(status="stored" if msg_hash else "skipped")
             if connection_id:
                 if msg_hash and "[CQ:forward," in normalized.msg_data.get("raw_message", ""):
                     track_background_task(_hydrate_forward_payloads(normalized.robot_id, connection_id, msg_hash))

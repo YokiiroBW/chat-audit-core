@@ -107,6 +107,9 @@ class Message(Base):
 
     __table_args__ = (
         Index("idx_room_timestamp", "room_id", "timestamp"),
+        # Declared here as well as in migration 011: a database built straight
+        # from the models used to lack it entirely.
+        Index("idx_room_timestamp_sequence", "room_id", "timestamp", "source_sequence"),
         Index("idx_platform_room_timestamp", "platform", "room_id", "timestamp"),
         Index("idx_sender_timestamp", "sender_id", "timestamp"),
         Index("idx_message_type_timestamp", "message_type", "timestamp"),
@@ -137,7 +140,9 @@ class MediaAsset(Base):
     content_sha256 = Column(String(64), nullable=True, unique=True, index=True)
     file_type = Column(String(20), nullable=False)
     file_size = Column(Integer, nullable=False)
-    local_path = Column(String(255), nullable=False)
+    # Six services resolve assets by this column, including per-message media
+    # resolution on every read, so it carries an index of its own.
+    local_path = Column(String(255), nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
 
@@ -393,6 +398,9 @@ class AdminToken(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    # API tokens are long-lived by design, so this stays NULL unless a lifetime
+    # is configured; see ADMIN_TOKEN_TTL_DAYS.
+    expires_at = Column(DateTime, nullable=True)
 
 
 class AdminUser(Base):
@@ -424,6 +432,10 @@ class AdminSession(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    # NULL on rows created before expiry existed; those fall back to
+    # created_at plus the configured lifetime, so an old session cannot outlive
+    # the policy simply by predating it.
+    expires_at = Column(DateTime, nullable=True)
 
 
 class SystemSetting(Base):

@@ -353,3 +353,18 @@ async def test_server_outage_keeps_queue_durable_for_next_restart(tmp_path):
     assert result.status == "failed"
     assert result.error_code == "SERVER_UNAVAILABLE"
     assert CollectorQueue(restarted_store).counts()["messages"] == {"pending": 1}
+
+
+def test_artifact_patch_does_not_index_local_path_blindly():
+    # response["local_path"] assumed the field is always present. A reply
+    # without it raised KeyError, which is not a retryable CollectorApiError,
+    # so it terminated the upload loop instead of failing this one item.
+    # Checked at the source, because reaching that branch needs a live server
+    # reply and the failure is the absence of a guard, not a value.
+    from pathlib import Path as _Path
+
+    source = _Path("collector/sync/uploader.py").read_text(encoding="utf-8")
+
+    assert 'response["local_path"]' not in source
+    assert 'local_path = response.get("local_path")' in source
+    assert "server accepted the upload without returning a stored path" in source

@@ -1,8 +1,11 @@
 import asyncio
 from email.parser import BytesParser
 from email.policy import default as email_policy
+from functools import lru_cache, partial
 import hashlib
+import ipaddress
 import json
+import logging
 from pathlib import Path
 import re
 import time
@@ -10,6 +13,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +21,7 @@ from app.config import Settings, get_settings
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
 from app.metrics import metrics_registry
 from app.models import AdminUser, Message, RobotMessage, SchemaMigration
+from app.storage_paths import is_local_storage_path
 from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
@@ -60,6 +65,7 @@ from app.schemas import (
     RoomResponse,
     RuntimeStatusResponse,
 )
+from app.time_utils import format_utc_z
 from app.services.adapter_service import AdapterService
 from app.services.admin_token_service import AdminTokenService, VALID_ADMIN_ROLES
 from app.services.audit_log_service import AuditLogService
@@ -92,8 +98,11 @@ from app.services.user_profile_service import UserProfileService
 
 
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
+# Above this many tracked buckets, drop the ones whose window has fully expired.
+_RATE_LIMIT_BUCKET_LIMIT = 1024
 _VALID_ADMIN_ROLES = VALID_ADMIN_ROLES
 _EXTERNAL_MEDIA_TYPES = {"image", "voice", "video", "file"}
+logger = logging.getLogger(__name__)
 _EXTERNAL_MEDIA_ALIASES = {
     "audio": "voice",
     "record": "voice",
@@ -169,8 +178,13 @@ async def require_admin_api_token(
 
     header_token = request.headers.get("x-admin-token")
     bearer_token = _extract_bearer_token(request.headers.get("authorization"))
-    provided_token = header_token or bearer_token
-    matched = token_records.get(header_token or "") or token_records.get(bearer_token or "")
+    cookie_token = request.cookies.get(settings.auth_session_cookie_name)
+    provided_token = header_token or bearer_token or cookie_token
+    matched = (
+        token_records.get(header_token or "")
+        or token_records.get(bearer_token or "")
+        or token_records.get(cookie_token or "")
+    )
     if matched:
         request.state.admin_role = matched["role"]
         request.state.admin_actor = matched["name"]
@@ -205,13 +219,56 @@ async def require_admin_api_token(
 
 public_router = APIRouter()
 router = APIRouter(dependencies=[Depends(require_admin_api_token)])
+media_router = APIRouter(dependencies=[Depends(require_admin_api_token)])
 
 
-def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    return request.client.host if request.client else None
+@lru_cache(maxsize=8)
+def _trusted_proxy_networks(raw: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    networks = []
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError:
+            logger.warning("Ignoring unparsable trusted proxy entry", extra={"entry": candidate})
+    return tuple(networks)
+
+
+def _client_ip(request: Request, settings: Settings | None = None) -> str | None:
+    """The caller's address, trusting ``X-Forwarded-For`` only behind a proxy.
+
+    The header is caller-supplied. Trusting it unconditionally let anyone mint a
+    fresh rate-limit bucket per request and write whatever address they liked
+    into the audit log, so it is only read when the immediate peer is a
+    configured proxy. With TRUSTED_PROXY_IPS unset, which is the default, the
+    header is ignored entirely.
+    """
+    peer = request.client.host if request.client else None
+    networks = _trusted_proxy_networks(str(getattr(settings or get_settings(), "trusted_proxy_ips", "") or ""))
+    if not networks or peer is None:
+        return peer
+    try:
+        peer_address = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not any(peer_address in network for network in networks):
+        return peer
+    # Walk right to left: our own proxies appended the rightmost entries, so the
+    # first address that is not one of them is the real caller. Anything further
+    # left was supplied by that caller and cannot be trusted.
+    for candidate in reversed([item.strip() for item in (request.headers.get("x-forwarded-for") or "").split(",")]):
+        if not candidate:
+            continue
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if any(address in network for network in networks):
+            continue
+        return candidate
+    return peer
 
 
 def _actor(request: Request) -> str:
@@ -246,7 +303,7 @@ def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Setti
     if limit <= 0:
         return
     now = time.monotonic()
-    key = (_client_ip(request) or "unknown", action)
+    key = (_client_ip(request, settings) or "unknown", action)
     bucket = [timestamp for timestamp in _RATE_LIMIT_BUCKETS.get(key, []) if now - timestamp < 60]
     if len(bucket) >= limit:
         _RATE_LIMIT_BUCKETS[key] = bucket
@@ -258,6 +315,12 @@ def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Setti
         )
     bucket.append(now)
     _RATE_LIMIT_BUCKETS[key] = bucket
+    # Every distinct caller and action leaves an entry behind for good
+    # otherwise, so the dictionary only ever grew.
+    if len(_RATE_LIMIT_BUCKETS) > _RATE_LIMIT_BUCKET_LIMIT:
+        for stale_key, timestamps in list(_RATE_LIMIT_BUCKETS.items()):
+            if stale_key != key and all(now - timestamp >= 60 for timestamp in timestamps):
+                del _RATE_LIMIT_BUCKETS[stale_key]
 
 
 def _normalize_external_media_type(value: Any) -> str:
@@ -326,10 +389,72 @@ async def _audit(
     )
 
 
+def _set_auth_session_cookie(response: Response, settings: Settings, token: str) -> None:
+    response.set_cookie(
+        settings.auth_session_cookie_name,
+        token,
+        httponly=True,
+        secure=settings.auth_session_cookie_secure,
+        samesite="strict",
+        max_age=86400 * 7,
+        path="/",
+    )
+
+
+def _clear_auth_session_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        settings.auth_session_cookie_name,
+        secure=settings.auth_session_cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+
+
+def _storage_file_path(storage_root: Path, file_name: str) -> Path | None:
+    root = storage_root.resolve()
+    candidate = (root / file_name).resolve()
+    if candidate == root or not candidate.is_relative_to(root):
+        return None
+    return candidate
+
+
+# Archived card snapshots are attacker-controlled markup: the URL comes from a
+# QQ card message and the body is whatever that server returned. The console
+# opens them with a plain link, so without this they render as a document in the
+# console's own origin, with the session cookie attached.
+_ARCHIVED_DOCUMENT_SUFFIXES = {".htm", ".html", ".mhtml", ".shtml", ".svg", ".xhtml", ".xml"}
+# ``sandbox`` with no tokens drops the document into an opaque origin and
+# disables scripts outright, which keeps a snapshot readable while making it
+# unable to touch the console, its cookies or its API. The rest stops the
+# snapshot from reaching back out to the network when someone views it.
+_ARCHIVED_DOCUMENT_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+    "base-uri 'none'; form-action 'none'; sandbox"
+)
+
+
+@media_router.get("/media/{file_name:path}", include_in_schema=False)
+@media_router.get("/static/storage/{file_name:path}", include_in_schema=False)
+async def download_media_file(
+    file_name: str,
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    file_path = _storage_file_path(settings.storage_root, file_name)
+    if file_path is None or not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media file not found")
+    headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    if file_path.suffix.lower() in _ARCHIVED_DOCUMENT_SUFFIXES:
+        headers["Content-Security-Policy"] = _ARCHIVED_DOCUMENT_CSP
+        headers["Referrer-Policy"] = "no-referrer"
+    return FileResponse(file_path, headers=headers)
+
+
 @public_router.post("/auth/login", response_model=AuthLoginResponse)
 async def login_admin_user(
     payload: AuthLoginRequest,
     request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db_session),
 ) -> AuthLoginResponse:
     user = await AdminUserService.authenticate(db, username=payload.username, password=payload.password)
@@ -354,7 +479,25 @@ async def login_admin_user(
         target=str(user.id),
         detail={"role": user.role},
     )
+    _set_auth_session_cookie(response, settings, token)
     return AuthLoginResponse(token=token, user=AdminUserResponse.model_validate(user))
+
+
+@router.post("/auth/session", status_code=status.HTTP_204_NO_CONTENT)
+async def establish_browser_session(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    token = (
+        request.headers.get("x-admin-token")
+        or _extract_bearer_token(request.headers.get("authorization"))
+        or request.cookies.get(settings.auth_session_cookie_name)
+    )
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing admin api token")
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _set_auth_session_cookie(response, settings, token)
+    return response
 
 
 @router.get("/auth/me", response_model=AuthMeResponse)
@@ -371,13 +514,20 @@ async def get_auth_identity(request: Request) -> AuthMeResponse:
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_admin_user(
     request: Request,
+    settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db_session),
 ) -> Response:
-    token = _extract_bearer_token(request.headers.get("authorization"))
+    token = (
+        request.headers.get("x-admin-token")
+        or _extract_bearer_token(request.headers.get("authorization"))
+        or request.cookies.get(settings.auth_session_cookie_name)
+    )
     if token:
         await AdminUserService.revoke_session(db, token)
     await _audit(db, request, action="auth.logout", status_="success")
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_auth_session_cookie(response, settings)
+    return response
 
 
 @router.get("/adapters", response_model=list[AdapterResponse])
@@ -397,6 +547,41 @@ async def list_bots(
     return [BotProfileResponse.model_validate(profile) for profile in profiles]
 
 
+# One page of a list request may not turn into an unbounded fan-out of outbound
+# HTTP calls, and one unreachable avatar may not take the list down with it.
+AVATAR_HYDRATION_LIMIT = 20
+
+
+async def _hydrate_profiles(
+    db: AsyncSession,
+    entries: list[tuple[str, Any]],
+    *,
+    kind: str,
+) -> bool:
+    """Run each hydration, isolated and capped.
+
+    Every caller had one of the two failure modes: /bots and /messages ran the
+    whole page inside a single try, so one profile that could not be fetched
+    returned 500 for the entire list, and the private branch of /rooms had no
+    cap at all, so a page of new private chats meant one serial outbound request
+    per chat while the caller waited.
+
+    True means "reload before using the rows you passed in". That covers a
+    successful hydration, and equally a failed one: the rollback that makes the
+    session usable again also expires whatever the caller is holding, and
+    serialising an expired ORM row raises rather than returning stale data.
+    """
+    touched = False
+    for label, run in entries[:AVATAR_HYDRATION_LIMIT]:
+        try:
+            await run()
+        except Exception:
+            await db.rollback()
+            logger.exception("Profile hydration failed", extra={"kind": kind, "target": label})
+        touched = True
+    return touched
+
+
 async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], settings: Settings) -> bool:
     missing_qq_avatars = [
         profile
@@ -409,24 +594,37 @@ async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], s
         return False
 
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for profile in missing_qq_avatars[:20]:
-            await UserProfileService.cache_qq_user_profile(
-                db,
-                user_id=str(profile.id),
-                platform="qq",
-                display_name=profile.display_name,
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-    return True
+        return await _hydrate_profiles(
+            db,
+            [
+                (
+                    str(profile.id),
+                    partial(
+                        UserProfileService.cache_qq_user_profile,
+                        db,
+                        user_id=str(profile.id),
+                        platform="qq",
+                        display_name=profile.display_name,
+                        http_client=client,
+                        storage_root=settings.storage_root,
+                        public_prefix=settings.public_storage_prefix,
+                        max_bytes=settings.media_max_bytes,
+                    ),
+                )
+                for profile in missing_qq_avatars
+            ],
+            kind="bot_avatar",
+        )
 
 
 def _needs_qq_avatar_refresh(avatar_path: str | None) -> bool:
     if not avatar_path:
         return True
-    return (not avatar_path.startswith("/static/storage/")) or avatar_path.lower().endswith(".svg")
+    # A cached avatar is one served from any prefix this deployment exposes.
+    # Checking a single hard-coded prefix makes every already-cached avatar look
+    # stale under a different `public_storage_prefix`, so each list request would
+    # re-download the whole page of avatars and never converge.
+    return (not is_local_storage_path(avatar_path)) or avatar_path.lower().endswith(".svg")
 
 
 @router.get("/bots/{robot_id}/capture-targets", response_model=list[CaptureTargetSettingResponse])
@@ -512,6 +710,13 @@ def _backup_status_response(settings: Settings, backup_config: EffectiveBackupCo
     backup_root = settings.backup_root
     backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name)) if backup_root.exists() else []
     latest = backups[-1].name if backups else None
+    cron_error: str | None = None
+    next_run_at: str | None = None
+    if backup_config.enabled:
+        try:
+            next_run_at = format_utc_z(BackupService.next_run_from_cron(backup_config.cron))
+        except ValueError as exc:
+            cron_error = str(exc)
     return BackupStatusResponse(
         enabled=backup_config.enabled,
         cron=backup_config.cron,
@@ -522,6 +727,8 @@ def _backup_status_response(settings: Settings, backup_config: EffectiveBackupCo
         config_source=backup_config.config_source,
         cron_source=backup_config.cron_source,
         keep_latest_source=backup_config.keep_latest_source,
+        cron_error=cron_error,
+        next_run_at=next_run_at,
     )
 
 
@@ -916,7 +1123,7 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
 
     changed = False
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for room in missing_group_rooms[:20]:
+        for room in missing_group_rooms[:AVATAR_HYDRATION_LIMIT]:
             room_id = str(room["room_id"])
             group_info = None
             try:
@@ -925,30 +1132,40 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
                     group_info = payload["data"]
             except (LookupError, asyncio.TimeoutError, ValueError):
                 group_info = None
-            await RoomProfileService.cache_qq_group_profile(
-                db,
-                room_id=room_id,
-                platform="qq",
-                group_info=group_info,
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-            changed = True
-        for room in missing_private_rooms:
+            try:
+                await RoomProfileService.cache_qq_group_profile(
+                    db,
+                    room_id=room_id,
+                    platform="qq",
+                    group_info=group_info,
+                    http_client=client,
+                    storage_root=settings.storage_root,
+                    public_prefix=settings.public_storage_prefix,
+                    max_bytes=settings.media_max_bytes,
+                )
+                changed = True
+            except Exception:
+                await db.rollback()
+                logger.exception("Room profile hydration failed", extra={"room_id": room_id, "platform": "qq"})
+        # Capped like every other branch: a page full of new private chats used
+        # to mean one serial outbound request per chat while the caller waited.
+        for room in missing_private_rooms[:AVATAR_HYDRATION_LIMIT]:
             user_id = str(room.get("qq_number") or room["room_id"])
-            await UserProfileService.cache_qq_user_profile(
-                db,
-                user_id=user_id,
-                platform="qq",
-                display_name=room.get("display_name"),
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-            changed = True
+            try:
+                await UserProfileService.cache_qq_user_profile(
+                    db,
+                    user_id=user_id,
+                    platform="qq",
+                    display_name=room.get("display_name"),
+                    http_client=client,
+                    storage_root=settings.storage_root,
+                    public_prefix=settings.public_storage_prefix,
+                    max_bytes=settings.media_max_bytes,
+                )
+                changed = True
+            except Exception:
+                await db.rollback()
+                logger.exception("User profile hydration failed", extra={"user_id": user_id, "platform": "qq"})
     return changed
 
 
@@ -957,6 +1174,8 @@ async def list_messages(
     robot_id: str = Query(..., min_length=1),
     room_id: str = Query(..., min_length=1),
     before_timestamp: int | None = Query(default=None),
+    before_source_sequence: int | None = Query(default=None),
+    before_msg_hash: str | None = Query(default=None, min_length=1),
     around_message_id: str | None = Query(default=None, min_length=1),
     media_state: str | None = Query(default=None, pattern="^(all|any|complete|not_downloaded|missing|failed)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -968,6 +1187,8 @@ async def list_messages(
         robot_id=robot_id,
         room_id=room_id,
         before_timestamp=before_timestamp,
+        before_source_sequence=before_source_sequence,
+        before_msg_hash=before_msg_hash,
         around_message_id=around_message_id,
         media_state=media_state,
         limit=limit,
@@ -978,6 +1199,8 @@ async def list_messages(
             robot_id=robot_id,
             room_id=room_id,
             before_timestamp=before_timestamp,
+            before_source_sequence=before_source_sequence,
+            before_msg_hash=before_msg_hash,
             around_message_id=around_message_id,
             media_state=media_state,
             limit=limit,
@@ -1001,18 +1224,27 @@ async def _hydrate_missing_message_sender_profiles(db: AsyncSession, messages: l
         return False
 
     async with httpx.AsyncClient(timeout=settings.media_download_timeout_seconds) as client:
-        for sender_id, display_name in list(missing_senders.items())[:20]:
-            await UserProfileService.cache_qq_user_profile(
-                db,
-                user_id=sender_id,
-                platform="qq",
-                display_name=display_name,
-                http_client=client,
-                storage_root=settings.storage_root,
-                public_prefix=settings.public_storage_prefix,
-                max_bytes=settings.media_max_bytes,
-            )
-    return True
+        return await _hydrate_profiles(
+            db,
+            [
+                (
+                    sender_id,
+                    partial(
+                        UserProfileService.cache_qq_user_profile,
+                        db,
+                        user_id=sender_id,
+                        platform="qq",
+                        display_name=display_name,
+                        http_client=client,
+                        storage_root=settings.storage_root,
+                        public_prefix=settings.public_storage_prefix,
+                        max_bytes=settings.media_max_bytes,
+                    ),
+                )
+                for sender_id, display_name in missing_senders.items()
+            ],
+            kind="message_sender_avatar",
+        )
 
 
 @router.post(
@@ -1584,6 +1816,7 @@ async def validate_import_data(
         storage_root=settings.storage_root,
         public_storage_prefix=settings.public_storage_prefix,
         signing_key=settings.app_secret_key,
+        require_signature=settings.backup_import_require_signature,
     )
     return ImportValidationResponse(**report)
 
@@ -1614,6 +1847,7 @@ async def import_data(
             storage_root=settings.storage_root,
             public_storage_prefix=settings.public_storage_prefix,
             signing_key=settings.app_secret_key,
+            require_signature=settings.backup_import_require_signature,
         )
     except ValueError as exc:
         await db.rollback()

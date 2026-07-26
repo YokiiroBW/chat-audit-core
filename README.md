@@ -193,15 +193,22 @@ Collector 已提供数据目录发现、WAL 一致性快照、只读 SQLite 连�
 `v1.0.0` 是第一个稳定版本，主线功能已经围绕 QQ / NapCat 聊天记录备份、浏览、搜索、导出和离线留存闭环。
 
 
-### QQNT ?????
+### QQNT 数据库密钥
 
-Collector ??????? QQNT 16 ?? ASCII ??????GUI???????
-?????????????? Windows ??? DPAPI ???????
-`collector.toml`?QQNT ???????????? 1024 ?????????
-SQLCipher ??????? QQ ?????????CLI ?????
+Collector 读取 QQNT 本地数据库需要 16 字节 ASCII 密钥，在 GUI 的「设置」页
+以掩码字段填写。密钥与 API Token 一并保存在当前 Windows 用户的 DPAPI 作用域，
+绝不会写入 `collector.toml`。读取时先生成一致性快照，再把剥离 1024 字节
+自定义头的临时副本交给 SQLCipher，并以 `query_only` 和拒写 authorizer 打开，
+不会修改 QQ 的原始文件。CLI 等价命令：
 
 ```powershell
 python -m collector --config collector.toml credential set qqnt_database_key
 python -m collector --config collector.toml probe C:\path\to\nt_msg.db --snapshot
 python -m collector --config collector.toml scan C:\path\to\nt_msg.db --mode initial
 ```
+
+填入 16 字节密钥只说明格式正确，不代表密钥可用。托盘此时提示「能否读取将在
+首次同步时实测确认」，可读性由首次同步真实打开剥头副本来证明，失败会作为扫描
+问题上报，托盘不会仅凭密钥长度声称可读。停止码与含义：缺少 SQLCipher 运行时
+返回 `DB_SQLCIPHER_UNAVAILABLE`；缺少密钥或长度不是 16 字节返回
+`DB_KEY_INVALID`；自定义头之后不是 SQLCipher 密文体则返回 `DB_VFS_UNSUPPORTED`。

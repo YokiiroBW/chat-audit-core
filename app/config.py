@@ -24,7 +24,21 @@ class Settings(BaseSettings):
 
     storage_root: Path = Path("./data/storage")
     backup_root: Path = Path("./data/backups")
-    public_storage_prefix: str = "/static/storage"
+    public_storage_prefix: str = "/media"
+    auth_session_cookie_name: str = "chat_audit_session"
+    auth_session_cookie_secure: bool = False
+    # Browser login lifetime. Applies to sessions created before the column
+    # existed too, measured from their creation, so no session outlives the
+    # policy by predating it. Set to 0 to keep sessions valid until revoked.
+    admin_session_ttl_hours: int = 12
+    # API tokens are long-lived by design; 0 keeps the previous behaviour of
+    # never expiring, and a positive value ages them out from creation.
+    admin_token_ttl_days: int = 0
+    # Comma-separated proxy addresses or CIDRs whose X-Forwarded-For header may
+    # be believed. Empty, the default, means the header is ignored: it is
+    # caller-supplied, and trusting it lets anyone forge the audited address and
+    # sidestep per-address rate limits.
+    trusted_proxy_ips: str = ""
 
     onebot_ws_path: str = "/onebot/v11/ws"
     onebot_access_token: str = ""
@@ -46,6 +60,10 @@ class Settings(BaseSettings):
 
     auto_backup_cron: str = "0 3 * * *"
     auto_backup_keep_latest: int = 7
+    # Reject import packages that carry no checksum or no verifiable signature.
+    # Off by default so unsigned legacy packages stay importable; turn it on to
+    # require that every imported archive proves where it came from.
+    backup_import_require_signature: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

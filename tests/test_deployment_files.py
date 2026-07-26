@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import yaml
 
@@ -59,7 +60,9 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
 
     services = compose["services"]
     assert set(services) == {"app"}
-    assert "8000:8000" in services["app"]["ports"]
+    # 端口保留可覆盖的绑定地址前缀，默认仍对所有网卡开放。
+    assert any(entry.endswith("8000:8000") for entry in services["app"]["ports"])
+    assert all(entry.startswith("${APP_BIND_ADDRESS:-0.0.0.0}:") for entry in services["app"]["ports"])
     assert "${DATABASE_DATA_PATH:-./data/database}:/app/data/database" in services["app"]["volumes"]
     assert "${MEDIA_STORAGE_PATH:-./data/storage}:/app/data/storage" in services["app"]["volumes"]
     assert "${BACKUP_STORAGE_PATH:-./data/backups}:/app/data/backups" in services["app"]["volumes"]
@@ -151,6 +154,40 @@ def test_static_assets_include_minified_frontend_bundle():
     assert min_css.stat().st_size < source_css.stat().st_size
 
 
+def test_tracked_text_files_are_free_of_mojibake():
+    # 一次 ASCII 编码写盘曾把多个文件里的 CJK 字符整片换成问号，且不可逆。
+    # 这条断言与 CI 的 Verify text encoding 步骤同源，本地跑测试就能拦住复发。
+    from scripts.check_text_encoding import check_text_encoding
+
+    assert check_text_encoding() == []
+
+
+def test_mojibake_guard_separates_damage_from_legitimate_question_marks():
+    # 问号在源码里到处都是合法的，哨兵的价值全在这几条边界上，所以钉死它们。
+    # 注意：本测试自身不能出现连续问号字面量，否则会被哨兵判为受损，故用 q 拼接。
+    from scripts.check_text_encoding import _line_problems
+
+    q = "?"
+    legitimate = [
+        ("app/x.js", f"const a = b {q}{q} c;"),
+        ("app/x.js", f"const a = b {q}{q}= c;"),
+        ("app/x.js", f"return qqNumber {q} 'a' : 'b';"),
+        ("app/x.js", f"/[),.;:!{q}，。]+$/"),
+        ("app/x.py", f'placeholders = ",".join("{q}" for _ in ids)'),
+    ]
+    for path, line in legitimate:
+        assert _line_problems(path, line) == [], line
+
+    damaged = [
+        ("app/x.js", f"pushUiLog('{q * 5}' + name)"),
+        ("collector/gui/app.py", f'title="{q * 2} QQ {q * 4}"'),
+        # Markdown 散文可以长得和 JS 的空值合并运算符一模一样，所以豁免只对 .js 生效。
+        ("README.md", f"QQNT 16 {q}{q} ASCII"),
+    ]
+    for path, line in damaged:
+        assert _line_problems(path, line), line
+
+
 def test_disaster_recovery_document_covers_restore_drill_and_targets():
     guide = (ROOT / "DISASTER_RECOVERY.md").read_text(encoding="utf-8")
 
@@ -174,8 +211,66 @@ def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     assert "pg_isready" in test_job["services"]["postgres"]["options"]
     steps = {step["name"]: step["run"] for step in test_job["steps"] if "run" in step}
     assert "python -m pip install -r requirements-dev.txt" in steps["Install dependencies"]
-    assert "python scripts/minify_static_assets.py" in steps["Verify minified frontend assets"]
-    assert "git diff --exit-code app/static/assets/app.min.css app/static/assets/app.min.js" in steps["Verify minified frontend assets"]
+    # 乱码哨兵排在资产门禁之前，让编码损坏先报出来，而不是被误读成 min 产物过期。
+    assert "python scripts/check_text_encoding.py" in steps["Verify text encoding"]
+    step_names = [step["name"] for step in test_job["steps"]]
+    assert step_names.index("Verify text encoding") < step_names.index("Verify minified frontend assets")
+    # 资产门禁走 --check：只读比对、不写盘，因此后续步骤看到的仍是干净检出。
+    assert "python scripts/minify_static_assets.py --check" in steps["Verify minified frontend assets"]
+    assert "python -m pip check" in steps["Verify dependency resolution"]
+    # pip-audit 必须装在独立 venv，否则它的依赖会扰动 requirements-prod.txt 钉定的版本。
+    audit_step = steps["Audit production dependencies"]
+    assert "pip-audit" in audit_step
+    assert "requirements-prod.txt" in audit_step
+    assert ".tmp/audit-venv" in audit_step
     assert steps["Compile Python modules"] == "python -m compileall app tests"
     assert steps["Run tests"] == "python -m pytest tests -q"
     assert steps["Build Docker image"] == "docker build -t chat-audit-core:ci ."
+
+
+def test_identity_repair_script_has_no_baked_in_account_and_guards_its_dialect():
+    # This script rewrites and merges one account's archived messages. A default
+    # QQ number meant a mistyped invocation repaired somebody else's history,
+    # and its DELETE ... USING statements are PostgreSQL-only, so on SQLite it
+    # would fail partway through a destructive run.
+    script = (ROOT / "scripts/repair_qq_identity_and_duplicates.py").read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--account-id", required=True)' in script
+    assert "default=ACCOUNT_ID" not in script
+    assert 'SUPPORTED_DIALECTS = {"postgresql"}' in script
+    assert "dialect not in SUPPORTED_DIALECTS" in script
+    # No QQ-number-shaped literal left behind.
+    assert not re.search(r"\b\d{9,11}\b", script)
+
+
+def test_alembic_config_declares_nothing_it_cannot_resolve():
+    # timezone = UTC made "alembic revision" fail outright: alembic resolves it
+    # through zoneinfo, which has no database on Windows without tzdata, and
+    # that package is in no requirements file. Revision generation cannot run
+    # here anyway, since migrations are hand-written and no script.py.mako
+    # ships, so the setting bought nothing and broke the command.
+    config = (ROOT / "alembic.ini").read_text(encoding="utf-8")
+
+    assert "script_location = migrations" in config
+    assert not re.search(r"^\s*timezone\s*=", config, re.M)
+    assert not (ROOT / "migrations/script.py.mako").exists()
+
+
+def test_gitattributes_export_rules_reference_files_that_exist():
+    # Seven export-ignore entries pointed at files removed long ago, so the
+    # rules read as protection that was not actually in force.
+    import subprocess
+
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    tracked = set(
+        subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split("\n")
+    )
+
+    for line in attributes.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        pattern = stripped.rsplit(" ", 1)[0].strip('"')
+        if pattern.endswith("/") or pattern.endswith("/**"):
+            continue
+        assert pattern in tracked, f"export rule points at a file that is not tracked: {pattern}"

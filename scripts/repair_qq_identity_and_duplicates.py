@@ -9,7 +9,10 @@ from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
 
-ACCOUNT_ID = "1248465005"
+# The merge statements below use PostgreSQL's DELETE ... USING and aliased
+# UPDATE, which SQLite does not accept. Running them elsewhere would fail
+# partway through a destructive repair, so the dialect is checked up front.
+SUPPORTED_DIALECTS = {"postgresql"}
 
 
 def _numeric(value: object) -> str | None:
@@ -37,6 +40,13 @@ def _canonical_identity(row: dict[str, object], account_id: str) -> tuple[str, s
 
 async def repair(*, account_id: str, apply: bool) -> None:
     async with AsyncSessionLocal() as db:
+        dialect = db.get_bind().dialect.name
+        if dialect not in SUPPORTED_DIALECTS:
+            raise SystemExit(
+                f"this repair script only supports {'/'.join(sorted(SUPPORTED_DIALECTS))}, "
+                f"but the configured database is {dialect}; refusing to start a destructive "
+                "repair that would fail halfway through"
+            )
         result = await db.execute(text("""
             select m.msg_hash, m.platform, m.room_id, m.message_type, m.sender_id,
                    m.is_outgoing, m.local_message, m.raw_message, m.timestamp,
@@ -91,7 +101,10 @@ async def repair(*, account_id: str, apply: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Repair QQNT identities and merge exact duplicate messages.")
-    parser.add_argument("--account-id", default=ACCOUNT_ID)
+    # No default: this rewrites and merges one account's archived messages, and
+    # a baked-in QQ number meant a mistyped invocation silently repaired somebody
+    # else's history.
+    parser.add_argument("--account-id", required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     asyncio.run(repair(account_id=args.account_id, apply=args.apply))

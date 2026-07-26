@@ -1,14 +1,16 @@
 import asyncio
 import html
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +41,9 @@ _SUPPORTED_MEDIA_TYPES = {
     "record": "voice",
     "video": "video",
     "file": "file",
+    "mface": "image",
+    "market_face": "image",
+    "bface": "image",
 }
 _URL_PATTERN = re.compile(r"https?://[^\s\"'<>\\\]]+")
 _CARD_MEDIA_KEYS = {
@@ -182,6 +187,15 @@ def _normalize_content_type(content_type: str | None) -> str:
     return (content_type or "").split(";", 1)[0].strip().lower()
 
 
+def _is_trusted_qq_media_url(url: str) -> bool:
+    hostname = (urlparse(url).hostname or "").lower()
+    return any(hostname == part or hostname.endswith(f".{part}") for part in _KNOWN_MEDIA_HOST_PARTS)
+
+
+def _looks_like_supported_video_payload(content: bytes) -> bool:
+    return len(content) >= 12 and (content[4:8] == b"ftyp" or content.startswith(b"\x1a\x45\xdf\xa3"))
+
+
 def _is_allowed_download_content_type(media_type: str, content_type: str | None) -> bool:
     normalized = _normalize_content_type(content_type)
     if not normalized:
@@ -240,13 +254,124 @@ def _media_type_from_url(url: str, fallback: str = "file") -> str:
 
 def _normalize_http_url(url: str) -> str | None:
     value = url.strip()
-    if value.startswith(("http://", "https://")):
-        return value
     if value.startswith("//"):
-        return f"https:{value}"
-    if "." in value and not value.startswith(("/", "#")):
-        return f"https://{value}"
-    return None
+        value = f"https:{value}"
+    elif not value.startswith(("http://", "https://")):
+        if "." not in value or value.startswith(("/", "#")):
+            return None
+        value = f"https://{value}"
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        port = parsed.port
+        if port is not None and port not in {80, 443}:
+            return None
+    except ValueError:
+        return None
+    return value
+
+
+def _is_public_ip_address(value: str) -> bool:
+    address = ipaddress.ip_address(value)
+    return not any((
+        address.is_private,
+        address.is_loopback,
+        address.is_link_local,
+        address.is_multicast,
+        address.is_reserved,
+        address.is_unspecified,
+    ))
+
+
+@dataclass(frozen=True)
+class _DownloadTarget:
+    """Where the request actually goes, and how it stays addressed correctly.
+
+    Once a hostname has been resolved and every answer checked, ``url`` points
+    at the literal address that was checked. Validating a name and then letting
+    the HTTP client resolve it a second time leaves a window in which DNS can
+    answer differently -- classic rebinding -- and the request lands on the
+    private address the check was supposed to prevent.
+    """
+
+    url: str
+    headers: dict[str, str]
+    extensions: dict[str, Any]
+
+    @property
+    def is_pinned(self) -> bool:
+        return bool(self.headers or self.extensions)
+
+
+def _pin_download_target(parsed: Any, address: str) -> _DownloadTarget:
+    literal = f"[{address}]" if ":" in address else address
+    netloc = f"{literal}:{parsed.port}" if parsed.port else literal
+    pinned_url = urlunparse(parsed._replace(netloc=netloc))
+    # The origin still has to see its own name, and for TLS the certificate has
+    # to be verified against that name rather than against the address.
+    headers = {"Host": parsed.netloc}
+    extensions: dict[str, Any] = {}
+    if parsed.scheme == "https":
+        extensions["sni_hostname"] = parsed.hostname
+    return _DownloadTarget(pinned_url, headers, extensions)
+
+
+async def _resolve_download_target(url: str, *, resolve_host: bool) -> _DownloadTarget | None:
+    normalized = _normalize_http_url(url)
+    if normalized is None:
+        return None
+    parsed = urlparse(normalized)
+    host = parsed.hostname
+    if not host:
+        return None
+    try:
+        literal_is_public = _is_public_ip_address(host)
+    except ValueError:
+        literal_is_public = None
+    if literal_is_public is False:
+        return None
+    if literal_is_public is True or not resolve_host:
+        # Already an address, or the caller injected a transport that does its
+        # own routing; there is nothing to pin.
+        return _DownloadTarget(normalized, {}, {})
+    try:
+        loop = asyncio.get_running_loop()
+        resolved = await loop.run_in_executor(None, lambda: socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+        addresses = [item[4][0] for item in resolved]
+        if not addresses or any(not _is_public_ip_address(address) for address in addresses):
+            return None
+    except (OSError, ValueError):
+        return None
+    return _pin_download_target(parsed, addresses[0])
+
+
+async def _send_download_request(client: Any, target: _DownloadTarget) -> Any:
+    if target.is_pinned:
+        return await client.get(
+            target.url,
+            headers=target.headers,
+            extensions=target.extensions,
+            follow_redirects=False,
+        )
+    # Injected stubs accept only the URL.
+    try:
+        return await client.get(target.url, follow_redirects=False)
+    except TypeError:
+        return await client.get(target.url)
+
+
+async def _read_response_bytes(response: Any, max_bytes: int) -> bytes | None:
+    content = bytearray()
+    iterator = getattr(response, "aiter_bytes", None)
+    if callable(iterator):
+        async for chunk in iterator():
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                return None
+        return bytes(content)
+    body = bytes(response.content)
+    return body if len(body) <= max_bytes else None
 
 
 def _normalize_card_url_key(key: str | None) -> str:
@@ -340,7 +465,7 @@ def _parse_cq_media_segments_with_ordinals(
     prefix = (public_prefix or get_settings().public_storage_prefix).rstrip("/") + "/"
     local_path_pattern = rf"{re.escape(prefix)}[^\s\"'<>),\]]+?\.[a-z0-9]+"
     ordinal_pattern = re.compile(
-        rf"\[CQ:(?P<kind>image|record|video|file),(?P<params>[^\]]*)\]|(?P<local>{local_path_pattern})",
+        rf"\[CQ:(?P<kind>image|record|video|file|mface|market_face|bface),(?P<params>[^\]]*)\]|(?P<local>{local_path_pattern})",
         re.I,
     )
     segments: list[tuple[int, CQMediaSegment]] = []
@@ -573,27 +698,49 @@ class MediaService:
         client = http_client or httpx.AsyncClient()
         download_status = "unknown"
         try:
+            target = await _resolve_download_target(url, resolve_host=owns_client or type(client).__module__.startswith("httpx"))
+            if target is None:
+                download_status = "unsafe_url"
+                logger.warning("Media download rejected unsafe URL", extra={"url": url, "media_type": media_type})
+                return None
+            # Keep logging and downstream checks keyed on the name, not on the
+            # pinned address, so messages stay readable and host allowlists
+            # (trusted QQ media domains) still match.
+            normalized_url = _normalize_http_url(url) or url
             try:
-                response = await client.get(url)
+                response = await _send_download_request(client, target)
             except (httpx.HTTPError, KeyError) as exc:
                 download_status = "request_error"
                 logger.warning(
                     "Media download request failed",
-                    extra={"url": url, "media_type": media_type, "error": str(exc)},
+                    extra={"url": normalized_url, "media_type": media_type, "error": str(exc)},
+                )
+                return None
+            if 300 <= response.status_code < 400:
+                download_status = "redirect_rejected"
+                logger.warning(
+                    "Media download redirect rejected",
+                    extra={"url": normalized_url, "media_type": media_type, "location": response.headers.get("location")},
                 )
                 return None
             if response.status_code >= 400:
                 download_status = "upstream_error"
                 logger.warning(
                     "Media download rejected by upstream",
-                    extra={"url": url, "media_type": media_type, "status_code": response.status_code},
+                    extra={"url": normalized_url, "media_type": media_type, "status_code": response.status_code},
                 )
                 return None
-            if not _is_allowed_download_content_type(media_type, response.headers.get("content-type")):
+            content_type = _normalize_content_type(response.headers.get("content-type"))
+            is_trusted_generic_video = (
+                media_type == "video"
+                and content_type == "application/octet-stream"
+                and _is_trusted_qq_media_url(normalized_url)
+            )
+            if not _is_allowed_download_content_type(media_type, content_type) and not is_trusted_generic_video:
                 download_status = "content_type_rejected"
                 logger.warning(
                     "Media download content type rejected",
-                    extra={"url": url, "media_type": media_type, "content_type": response.headers.get("content-type")},
+                    extra={"url": normalized_url, "media_type": media_type, "content_type": content_type},
                 )
                 return None
             content_length = response.headers.get("content-length")
@@ -601,19 +748,27 @@ class MediaService:
                 download_status = "too_large"
                 logger.warning(
                     "Media download content length exceeds limit",
-                    extra={"url": url, "media_type": media_type, "content_length": int(content_length), "max_bytes": media_max_bytes},
+                    extra={"url": normalized_url, "media_type": media_type, "content_length": int(content_length), "max_bytes": media_max_bytes},
                 )
                 return None
-            if len(response.content) > media_max_bytes:
+            content = await _read_response_bytes(response, media_max_bytes)
+            if content is None:
                 download_status = "too_large"
                 logger.warning(
                     "Media download body exceeds limit",
-                    extra={"url": url, "media_type": media_type, "content_length": len(response.content), "max_bytes": media_max_bytes},
+                    extra={"url": normalized_url, "media_type": media_type, "max_bytes": media_max_bytes},
                 )
                 return None
-            ext = _guess_ext(url, file_name, media_type)
+            if is_trusted_generic_video and not _looks_like_supported_video_payload(content):
+                download_status = "unsupported_video_payload"
+                logger.warning(
+                    "Media download rejected unsupported QQ video payload",
+                    extra={"url": normalized_url, "content_type": content_type},
+                )
+                return None
+            ext = _guess_ext(normalized_url, file_name, media_type)
             content, ext = await MediaService._maybe_transcode_media(
-                response.content,
+                content,
                 media_type,
                 ext,
                 enabled=settings.media_transcode_enabled if transcode_enabled is None else transcode_enabled,
@@ -1227,9 +1382,9 @@ class MediaService:
         segment_type = segment.get("type") or segment.get("kind")
         data = segment.get("data") if isinstance(segment.get("data"), dict) else segment
         if isinstance(data, dict):
-            if segment_type in {"image", "record", "video", "file"}:
+            if segment_type in {"image", "record", "video", "file", "mface", "market_face", "bface"}:
                 url = data.get("url") or data.get("path")
-                media_type = {"record": "voice"}.get(str(segment_type), str(segment_type))
+                media_type = {"record": "voice", "mface": "image", "market_face": "image", "bface": "image"}.get(str(segment_type), str(segment_type))
                 if (
                     isinstance(url, str)
                     and url.startswith(("http://", "https://"))

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from collector.app.config import CollectorConfig, default_collector_root, load_config
+from collector.app.config import CollectorConfig, default_collector_root, load_config, transport_security_warnings
 from collector.app.credential_store import CredentialStore
 from collector.app.diagnostics import create_diagnostic_bundle
 from collector.app.main import (
@@ -63,8 +63,21 @@ def _powershell_single_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+# 允许启动同步的兼容性状态。needs_verification 也放行:QQNT 加密库的可读性只能由扫描器
+# 真实打开剥头副本来证明,拦在这里等于永久禁用 QQNT 单来源部署。真实失败会以 ScanIssue
+# 的 DB_* 停止码上报。
+SYNCABLE_COMPATIBILITY_STATUSES = frozenset({"ready", "needs_verification"})
+
+
 @dataclass(frozen=True)
 class CompatibilityReport:
+    """兼容性检测结果。
+
+    ``status`` 取值:``ready``(有已证实可读的库)、``needs_verification``(QQNT 加密库通过了
+    格式/runtime/密钥形态检查,但可读性尚未实测)、``needs_key``、``unsupported``、``missing``、
+    ``unconfigured``。``readable_count`` 只统计**已证实可读**的库,不含待实测的。
+    """
+
     status: str
     message: str
     database_count: int
@@ -89,6 +102,9 @@ class CollectorGuiController:
         self._stop_event: asyncio.Event | None = None
         self._stop_requested = threading.Event()
         self._lock = threading.Lock()
+        self._config_cache: tuple[Any, Any] | None = None
+        self._store_cache: tuple[Any, Any] | None = None
+        self._api_token_present: bool | None = None
         self._recover_interrupted_runs()
 
     def _recover_interrupted_runs(self) -> None:
@@ -180,13 +196,44 @@ class CollectorGuiController:
         if source.is_dir() and (source / "collector_state.sqlite3").exists():
             if not (target / "collector_state.sqlite3").exists():
                 raise RuntimeError("迁移校验失败：状态数据库未复制到新目录")
+        # The state database just moved; anything cached still points at the old
+        # location, where only leftovers remain.
+        self._invalidate_runtime_cache()
         self.event_callback("storage.migrated", f"{source}|{target}")
+
+    @staticmethod
+    def _installer_startup_shortcut() -> Path | None:
+        """The Startup-folder shortcut the installer optionally creates.
+
+        It is a second, independent autostart source: with both active the
+        collector launches twice at login, and clearing the checkbox only
+        removed the registry value, so autostart could not actually be turned
+        off. The registry entry is kept as the single source because it carries
+        the config path this instance is actually using.
+        """
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Chat Audit QQ Collector.lnk"
+
+    def _remove_installer_startup_shortcut(self) -> None:
+        shortcut = self._installer_startup_shortcut()
+        if shortcut is None:
+            return
+        try:
+            shortcut.unlink(missing_ok=True)
+        except OSError:
+            # Not fatal: the registry entry still decides whether we start.
+            self.event_callback("autostart.shortcut_not_removed", str(shortcut))
 
     def _set_autostart(self, enabled: bool) -> None:
         if winreg is None:
             if enabled:
-                raise RuntimeError("????????? Windows")
+                raise RuntimeError("开机自动启动仅支持 Windows")
             return
+        # Taken over either way: enabling makes the registry entry the only
+        # source, disabling has to clear both or nothing changes at login.
+        self._remove_installer_startup_shortcut()
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         value_name = "ChatAuditQQCollector"
         if enabled:
@@ -274,7 +321,13 @@ rescan_not_downloaded_days = 30
             credentials.set("api_token", settings.api_token)
         if settings.qqnt_database_key:
             credentials.set("qqnt_database_key", settings.qqnt_database_key)
+        # The config on disk just changed, so anything derived from it is stale.
+        self._invalidate_runtime_cache()
         self.event_callback("settings.saved", "配置已保存")
+        # Told at the moment the address is set, where it can still be changed,
+        # rather than only in a log file nobody opens.
+        for warning in transport_security_warnings(config.server):
+            self.event_callback("server.insecure_transport", warning)
         return config
 
     def generate_unlock_script(self, data_root: str, qq_install_dir: str, output_path: str | Path) -> Path:
@@ -359,11 +412,53 @@ exit /b %exit_code%
         self.event_callback("unlock_script.generated", f"{output}|{launcher}")
         return launcher
 
+    def _config_signature(self) -> int | None:
+        return self.config_path.stat().st_mtime_ns if self.config_path.exists() else None
+
+    def _cached_config(self) -> Any:
+        """The parsed config, reused until the file on disk changes.
+
+        The tray polls status every three seconds on the Tk main thread, and
+        each poll reparsed the TOML twice -- once directly and once inside
+        has_api_token().
+        """
+        signature = self._config_signature()
+        if self._config_cache is not None and self._config_cache[0] == signature:
+            return self._config_cache[1]
+        config = load_config(self.config_path)
+        self._config_cache = (signature, config)
+        return config
+
+    def _cached_store(self) -> tuple[Any, Any]:
+        """Config plus an initialised state store, reused between polls.
+
+        Kept separate from :meth:`_cached_config` on purpose: opening the state
+        database is the expensive half, and callers that only need settings --
+        has_api_token() among them -- must not be made to touch it.
+        """
+        signature = self._config_signature()
+        config = self._cached_config()
+        if self._store_cache is not None and self._store_cache[0] == signature:
+            return config, self._store_cache[1]
+        config.paths.ensure()
+        store = CollectorStateStore(config.paths.state_db)
+        store.initialize()
+        self._store_cache = (signature, store)
+        return config, store
+
+    def _invalidate_runtime_cache(self) -> None:
+        self._config_cache = None
+        self._store_cache = None
+        self._api_token_present = None
+
     def has_api_token(self) -> bool:
         if not self.configured:
             return False
-        config = load_config(self.config_path)
-        return bool(self._credentials_for_config(config).get("api_token"))
+        if self._api_token_present is None:
+            # DPAPI decryption is not free and nothing about it changes between
+            # polls; saving settings clears this.
+            self._api_token_present = bool(self._credentials_for_config(self._cached_config()).get("api_token"))
+        return self._api_token_present
 
     def has_database_key(self) -> bool:
         if not self.configured:
@@ -397,20 +492,37 @@ exit /b %exit_code%
         database_key = self._credentials_for_config(config).get("qqnt_database_key")
         readable = 0
         custom = 0
+        pending = 0
         for database, database_format in zip(databases, formats):
             if database_format == "sqlite":
                 readable += 1
             elif database_format == "qqnt_custom_vfs":
                 custom += 1
-                if SQLiteKeyValidator().validate(database.path, database_key).usable:
+                # 只有真正打开成功才算 readable。密钥长度正确不等于密钥正确，而证明它需要
+                # 整库剥头复制(真实库数百 MB),不能放在每次兼容性检测里做,所以这里只统计
+                # "待实测",由首次同步时扫描器的真实打开来确认。
+                result = SQLiteKeyValidator().validate(database.path, database_key)
+                if result.usable:
                     readable += 1
-        unsupported = len(formats) - readable
+                elif result.status == "unverified":
+                    pending += 1
+        unsupported = len(formats) - readable - pending
         if not databases:
             return CompatibilityReport("missing", "未发现 QQNT 消息数据库", 0, 0, 0, 0)
         if readable:
             return CompatibilityReport(
                 "ready",
                 f"发现 {len(databases)} 个消息库，其中 {readable} 个可读取",
+                len(databases),
+                readable,
+                unsupported,
+                custom,
+            )
+        if pending:
+            return CompatibilityReport(
+                "needs_verification",
+                f"发现 {len(databases)} 个消息库，其中 {pending} 个是 QQNT 加密库，"
+                "密钥格式已通过；能否读取将在首次同步时实测确认",
                 len(databases),
                 readable,
                 unsupported,
@@ -443,10 +555,7 @@ exit /b %exit_code%
                 "unresolved_parser_failures": 0,
                 "last_run": None,
             }
-        config = load_config(self.config_path)
-        config.paths.ensure()
-        store = CollectorStateStore(config.paths.state_db)
-        store.initialize()
+        config, store = self._cached_store()
         snapshot = store.status_snapshot()
         snapshot.update(
             {
@@ -472,7 +581,7 @@ exit /b %exit_code%
     def run_once(self, mode: str = "incremental") -> dict[str, Any]:
         if mode != "media_rescan":
             compatibility = self.inspect_databases()
-            if compatibility.status != "ready":
+            if compatibility.status not in SYNCABLE_COMPATIBILITY_STATUSES:
                 raise RuntimeError(compatibility.message)
         return asyncio.run(_run_once(self.config_path, mode, progress_callback=self.event_callback))
 
@@ -519,7 +628,7 @@ exit /b %exit_code%
         if not self.configured:
             raise RuntimeError("请先完成配置")
         compatibility = self.inspect_databases()
-        if compatibility.status != "ready":
+        if compatibility.status not in SYNCABLE_COMPATIBILITY_STATUSES:
             raise RuntimeError(compatibility.message)
         if not self.has_api_token():
             raise RuntimeError("请先保存 API Token")

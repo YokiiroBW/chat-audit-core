@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import queue
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -583,7 +584,7 @@ class CollectorTrayApp:
             else:
                 self.status_var.set(_ui_text(r"\u914d\u7f6e\u9519\u8bef"))
                 status_read_failed = _ui_text(r"\u72b6\u6001\u8bfb\u53d6\u5931\u8d25")
-                self._append_log(f"{status_read_failed}?{exc}")
+                self._append_log(f"{status_read_failed}：{exc}")
         self._refresh_after_id = self.root.after(3000, self._refresh_status)
 
     def _show_compatibility(self, report: Any) -> None:
@@ -596,7 +597,7 @@ class CollectorTrayApp:
             self.data_root_var.set(selected)
 
     def browse_qq_install_dir(self) -> None:
-        selected = filedialog.askdirectory(title="?? QQ ????")
+        selected = filedialog.askdirectory(title="选择 QQ 安装目录")
         if selected:
             self.qq_install_dir_var.set(selected)
 
@@ -636,18 +637,22 @@ class CollectorTrayApp:
         def success(launcher: Path) -> None:
             powershell_script = launcher.with_suffix(".ps1")
             message = (
-                _ui_text(r"\u5df2\u751f\u6210\u4e00\u952e\u542f\u52a8\u6587\u4ef6") + f"?{launcher}\n"
-                + _ui_text(r"\u540c\u65f6\u751f\u6210 PowerShell \u811a\u672c") + f"?{powershell_script}\n\n"
-                + _ui_text(r"\u53ef\u76f4\u63a5\u53cc\u51fb BAT \u8fd0\u884c\uff0c\u6216\u5728 PowerShell \u4e2d\u6267\u884c") + "?\n"
+                _ui_text(r"\u5df2\u751f\u6210\u4e00\u952e\u542f\u52a8\u6587\u4ef6") + f"\uff1a{launcher}\n"
+                + _ui_text(r"\u540c\u65f6\u751f\u6210 PowerShell \u811a\u672c") + f"\uff1a{powershell_script}\n\n"
+                + _ui_text(r"\u53ef\u76f4\u63a5\u53cc\u51fb BAT \u8fd0\u884c\uff0c\u6216\u5728 PowerShell \u4e2d\u6267\u884c") + "\uff1a\n"
                 + f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{powershell_script}\"\n\n"
-                + _ui_text(r"\u8fd0\u884c\u524d\u8bf7\u5148\u5b8c\u5168\u9000\u51fa QQ\uff0c\u811a\u672c\u4e0d\u4f1a\u81ea\u52a8\u6267\u884c") + "?"
+                + _ui_text(r"\u8fd0\u884c\u524d\u8bf7\u5148\u5b8c\u5168\u9000\u51fa QQ\uff0c\u811a\u672c\u4e0d\u4f1a\u81ea\u52a8\u6267\u884c") + "\u3002"
             )
             messagebox.showinfo(_ui_text(r"\u811a\u672c\u5df2\u751f\u6210"), message)
 
+        # Tk variables belong to the main thread; _run_task runs its callable on
+        # a worker. Reading them inside the lambda touched Tk from that worker,
+        # which is undefined behaviour rather than a reliable crash -- so the
+        # values are captured here, exactly as auto_detect already does.
+        data_root = self.data_root_var.get()
+        qq_install_dir = self.qq_install_dir_var.get()
         self._run_task(
-            lambda: self.controller.generate_unlock_script(
-                self.data_root_var.get(), self.qq_install_dir_var.get(), output
-            ),
+            lambda: self.controller.generate_unlock_script(data_root, qq_install_dir, output),
             success,
         )
 
@@ -660,7 +665,10 @@ class CollectorTrayApp:
             self._append_log("配置已保存")
             self.inspect_databases()
 
-        self._run_task(lambda: self.controller.save_settings(self._settings_value()), success)
+        # Same reason: _settings_value() reads a dozen Tk variables, so it runs
+        # on the main thread and the worker only sees the resulting value.
+        settings_value = self._settings_value()
+        self._run_task(lambda: self.controller.save_settings(settings_value), success)
 
     def test_connection(self) -> None:
         self._run_task(
@@ -683,9 +691,13 @@ class CollectorTrayApp:
         self._refresh_status()
 
     def stop_sync(self) -> None:
-        stopped = self.controller.stop()
-        self._append_log("后台同步已停止" if stopped else "后台同步未运行或仍在结束当前操作")
-        self._refresh_status()
+        # stop() waits for the sync thread to wind down. Doing that here froze
+        # the window for as long as the wait took.
+        def success(stopped: bool) -> None:
+            self._append_log("后台同步已停止" if stopped else "后台同步未运行或仍在结束当前操作")
+            self._refresh_status()
+
+        self._run_task(self.controller.stop, success)
 
     def sync_once(self) -> None:
         self._run_task(
@@ -710,7 +722,7 @@ class CollectorTrayApp:
         history_repair_label = _ui_text(r"\u5386\u53f2\u8d44\u6599\u4fee\u590d\u5b8c\u6210")
         self._run_task(
             lambda: self.controller.run_once("reconcile"),
-            lambda result: self._append_log(f"{history_repair_label}?{result.get('status')}"),
+            lambda result: self._append_log(f"{history_repair_label}：{result.get('status')}"),
         )
 
     def simulate_upload(self) -> None:
@@ -780,7 +792,12 @@ def main(argv: list[str] | None = None) -> int:
                 app.root.after(750, app.start_sync)
             app.run()
     except AlreadyRunningError as exc:
-        ctypes.windll.user32.MessageBoxW(None, str(exc), "Chat Audit QQ Collector", 0x40)
+        # windll exists only on Windows, so this last-resort message box turned
+        # "another instance is running" into an AttributeError everywhere else.
+        if hasattr(ctypes, "windll"):
+            ctypes.windll.user32.MessageBoxW(None, str(exc), "Chat Audit QQ Collector", 0x40)
+        else:
+            print(str(exc), file=sys.stderr)
         return 1
     return 0
 

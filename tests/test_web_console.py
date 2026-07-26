@@ -35,7 +35,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "Chat Audit Collector" in favicon_response.text
     assert "linearGradient" in favicon_response.text
     assert "/assets/favicon.svg" in sw_response.text
-    assert "chat-audit-static-v14" in sw_response.text
+    assert "chat-audit-static-v15" in sw_response.text
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
@@ -61,8 +61,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "renderMediaReference" in page_bundle
     assert "media-reference-card" in page_bundle
     assert "未下载视频" in page_bundle
-    assert "视频文件已丢失" in page_bundle
-    assert "视频记录解析失败" in page_bundle
+    assert "源文件已丢失" in page_bundle
+    assert "NapCat 媒体归档失败" in page_bundle
+    assert "记录解析失败" in page_bundle
     assert "reference.source_state" in page_bundle
     assert "reference.archive_state" in page_bundle
     assert "sender_qq_number" in page_bundle
@@ -73,7 +74,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "archive_state === 'thumbnail_only'" in page_bundle
     assert "msg.media || []" in page_bundle
     assert "refreshLiveMessages" in page_bundle
-    assert "window.setInterval(refreshLiveMessages, 2000)" in page_bundle
+    assert "window.setInterval(refreshLiveMessages, 5000)" in page_bundle
     assert "mergeMessages([...state.messageList, ...latest])" in page_bundle
     assert "reference.last_checked_at" in page_bundle
     assert "reference.archived_at" in page_bundle
@@ -91,7 +92,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "popstate" in page_bundle
     assert "搜索结果" in page_bundle
     assert "before_timestamp" in page_bundle
-    assert "static/storage" in page_bundle
+    assert "isLocalPath" in page_bundle and "before_source_sequence" in page_bundle
     assert "parseCQSegment" in page_bundle
     assert "renderCQJsonCard" in page_bundle
     assert "打开卡片网页" in page_bundle
@@ -158,12 +159,23 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "room.display_name" in page_bundle
     assert "room.avatar_path" in page_bundle
     assert "roomDisplayName" in page_bundle
+    # 加载失败与"确无消息"必须可区分，否则一次失败的请求会被说成会话是空的。
+    assert "roomLoadError" in page_bundle
+    # 单条消息渲染失败不能清空整个会话，Service Worker 也不能缓存错误响应。
+    assert "该消息无法渲染：" in page_bundle
+    assert "response.ok" in sw_response.text
+    assert "加载失败：" in page_bundle
+    assert "暂无消息" in page_bundle
     assert "sender_avatar_path" in page_bundle
     assert "账号设置" in page_bundle
     assert "自动备份" in page_bundle
     assert "runManualBackup" in page_bundle
     assert "backupStatusReport" in page_bundle
     assert "backupCronInput" in page_bundle
+    # 计划无法执行时界面必须说出来，否则备份停摆而状态仍显示"开启"。
+    assert "cron_error" in page_bundle
+    assert "开启（计划无法执行）" in page_bundle
+    assert "下次运行" in page_bundle
     assert "backupKeepLatestInput" in page_bundle
     assert "saveBackupSettings" in page_bundle
     assert "resetBackupSettings" in page_bundle

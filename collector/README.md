@@ -59,13 +59,13 @@ snapshot, a stripped temporary copy, SQLCipher, `query_only`, and a
 write-denying authorizer.
 
 
-## QQNT ?????
+## QQNT 数据库密钥
 
-GUI ????????????QQNT ???????????? 16 ?? ASCII
-passphrase ???????? API Token ?????? Windows ??? DPAPI
-???????? `collector.toml`?
+GUI 的「设置」页以掩码字段填写 QQNT 数据库密钥，它必须是密钥提取步骤返回的
+16 字节 ASCII passphrase。该密钥与 API Token 一样保存在当前 Windows 用户的
+DPAPI 作用域，绝不会写入 `collector.toml`。
 
-CLI ?????
+CLI 等价命令：
 
 ```powershell
 python -m collector --config collector.toml credential set qqnt_database_key
@@ -73,12 +73,32 @@ python -m collector --config collector.toml probe C:\path\to\nt_msg.db --snapsho
 python -m collector --config collector.toml scan C:\path\to\nt_msg.db --mode initial
 ```
 
-?? `SQLite header 3` / `QQ_NT DB` ???Collector ????????? WAL/SHM
-?????????????? 1024 ????? QQNT SQLCipher ???????
-?? QQ ???????????????? `DB_KEY_INVALID`?
+对于 `SQLite header 3` / `QQ_NT DB` 数据库，Collector 会连同 WAL/SHM 文件族
+生成一致性快照，再把剥离 1024 字节自定义头的临时副本交给 SQLCipher，以
+`query_only` 和拒写 authorizer 打开，不会修改 QQ 的原始文件。
+
+停止码与含义：缺少 SQLCipher 运行时返回 `DB_SQLCIPHER_UNAVAILABLE`；缺少密钥
+或长度不是 16 字节返回 `DB_KEY_INVALID`；自定义头之后不是 SQLCipher 密文体则
+返回 `DB_VFS_UNSUPPORTED`。填入 16 字节密钥只说明格式正确，此时状态为
+`needs_verification`，能否读取由首次同步真实打开剥头副本来证明，失败会作为
+扫描问题上报，托盘不会仅凭密钥长度声称可读。
+
+## 读取一致性语义
+
+`[qq].read_mode` 决定普通（非自定义头）数据库怎么读，两种取值的语义不同：
+
+- `direct_readonly`（默认）：直接以只读方式打开 QQ 正在使用的文件。**只能看到 QQ 已经落盘的数据**，
+  仍在 WAL 里、尚未 checkpoint 的最新消息这一轮扫描读不到，下一轮增量回扫会补上。分页扫描期间
+  文件仍在被写入，因此看到的是一个移动中的目标，而不是某一时刻的一致快照。检测到 WAL 非空时，
+  托盘运行日志会明确提示本次是这种语义。
+- `snapshot_copy`：先连同 WAL/SHM 生成一致性快照再读，读到的是某一时刻的完整状态。代价是每次
+  扫描都要复制整个数据库——真实主消息库约 410 MB，按默认同步间隔计算磁盘开销可观。
+
+自定义头（`QQ_NT DB`）数据库**始终**走快照，因为剥头本身就需要完整副本。
+
 ## QQNT key helper
 
-The Windows GUI Settings page accepts both the QQNT data directory and the QQ install directory. Use **?? QQ ????** to save a PowerShell helper. The helper validates both paths, refuses to continue while QQ is running, locates the newest `versions\<version>\resources\app\wrapper.node`, downloads the upstream extractor to a temporary file, and runs it only after the user starts the generated script.
+The Windows GUI Settings page accepts both the QQNT data directory and the QQ install directory. Use **生成 QQ 解锁脚本** to save a PowerShell helper. The helper validates both paths, refuses to continue while QQ is running, locates the newest `versions\<version>\resources\app\wrapper.node`, downloads the upstream extractor to a temporary file, and runs it only after the user starts the generated script.
 
 The helper does not contain the API Token or database key, does not write collector credentials, and does not modify or upload the QQ database. The GUI generates both a `.ps1` file and a matching `.bat` launcher. The `.bat` file can be double-clicked, or the displayed PowerShell command can be pasted into a terminal. It requires an Internet connection when executed because the upstream extractor is downloaded at that time. Review the downloaded extractor and back up important data before use.
 ## Multiple computers

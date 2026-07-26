@@ -6,6 +6,7 @@ from typing import Any
 
 from collector.media.checksum import calculate_checksums
 from collector.media.indexer import MediaFileIndex
+from collector.media.paths import within_any
 
 
 @dataclass(frozen=True)
@@ -20,11 +21,16 @@ class MediaResolver:
     FULL_PATH_FIELDS = ("local_path", "files_in_chat_path", "rich_media_path")
     THUMBNAIL_PATH_FIELDS = ("thumbnail_path", "thumb_path", "preview_path")
 
-    def __init__(self, index: MediaFileIndex | None = None) -> None:
+    def __init__(self, index: MediaFileIndex | None = None, allowed_roots: tuple[Path, ...] = ()) -> None:
         self.index = index
+        # Paths in a QQNT row are data. Without roots to check them against, a
+        # row can name any file on the disk and the collector will read and
+        # upload it. Empty means unrestricted, which only the parser's own
+        # default resolver uses; the scanner always passes the QQ data root.
+        self.allowed_roots = allowed_roots
 
-    @staticmethod
     def _valid_file(
+        self,
         value: Any,
         *,
         declared_size: int | None = None,
@@ -39,6 +45,8 @@ class MediaResolver:
         except OSError:
             return None
         if not resolved.is_file() or size <= 0:
+            return None
+        if self.allowed_roots and not within_any(self.allowed_roots, resolved):
             return None
         if declared_size is not None:
             tolerance = max(64 * 1024, int(declared_size * 0.05))

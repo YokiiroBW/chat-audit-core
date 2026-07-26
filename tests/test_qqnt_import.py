@@ -1169,3 +1169,41 @@ async def test_same_qq_message_from_two_devices_is_deduplicated(db_session):
     assert result_b.updated == 1
     assert await db_session.scalar(select(func.count(Message.msg_hash))) == 1
     assert await db_session.scalar(select(func.count(MessageSourceRecord.id))) == 2
+
+
+@pytest.mark.asyncio
+async def test_reimporting_identical_message_reports_no_update(db_session):
+    # Counting every re-import as an update made the batch report look like the
+    # archive kept changing, which hides the batches that really did change
+    # something. A second batch is not a replay, so it reaches the update branch.
+    source, _ = await ImportService.upsert_source(
+        db_session,
+        ImportSourceCreateRequest(account_id="123456789", device_id="main-pc"),
+    )
+    item = _message_item(message_id="idempotent-message", source_key="idempotent-key")
+    item["message"]["is_outgoing"] = True
+
+    first_batch, _ = await ImportService.create_batch(
+        db_session,
+        ImportBatchCreateRequest(id="idempotent-batch-1", source_id=source.id, mode="initial"),
+    )
+    first = await ImportService.import_batch_messages(
+        db_session,
+        batch_id=first_batch.id,
+        payload=ImportBatchMessagesRequest(messages=[item]),
+    )
+
+    second_batch, _ = await ImportService.create_batch(
+        db_session,
+        ImportBatchCreateRequest(id="idempotent-batch-2", source_id=source.id, mode="incremental"),
+    )
+    second = await ImportService.import_batch_messages(
+        db_session,
+        batch_id=second_batch.id,
+        payload=ImportBatchMessagesRequest(messages=[item]),
+    )
+
+    assert first.inserted == 1
+    assert second.inserted == 0
+    assert second.updated == 0
+    assert await db_session.scalar(select(func.count(Message.msg_hash))) == 1

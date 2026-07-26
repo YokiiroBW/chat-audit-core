@@ -5,12 +5,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.message_scope import apply_robot_message_scope
 from app.models import (
     MediaAsset,
     Message,
     MessageMediaReference,
     MessageSourceRecord,
-    RobotMessage,
     RoomProfile,
     UserProfile,
 )
@@ -20,7 +20,7 @@ from app.services.media_backfill_service import (
     _find_uncached_forward_ids,
     _find_uncached_media_urls,
 )
-from app.services.media_service import parse_cq_media_segments
+from app.services.media_service import _parse_cq_media_segments_with_ordinals
 
 OFFLINE_ISSUE_DETAILS = {
     "message_still_references_remote_media": (
@@ -125,7 +125,10 @@ class OfflineAuditService:
         report = OfflineAuditReport()
         stmt = select(Message)
         if robot_id is not None:
-            stmt = stmt.join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash).where(RobotMessage.robot_id == robot_id)
+            # Same account-visibility rule as the query layer: an inner join on
+            # robot_messages alone hides QQNT-imported conversations, which have
+            # no robot_messages row, so the audit silently reported them clean.
+            stmt = apply_robot_message_scope(stmt, robot_id)
         if room_id is not None:
             stmt = stmt.where(Message.room_id == room_id)
         stmt = stmt.order_by(Message.timestamp.asc(), Message.msg_hash.asc()).limit(limit)
@@ -163,11 +166,18 @@ class OfflineAuditService:
             references = references_by_message.get(message.msg_hash, [])
             remote_media_urls = _find_uncached_media_urls(message.local_message)
             if references and remote_media_urls:
-                cq_media_segments = parse_cq_media_segments(message.local_message)
+                # Reference ordinals are slots over *all* media in the message,
+                # archived or not, so they cannot index a list that skips the
+                # archived ones: once any media has been localised the positions
+                # shift and the wrong URL gets marked as covered.
+                url_by_ordinal = {
+                    ordinal: segment.url
+                    for ordinal, segment in _parse_cq_media_segments_with_ordinals(message.local_message, public_storage_prefix)
+                }
                 covered_urls = {
-                    cq_media_segments[reference.ordinal].url
+                    url
                     for reference in references
-                    if 0 <= reference.ordinal < len(cq_media_segments)
+                    if (url := url_by_ordinal.get(reference.ordinal)) is not None
                 }
                 remote_media_urls = [url for url in remote_media_urls if url not in covered_urls]
             card_page_urls = _find_uncached_card_page_urls(message.local_message)
@@ -303,14 +313,17 @@ class OfflineAuditService:
                     report.missing_media_files += 1
                     report.add_issue(OfflineAuditIssue("media_file", asset.local_path, "media_asset_file_missing"), issue_limit)
                     continue
-                content = file_path.read_bytes()
-                if not content:
+                if not file_path.stat().st_size:
                     report.missing_media_files += 1
                     report.add_issue(OfflineAuditIssue("media_file", asset.local_path, "media_asset_empty"), issue_limit)
                     continue
                 is_hex_hash = all(char in "0123456789abcdefABCDEF" for char in asset.file_hash)
                 if is_hex_hash and len(asset.file_hash) in {32, 64}:
-                    actual_hash = hashlib.md5(content).hexdigest() if len(asset.file_hash) == 32 else hashlib.sha256(content).hexdigest()
+                    # Chunked: archived media runs to media_max_bytes, 100 MB by
+                    # default, and reading each file whole made an audit scale
+                    # with the largest file rather than with a fixed buffer.
+                    with file_path.open("rb") as handle:
+                        actual_hash = hashlib.file_digest(handle, "md5" if len(asset.file_hash) == 32 else "sha256").hexdigest()
                     if actual_hash.lower() != asset.file_hash.lower():
                         report.media_hash_mismatches += 1
                         report.add_issue(OfflineAuditIssue("media_file", asset.local_path, "media_asset_hash_mismatch"), issue_limit)

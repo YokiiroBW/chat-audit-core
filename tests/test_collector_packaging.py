@@ -33,3 +33,23 @@ def test_windows_packaging_files_define_upgrade_startup_and_data_retention():
     assert "chat-audit-collector-tcl" in build_script
     assert "%LOCALAPPDATA%\\ChatAuditQQCollector" in instructions
     assert re.search(r"日志按 10 MiB\s*轮转", instructions)
+
+
+def test_packaging_icon_referenced_by_both_specs_exists_and_is_a_real_ico():
+    # Both PyInstaller specs name this file; a missing or malformed one fails
+    # the build only at package time, which is the worst place to find out.
+    from pathlib import Path
+
+    icon = Path("collector/packaging/chat-audit-collector.ico")
+    assert icon.is_file()
+
+    raw = icon.read_bytes()
+    # ICONDIR: reserved 0, type 1 (icon), then the image count.
+    assert raw[:4] == b"\x00\x00\x01\x00"
+    image_count = int.from_bytes(raw[4:6], "little")
+    assert image_count > 0
+    assert len(raw) > 6 + image_count * 16
+
+    for spec_name in ("chat_audit_qq_collector.spec", "chat_audit_qq_collector_gui.spec"):
+        spec = (Path("collector/packaging") / spec_name).read_text(encoding="utf-8")
+        assert "chat-audit-collector.ico" in spec

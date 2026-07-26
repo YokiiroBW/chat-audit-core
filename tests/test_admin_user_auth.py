@@ -1,14 +1,17 @@
 import base64
+import datetime
 import hashlib
 
 from httpx import ASGITransport, AsyncClient
 import pytest
+from sqlalchemy import select
 
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
-from app.models import AdminUser
+from app.models import AdminSession, AdminUser
 from app.services.admin_user_service import PASSWORD_HASH_ITERATIONS, AdminUserService
+from app.time_utils import utc_now
 
 
 def _legacy_pbkdf2_hash(password: str) -> str:
@@ -258,3 +261,269 @@ async def test_admin_can_list_and_force_revoke_sessions(db_session):
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
     assert after_revoke.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_media_routes_require_auth_and_accept_http_only_session_cookie(db_session, tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    (storage_root / "proof.txt").write_text("private", encoding="utf-8")
+    settings = Settings(admin_api_token="bootstrap-admin", storage_root=storage_root)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            anonymous = await client.get("/media/proof.txt")
+            exchanged = await client.post("/api/auth/session", headers={"Authorization": "Bearer bootstrap-admin"})
+            authenticated = await client.get("/media/proof.txt")
+            traversal = await client.get("/media/../proof.txt")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert anonymous.status_code == 401
+    assert exchanged.status_code == 204
+    assert "chat_audit_session=" in exchanged.headers["set-cookie"]
+    assert "HttpOnly" in exchanged.headers["set-cookie"]
+    assert authenticated.status_code == 200
+    assert authenticated.text == "private"
+    assert traversal.status_code in {401, 404}
+
+
+@pytest.mark.asyncio
+async def test_password_login_sets_http_only_session_cookie(db_session):
+    settings = Settings(admin_api_token="bootstrap-admin")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            created = await client.post(
+                "/api/admin/users",
+                headers={"Authorization": "Bearer bootstrap-admin"},
+                json={"username": "cookie-user", "password": "strong-password-1", "role": "viewer"},
+            )
+            login = await client.post("/api/auth/login", json={"username": "cookie-user", "password": "strong-password-1"})
+            me = await client.get("/api/auth/me")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert created.status_code == 201
+    assert login.status_code == 200
+    assert "HttpOnly" in login.headers["set-cookie"]
+    assert me.status_code == 200
+    assert me.json()["username"] == "cookie-user"
+
+
+@pytest.mark.asyncio
+async def test_archived_html_snapshot_cannot_run_scripts_in_the_console_origin(db_session, tmp_path):
+    # Card snapshots are fetched from URLs found in QQ card messages, so their
+    # markup is attacker-controlled, and the console opens them with a plain
+    # link. Served bare they would execute in the console's own origin with the
+    # session cookie attached.
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    (storage_root / "card.html").write_text("<script>fetch('/api/messages')</script>", encoding="utf-8")
+    (storage_root / "card.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>", encoding="utf-8")
+    (storage_root / "photo.jpg").write_bytes(b"\xff\xd8\xff\xe0 not really a jpeg")
+    settings = Settings(admin_api_token="bootstrap-admin", storage_root=storage_root)
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post("/api/auth/session", headers={"Authorization": "Bearer bootstrap-admin"})
+            html_response = await client.get("/media/card.html")
+            svg_response = await client.get("/media/card.svg")
+            image_response = await client.get("/media/photo.jpg")
+    finally:
+        app.dependency_overrides.clear()
+
+    for response in (html_response, svg_response):
+        assert response.status_code == 200
+        policy = response.headers["content-security-policy"]
+        # sandbox without allow-scripts disables scripting and gives the
+        # document an opaque origin, so it cannot reach the cookie or the API.
+        assert "sandbox" in policy
+        assert "allow-scripts" not in policy
+        assert "default-src 'none'" in policy
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+    # Ordinary media keeps its existing headers and gains no needless policy.
+    assert image_response.status_code == 200
+    assert "content-security-policy" not in image_response.headers
+    assert image_response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_expired_session_is_rejected_and_retired(db_session, tmp_path, monkeypatch):
+    # A login that never expires is a credential that survives every laptop it
+    # was ever used on, so the lifetime has to be enforced on use.
+    from app.services import admin_user_service
+    from app.services.admin_user_service import AdminUserService
+
+    # The service reads settings directly, so a dependency override would not
+    # reach it.
+    settings = Settings(storage_root=tmp_path, admin_session_ttl_hours=12)
+    monkeypatch.setattr(admin_user_service, "get_settings", lambda: settings)
+
+    user = await AdminUserService.create_user(db_session, username="ttl-user", password="StrongPass!42", role="admin")
+    session, token = await AdminUserService.create_session(db_session, user)
+    assert session.expires_at is not None
+
+    assert await AdminUserService.match_session(db_session, token) is not None
+
+    session.expires_at = utc_now() - datetime.timedelta(seconds=1)
+    await db_session.commit()
+
+    assert await AdminUserService.match_session(db_session, token) is None
+    await db_session.refresh(session)
+    # Retired rather than merely refused, so the session list explains it.
+    assert session.status == "revoked"
+    assert session.revoked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_session_predating_the_expiry_column_still_ages_out(db_session, tmp_path, monkeypatch):
+    # Rows written before expires_at existed carry NULL. Treating NULL as
+    # "never expires" would let exactly the oldest sessions live forever.
+    from app.services import admin_user_service
+    from app.services.admin_user_service import AdminUserService
+
+    settings = Settings(storage_root=tmp_path, admin_session_ttl_hours=12)
+    monkeypatch.setattr(admin_user_service, "get_settings", lambda: settings)
+
+    user = await AdminUserService.create_user(db_session, username="legacy-user", password="StrongPass!42", role="admin")
+    _session, token = await AdminUserService.create_session(db_session, user)
+    legacy = (await db_session.execute(select(AdminSession).where(AdminSession.token_prefix == token[:12]))).scalar_one()
+    legacy.expires_at = None
+    legacy.created_at = utc_now() - datetime.timedelta(hours=13)
+    await db_session.commit()
+
+    assert await AdminUserService.match_session(db_session, token) is None
+
+
+@pytest.mark.asyncio
+async def test_sessions_never_expire_when_the_lifetime_is_disabled(db_session, tmp_path, monkeypatch):
+    from app.services import admin_user_service
+    from app.services.admin_user_service import AdminUserService
+
+    settings = Settings(storage_root=tmp_path, admin_session_ttl_hours=0)
+    monkeypatch.setattr(admin_user_service, "get_settings", lambda: settings)
+
+    user = await AdminUserService.create_user(db_session, username="forever-user", password="StrongPass!42", role="admin")
+    session, token = await AdminUserService.create_session(db_session, user)
+    assert session.expires_at is None
+    session.created_at = utc_now() - datetime.timedelta(days=3650)
+    await db_session.commit()
+
+    assert await AdminUserService.match_session(db_session, token) is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_api_tokens_keep_working_when_no_lifetime_is_configured(db_session, tmp_path, monkeypatch):
+    # Long-lived API tokens are the documented behaviour; turning expiry on by
+    # default would cut off every deployment on upgrade.
+    from app.services import admin_token_service
+    from app.services.admin_token_service import AdminTokenService
+
+    settings = Settings(storage_root=tmp_path)
+    monkeypatch.setattr(admin_token_service, "get_settings", lambda: settings)
+
+    record, token = await AdminTokenService.create_token(db_session, name="ci", role="admin")
+    assert record.expires_at is None
+    record.created_at = utc_now() - datetime.timedelta(days=3650)
+    await db_session.commit()
+
+    assert await AdminTokenService.match_token(db_session, token) is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_api_token_expires_once_a_lifetime_is_configured(db_session, tmp_path, monkeypatch):
+    from app.services import admin_token_service
+    from app.services.admin_token_service import AdminTokenService
+
+    settings = Settings(storage_root=tmp_path, admin_token_ttl_days=30)
+    monkeypatch.setattr(admin_token_service, "get_settings", lambda: settings)
+
+    record, token = await AdminTokenService.create_token(db_session, name="rotating", role="admin")
+    assert record.expires_at is not None
+    record.expires_at = utc_now() - datetime.timedelta(seconds=1)
+    await db_session.commit()
+
+    assert await AdminTokenService.match_token(db_session, token) is None
+    await db_session.refresh(record)
+    assert record.status == "revoked"
+
+    # Rotation issues a new credential, so it must not hand back one that is
+    # already past its own expiry.
+    rotated, rotated_token = await AdminTokenService.rotate_token(db_session, record.id)
+    assert rotated.expires_at > utc_now()
+    assert await AdminTokenService.match_token(db_session, rotated_token) is not None
+
+
+def _request_with(headers: dict[str, str], peer: str | None):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(key.lower().encode(), value.encode()) for key, value in headers.items()],
+        "client": (peer, 12345) if peer else None,
+    }
+    return Request(scope)
+
+
+def test_forwarded_for_is_ignored_without_a_configured_proxy():
+    # The header is caller-supplied. Believing it unconditionally let anyone
+    # forge the audited address and mint a fresh rate-limit bucket per request.
+    from app.api import _client_ip
+
+    settings = Settings()
+    request = _request_with({"x-forwarded-for": "203.0.113.9"}, "198.51.100.4")
+
+    assert _client_ip(request, settings) == "198.51.100.4"
+
+
+def test_forwarded_for_is_read_only_from_a_trusted_peer():
+    from app.api import _client_ip
+
+    settings = Settings(trusted_proxy_ips="10.0.0.0/8, 127.0.0.1")
+
+    trusted = _request_with({"x-forwarded-for": "203.0.113.9"}, "10.1.2.3")
+    assert _client_ip(trusted, settings) == "203.0.113.9"
+
+    # Same header, peer outside the trusted set.
+    untrusted = _request_with({"x-forwarded-for": "203.0.113.9"}, "198.51.100.4")
+    assert _client_ip(untrusted, settings) == "198.51.100.4"
+
+
+def test_forwarded_for_takes_the_last_address_the_client_could_not_forge():
+    # Our own proxies append the rightmost entries; anything further left was
+    # supplied by the caller, so a spoofed prefix must not win.
+    from app.api import _client_ip
+
+    settings = Settings(trusted_proxy_ips="10.0.0.0/8")
+    request = _request_with({"x-forwarded-for": "1.2.3.4, 203.0.113.9, 10.0.0.7"}, "10.0.0.7")
+
+    assert _client_ip(request, settings) == "203.0.113.9"
+
+
+def test_forwarded_for_falls_back_to_the_peer_when_every_hop_is_a_proxy():
+    from app.api import _client_ip
+
+    settings = Settings(trusted_proxy_ips="10.0.0.0/8")
+    request = _request_with({"x-forwarded-for": "not-an-ip, 10.0.0.8"}, "10.0.0.7")
+
+    assert _client_ip(request, settings) == "10.0.0.7"

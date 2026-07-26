@@ -1,6 +1,7 @@
 from httpx import ASGITransport, AsyncClient
 import json
 import pytest
+from sqlalchemy import select
 
 from app.config import Settings, get_settings
 from app.database import get_db_session
@@ -148,3 +149,55 @@ async def test_capture_policy_api_can_skip_blacklisted_target(db_session):
     assert targets_response.status_code == 200
     assert targets_response.json()[0]["policy"]["list_mode"] == "blacklist"
     assert delete_response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_ingest_keys_on_canonical_identity_and_records_the_alias(db_session):
+    # The endpoint accepted canonical ids and the importer keys on them, but
+    # this path dropped them, so the same private conversation arriving under
+    # two identity variants split into two rooms.
+    from app.models import IdentityAlias, Message
+    from app.services.message_service import MessageService
+
+    first = await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "canon-1",
+            "room_id": "u_AbCdEf-raw-uid",
+            "message_type": "private",
+            "sender_id": "u_AbCdEf-raw-uid",
+            "canonical_room_id": "700100",
+            "canonical_sender_id": "700100",
+            "nickname": "Peer",
+            "raw_message": "first",
+            "timestamp": 1783000000,
+        },
+    )
+    # Same conversation, this time already reported under the canonical id.
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "canon-2",
+            "room_id": "700100",
+            "message_type": "private",
+            "sender_id": "700100",
+            "nickname": "Peer",
+            "raw_message": "second",
+            "timestamp": 1783000001,
+        },
+    )
+
+    rooms = set((await db_session.execute(select(Message.room_id))).scalars().all())
+    assert rooms == {"700100"}
+    stored = await db_session.get(Message, first)
+    assert stored.sender_id == "700100"
+
+    aliases = list((await db_session.execute(select(IdentityAlias))).scalars().all())
+    assert {(alias.identity_type, alias.alias_id, alias.canonical_id) for alias in aliases} == {
+        ("user", "u_AbCdEf-raw-uid", "700100"),
+        ("conversation", "u_AbCdEf-raw-uid", "700100"),
+    }

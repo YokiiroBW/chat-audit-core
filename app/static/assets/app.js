@@ -1,3 +1,23 @@
+    const DEFAULT_PALETTE = Object.freeze({
+      primary: '#1d4ed8',
+      secondary: '#dbeafe',
+      contrast: '#14b8a6',
+    });
+    const loadPalette = () => {
+      try {
+        const saved = JSON.parse(localStorage.getItem('chatAuditPalette') || 'null');
+        if (!saved || typeof saved !== 'object') return { ...DEFAULT_PALETTE };
+        return {
+          primary: typeof saved.primary === 'string' ? saved.primary : DEFAULT_PALETTE.primary,
+          secondary: typeof saved.secondary === 'string' ? saved.secondary : DEFAULT_PALETTE.secondary,
+          contrast: typeof saved.contrast === 'string' ? saved.contrast : DEFAULT_PALETTE.contrast,
+        };
+      } catch {
+        localStorage.removeItem('chatAuditPalette');
+        return { ...DEFAULT_PALETTE };
+      }
+    };
+
     const state = {
       accountList: [],
       adapterList: [],
@@ -32,6 +52,8 @@
       loadingHistory: false,
       loadingRoom: false,
       roomLoadToken: 0,
+      roomLoadError: '',
+      accountLoadToken: 0,
       roomRequestController: null,
       historyLoadToken: 0,
       highlightedMessageId: '',
@@ -58,18 +80,15 @@
         originX: 0,
         originY: 0,
       },
-      palette: JSON.parse(localStorage.getItem('chatAuditPalette') || 'null') || {
-        primary: '#1d4ed8',
-        secondary: '#dbeafe',
-        contrast: '#14b8a6',
-      },
-      adminApiToken: localStorage.getItem('chatAuditAdminApiToken') || '',
+      palette: loadPalette(),
+      adminApiToken: '',
       authGeneration: 0,
       liveRefreshTimer: null,
       liveRefreshBusy: false,
       liveRefreshTick: 0,
       mediaStateFilter: 'all',
       detailMessage: null,
+      modalTrigger: null,
     };
 
     const el = (id) => document.getElementById(id);
@@ -97,15 +116,53 @@
     const roleRank = (role) => ({ viewer: 1, operator: 2, admin: 3 })[role] || 1;
     const canRole = (role) => roleRank(currentRole()) >= roleRank(role);
 
-    const promptForAdminApiToken = () => {
-      const token = window.prompt('请输入管理 API Token（不是网页登录密码）');
-      if (token && token.trim()) {
-        state.adminApiToken = token.trim();
-        state.authGeneration += 1;
-        localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
-        return true;
+    const establishBrowserSession = async (token) => {
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: csrfHeaders('POST', { Authorization: `Bearer ${token}` }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, '/api/auth/session'));
       }
-      return false;
+      state.adminApiToken = '';
+      state.authGeneration += 1;
+    };
+
+    const promptForAdminApiToken = async () => {
+      const token = window.prompt('Enter an admin API token');
+      if (!token || !token.trim()) return false;
+      try {
+        await establishBrowserSession(token.trim());
+        await refreshAuthIdentity();
+        return true;
+      } catch (error) {
+        state.authError = error.message || String(error);
+        renderSettings();
+        return false;
+      }
+    };
+
+    // One sign-in at a time. The initial load fires several requests at once and
+    // the live refresh fires more every few seconds, so without a shared gate an
+    // expired session shows a separate blocking prompt for every request in
+    // flight. The first 401 opens the prompt; the rest wait for that answer.
+    let pendingAuthPrompt = null;
+    const requestAdminApiToken = () => {
+      if (!pendingAuthPrompt) {
+        pendingAuthPrompt = promptForAdminApiToken().finally(() => { pendingAuthPrompt = null; });
+      }
+      return pendingAuthPrompt;
+    };
+
+    const migrateLegacyAdminApiToken = async () => {
+      const legacyToken = localStorage.getItem('chatAuditAdminApiToken');
+      if (!legacyToken) return;
+      localStorage.removeItem('chatAuditAdminApiToken');
+      try {
+        await establishBrowserSession(legacyToken);
+      } catch (error) {
+        pushUiLog(`legacy token migration failed: ${error.message || error}`, 'warning');
+      }
     };
 
     const authHeaders = (headers = {}) => {
@@ -165,16 +222,21 @@
     const shouldRetryResponse = (response) => response.status === 429 || response.status >= 500;
 
     const requestWithRetry = async (url, options = {}, { retries = 2 } = {}) => {
-      const method = options.method || 'GET';
+      const method = (options.method || 'GET').toUpperCase();
+      const safeToRetry = ['GET', 'HEAD', 'OPTIONS'].includes(method);
+      const retryCount = safeToRetry ? retries : 0;
       const requestAuthGeneration = state.authGeneration;
-      for (let attempt = 0; attempt <= retries; attempt += 1) {
+      for (let attempt = 0; attempt <= retryCount; attempt += 1) {
         try {
           const headers = csrfHeaders(method, authHeaders(options.headers || {}));
           let response = await fetch(url, { ...options, headers });
           if (response.status === 401 && attempt === 0) {
-            const tokenChangedWhileRequesting = state.authGeneration !== requestAuthGeneration;
-            const canReuseNewToken = tokenChangedWhileRequesting && Boolean(state.adminApiToken);
-            if (!canReuseNewToken && !promptForAdminApiToken()) return response;
+            // A session established while this request was in flight is enough to
+            // retry: the credential lives in an HttpOnly cookie, so there is no
+            // token in `state` to check for. Testing one would make this branch
+            // unreachable and re-prompt for every concurrent request.
+            const sessionChangedWhileRequesting = state.authGeneration !== requestAuthGeneration;
+            if (!sessionChangedWhileRequesting && !(await requestAdminApiToken())) return response;
             response = await fetch(url, {
               ...options,
               headers: csrfHeaders(method, authHeaders(options.headers || {})),
@@ -186,8 +248,8 @@
           }
           const technicalMessage = await responseErrorMessage(response, url);
           const userMessage = friendlyHttpErrorMessage(response, technicalMessage);
-          if (shouldRetryResponse(response) && attempt < retries) {
-            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retries}: ${userMessage}`, 'warning');
+          if (safeToRetry && shouldRetryResponse(response) && attempt < retryCount) {
+            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retryCount}: ${userMessage}`, 'warning');
             await sleep(1000 * (attempt + 1));
             continue;
           }
@@ -198,9 +260,9 @@
         } catch (error) {
           if (error.technicalMessage) throw error;
           if (error && error.name === 'AbortError') throw error;
-          if (attempt < retries) {
+          if (safeToRetry && attempt < retryCount) {
             const userMessage = friendlyNetworkErrorMessage(error);
-            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retries}: ${userMessage}`, 'warning');
+            pushUiLog(`${method} ${url} retry ${attempt + 1}/${retryCount}: ${userMessage}`, 'warning');
             await sleep(1000 * (attempt + 1));
             continue;
           }
@@ -269,11 +331,11 @@
       img.src = url;
       container.appendChild(img);
     };
-    const isMedia = (value) => typeof value === 'string' && value.includes('/static/storage/');
+    const isMedia = (value) => typeof value === 'string' && (value.includes('/media/') || value.includes('/static/storage/'));
     const isImg = (value) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(value);
     const isVideo = (value) => /\.(mp4|webm|mov|mkv)$/i.test(value);
     const isVoice = (value) => /\.(mp3|wav|ogg|silk|amr|m4a)$/i.test(value);
-    const isLocalPath = (value) => typeof value === 'string' && value.startsWith('/static/storage/');
+    const isLocalPath = (value) => typeof value === 'string' && (value.startsWith('/media/') || value.startsWith('/static/storage/'));
     const isRemoteUrl = (value) => /^https?:\/\//i.test(String(value || ''));
     const isSafeProtocol = (url) => ['http:', 'https:'].includes(url.protocol);
     const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.:@-]+$/;
@@ -781,9 +843,9 @@
         ? (state.currentRobot ? state.currentRobot.id : '')
         : (state.currentRoom ? state.currentRoom.qq_number : ''));
       const name = displayName || (message.is_outgoing
-        ? (state.currentRobot ? (state.currentRobot.display_name || '?') : '?')
-        : 'QQ??');
-      return qqNumber ? `${name} ? QQ??${qqNumber}` : name;
+        ? (state.currentRobot ? (state.currentRobot.display_name || '我') : '我')
+        : 'QQ好友');
+      return qqNumber ? `${name} · QQ号：${qqNumber}` : name;
     };
 
     const isOutgoingMessage = (message) => {
@@ -855,7 +917,10 @@
     const renderAuthStatus = () => {
       const identity = state.authIdentity;
       el('authActor').textContent = identity ? `${identity.actor} · ${identity.role}` : (state.adminApiToken ? 'Token 已设置' : '未登录');
-      el('logoutButton').disabled = !state.adminApiToken;
+      // Sessions live in an HttpOnly cookie, so `adminApiToken` is always empty and
+      // gating on it left the button permanently disabled. Signed in means having
+      // an identity.
+      el('logoutButton').disabled = !state.authIdentity;
       const box = el('authStatusReport');
       clearNode(box);
       const rows = [
@@ -1036,8 +1101,11 @@
       el('backupKeepLatestInput').value = status.keep_latest === null || status.keep_latest === undefined ? '' : status.keep_latest;
       el('saveBackupSettingsButton').disabled = state.backupSettingsSaving;
       el('resetBackupSettingsButton').disabled = state.backupSettingsSaving;
+      // 计划无法解析时，自动备份一次都不会执行，所以"开启"必须同时说明这一点，
+      // 否则界面会在备份实际停摆的情况下显示一切正常。
+      const cronBroken = Boolean(status.cron_error);
       const rows = [
-        ['状态', status.enabled ? '开启' : '关闭', status.enabled ? 'ok' : undefined],
+        ['状态', status.enabled ? (cronBroken ? '开启（计划无法执行）' : '开启') : '关闭', status.enabled ? (cronBroken ? 'bad' : 'ok') : undefined],
         ['计划', status.cron || '-'],
         ['保留', status.keep_latest],
         ['配置来源', status.config_source || '-'],
@@ -1046,6 +1114,12 @@
         ['备份数量', status.backups],
         ['最近备份', status.latest_backup || '-'],
       ];
+      if (cronBroken) {
+        rows.push(['计划错误', status.cron_error, 'bad']);
+      } else if (status.next_run_at) {
+        // next_run_at 是 ISO 字符串，不是 formatTs 期待的 unix 秒。
+        rows.push(['下次运行', new Date(status.next_run_at).toLocaleString()]);
+      }
       if (state.backupRunResult) {
         rows.push(['手动备份', state.backupRunResult.filename || '-', 'ok']);
       }
@@ -1449,12 +1523,28 @@
         const empty = document.createElement('div');
         empty.className = 'empty';
         empty.style.textAlign = 'center';
-        empty.textContent = '暂无消息';
+        if (state.roomLoadError) {
+          // 加载失败时消息列表同样是空的。不区分的话，界面会把一次失败的请求
+          // 说成"这个会话没有消息"，而那正是审计视角下最不该出现的误导。
+          empty.textContent = `加载失败：${state.roomLoadError}`;
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.className = 'ghost';
+          retry.textContent = '重试';
+          retry.addEventListener('click', () => reloadCurrentRoom({}));
+          empty.appendChild(document.createElement('br'));
+          empty.appendChild(retry);
+        } else {
+          empty.textContent = '暂无消息';
+        }
         chat.appendChild(empty);
         renderSelectionToolbar();
         return;
       }
       state.messageList.forEach((msg) => {
+        // 单条消息渲染失败不应清空整个会话：审计视图里，一条畸形记录
+        // 把其余全部消息一起隐藏，比显示一行占位危险得多。
+        try {
         const mine = isOutgoingMessage(msg);
         const msgKey = messageKey(msg);
         const selected = state.selectedMessageHashes.has(msgKey);
@@ -1478,7 +1568,7 @@
         const meta = document.createElement('div');
         meta.className = 'message-meta';
         const metaText = document.createElement('span');
-        metaText.textContent = `${messageSenderLabel(msg)} ? ${formatTs(msg.timestamp)}`;
+        metaText.textContent = `${messageSenderLabel(msg)} · ${formatTs(msg.timestamp)}`;
         const detailButton = document.createElement('button');
         detailButton.type = 'button';
         detailButton.className = 'message-detail-button';
@@ -1496,6 +1586,13 @@
         row.append(selector, avatar, body);
         bindMessageSelectionEvents(row, msg);
         chat.appendChild(row);
+        } catch (error) {
+          const broken = document.createElement('div');
+          broken.className = 'message';
+          broken.textContent = `该消息无法渲染：${(error && error.message) || error}`;
+          chat.appendChild(broken);
+          pushUiLog(`消息渲染失败：${(error && error.message) || error}`, 'error');
+        }
       });
       renderSelectionToolbar();
     };
@@ -1542,26 +1639,46 @@
       if (!parts.length) return false;
       const mediaById = new Map((message.media || []).map((reference) => [String(reference.id), reference]));
       const mediaByOrdinal = new Map((message.media || []).map((reference) => [Number(reference.ordinal || 0), reference]));
+      const consumedReferences = new Set();
       const wrapper = document.createElement('div');
       wrapper.className = 'cq-parts';
       let rendered = false;
+      // Media references are numbered across media only, while parts are numbered
+      // across every segment, so "text then image" puts the image at part ordinal 1
+      // and media ordinal 0. Pairing them by raw ordinal misses on any message whose
+      // media is not first, which drops the archived file and the availability
+      // reason. Count media parts separately to line the two up.
+      let mediaPartOrdinal = 0;
       parts.forEach((part) => {
         const normalizedPart = normalizeMessagePartForView(part);
         const payload = normalizedPart.data;
-        const reference = part.media_reference_id !== null && part.media_reference_id !== undefined
+        const isMediaPart = ['image', 'record', 'video', 'file'].includes(normalizedPart.type);
+        let reference = part.media_reference_id !== null && part.media_reference_id !== undefined
           ? mediaById.get(String(part.media_reference_id))
           : null;
-        const fallbackReference = reference || (['image', 'record', 'video', 'file'].includes(String(part.part_type || '').toLowerCase())
-          ? mediaByOrdinal.get(Number(part.ordinal || 0))
-          : null);
-        if (fallbackReference) {
-          renderMediaReference(wrapper, fallbackReference);
+        if (!reference && isMediaPart) {
+          const byOrdinal = mediaByOrdinal.get(mediaPartOrdinal);
+          // Never render a reference twice: an earlier part may already have
+          // claimed this one through an explicit media_reference_id.
+          if (byOrdinal && !consumedReferences.has(String(byOrdinal.id))) reference = byOrdinal;
+        }
+        if (isMediaPart) mediaPartOrdinal += 1;
+        if (reference) {
+          consumedReferences.add(String(reference.id));
+          renderMediaReference(wrapper, reference);
           rendered = true;
           return;
         }
         const segment = { type: normalizedPart.type, data: payload };
         if (part.text_content && !payload.text) segment.data.text = part.text_content;
         renderOneBotSegment(wrapper, segment);
+        rendered = true;
+      });
+      // Anything the parts did not account for still has to be shown; silently
+      // dropping it would hide media whose state the audit view exists to report.
+      (message.media || []).forEach((reference) => {
+        if (consumedReferences.has(String(reference.id))) return;
+        renderMediaReference(wrapper, reference);
         rendered = true;
       });
       const hasTextPart = parts.some((part) => normalizeMessagePartForView(part).type === "text");
@@ -1791,25 +1908,29 @@
       title.className = 'media-reference-title';
       const description = document.createElement('div');
       description.className = 'media-reference-description';
-      if (reference.source_state === 'not_downloaded' || reference.archive_state === 'not_downloaded') {
-        title.textContent = '未下载视频';
+      const mediaLabel = { image: '图片', video: '视频', voice: '语音', file: '文件' }[reference.media_type] || '媒体';
+      if (reference.availability_reason === 'source_not_downloaded') {
+        title.textContent = `${mediaLabel}未在源设备下载`;
         description.textContent = thumbnailPath
-          ? '已保存缩略图和视频元数据，完整视频未在源设备下载。'
-          : '该视频未在源 QQ 客户端下载，NAS 中仅保存消息信息。';
-      } else if (reference.source_state === 'missing' || reference.archive_state === 'metadata_only') {
-        title.textContent = '视频文件已丢失';
-        description.textContent = 'QQ 数据记录显示该文件曾存在，但当前源文件不可用。';
-      } else if (reference.archive_state === 'thumbnail_only') {
+          ? '已保存缩略图和元数据；QQNT 原始文件并不在导入设备上，并非 NAS 下载失败。'
+          : 'QQNT 导入仅发现消息元数据，原始文件不在源设备上，并非 NAS 下载失败。';
+      } else if (reference.availability_reason === 'source_missing') {
+        title.textContent = `${mediaLabel}源文件已丢失`;
+        description.textContent = 'QQ 数据记录显示该文件曾存在，但当前导入源已无法读取。';
+      } else if (reference.availability_reason === 'napcat_download_failed') {
+        title.textContent = 'NapCat 媒体归档失败';
+        description.textContent = '实时消息已保留；可在媒体回填任务中按失败代码重试。';
+      } else if (reference.availability_reason === 'thumbnail_only') {
         title.textContent = '仅有缩略图';
         description.textContent = '已保存缩略图和消息元数据，原始媒体文件暂不可用。';
-      } else if (reference.archive_state === 'complete' && !assetPath) {
+      } else if (reference.availability_reason === 'asset_unavailable') {
         title.textContent = '归档文件不可用';
         description.textContent = '媒体引用指向的 NAS 资产当前无法访问。';
-      } else if (reference.source_state === 'downloaded' && reference.archive_state === 'failed') {
+      } else if (reference.availability_reason === 'archive_failed') {
         title.textContent = '媒体归档失败';
         description.textContent = '源文件已发现，但读取、校验或上传 NAS 失败。';
       } else {
-        title.textContent = '视频记录解析失败';
+        title.textContent = `${mediaLabel}记录解析失败`;
         description.textContent = '已保存原始消息记录，后续解析器升级后可重新处理。';
       }
       card.append(title, description);
@@ -1872,11 +1993,20 @@
           renderFileLink(wrapper, params.url || params.file, params.name || params.file || '文件');
                 } else if (kind === 'face') {
           const face = document.createElement('span');
+          const rawFace = params.raw && params.raw !== '[object Object]' ? params.raw : '';
+          const faceLabel = params.name || params.description || params.summary || rawFace || (params.id ? `QQ 表情 #${params.id}` : 'QQ 表情');
           face.className = 'cq-face';
-          face.textContent = params.name || params.description || `?? ${params.id || ''}`;
-          face.title = params.id ? `QQ ?? ${params.id}` : 'QQ ??';
+          face.textContent = faceLabel;
+          face.title = params.id ? `QQ 表情 #${params.id}` : 'QQ 表情';
           wrapper.appendChild(face);
-} else if (kind === 'json' && params.data) {
+        } else if (['mface', 'market_face', 'bface'].includes(kind)) {
+          const faceSrc = params.url || params.file;
+          if (faceSrc) {
+            renderImageLink(wrapper, faceSrc, params.summary || params.name || '动画表情');
+          } else {
+            renderCQChip(wrapper, params.summary || params.name || '动画表情（未归档）');
+          }
+        } else if (kind === 'json' && params.data) {
           renderCQJsonCard(wrapper, params.data);
         } else if (kind === 'at') {
           renderCQChip(wrapper, `@${params.qq || 'unknown'}`);
@@ -2207,6 +2337,21 @@
         } else {
           renderCQChip(container, '[文件]');
         }
+      } else if (type === 'face') {
+        const rawFace = data.raw && data.raw !== '[object Object]' ? data.raw : null;
+        const faceName = data.name || data.description || data.faceText || data.summary || rawFace || (data.id ? `QQ 表情 #${data.id}` : 'QQ 表情');
+        renderCQChip(container, faceName);
+      } else if (['mface', 'market_face', 'bface'].includes(type)) {
+        const src = data.url || data.path || data.file;
+        if (src) {
+          renderImageLink(container, src, data.summary || data.name || '动画表情');
+        } else {
+          renderCQChip(container, data.summary || data.name || '动画表情（未归档）');
+        }
+      } else if (type === 'xml') {
+        renderCQChip(container, data.summary || data.title || 'XML 消息');
+      } else if (type === 'dice') {
+        renderCQChip(container, data.result ? `骰子：${data.result}` : '骰子');
       } else if (type === 'at') {
         renderCQChip(container, `@${data.qq || 'unknown'}`);
       } else if (type === 'poke') {
@@ -2452,21 +2597,30 @@
       pushUiLog(`切换账号：${acc.display_name || acc.id}`);
       clearSearch();
       state.loadingRooms = true;
+      // Switching again before these requests land must not let the slower, older
+      // response install its rooms over the newer account's: the sidebar would then
+      // list one account's conversations under another's name.
+      state.accountLoadToken = (state.accountLoadToken || 0) + 1;
+      const loadToken = state.accountLoadToken;
       renderAll();
       try {
         const [rooms, captureTargets] = await Promise.all([
           apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`),
           apiGet(`/api/bots/${encodeURIComponent(acc.id)}/capture-targets`),
         ]);
+        if (loadToken !== state.accountLoadToken) return;
         state.roomList = rooms;
         state.captureTargetList = captureTargets;
         state.capturePolicyError = '';
       } catch (error) {
+        if (loadToken !== state.accountLoadToken) return;
         state.capturePolicyError = error.message || String(error);
         throw error;
       } finally {
-        state.loadingRooms = false;
-        renderAll();
+        if (loadToken === state.accountLoadToken) {
+          state.loadingRooms = false;
+          renderAll();
+        }
       }
     }
 
@@ -2674,15 +2828,16 @@
     }
 
     async function refreshAuthIdentity() {
-      if (!state.adminApiToken) {
-        state.authIdentity = null;
-        state.authError = '';
-        renderSettings();
-        return;
-      }
       try {
-        state.authIdentity = await apiGet('/api/auth/me');
-        state.authError = '';
+        const response = await fetch('/api/auth/me');
+        if (!response.ok) {
+          if (response.status !== 401) throw new Error(await responseErrorMessage(response, '/api/auth/me'));
+          state.authIdentity = null;
+          state.authError = '';
+        } else {
+          state.authIdentity = await response.json();
+          state.authError = '';
+        }
       } catch (error) {
         state.authIdentity = null;
         state.authError = error.message || String(error);
@@ -2749,21 +2904,18 @@
         renderSettings();
         return;
       }
-      const payload = await response.json();
-      state.adminApiToken = payload.token;
-      localStorage.setItem('chatAuditAdminApiToken', state.adminApiToken);
-      state.authIdentity = { ...payload.user, actor: `db-user:${payload.user.username}` };
-      state.authError = '';
+      await response.json();
+      state.adminApiToken = '';
+      state.authGeneration += 1;
+      await refreshAuthIdentity();
       await loadAdapters();
     }
 
     async function logoutAuth() {
-      if (state.adminApiToken) {
-        try {
-          await apiSend('/api/auth/logout', 'POST');
-        } catch {
-          // Logging out should still clear local state if the remote session is already gone.
-        }
+      try {
+        await fetch('/api/auth/logout', { method: 'POST', headers: csrfHeaders('POST') });
+      } catch {
+        // Logging out still clears local state when the remote session is unavailable.
       }
       state.adminApiToken = '';
       localStorage.removeItem('chatAuditAdminApiToken');
@@ -2860,10 +3012,11 @@
       state.selectedMessageHashes.clear();
       state.currentRoom = room;
       state.messageList = [];
+      state.roomLoadError = '';
       state.loadingRoom = true;
       state.loadingHistory = false;
       if (updateRoute) writeRouteState();
-      pushUiLog(`?????${roomDisplayName(room)}`);
+      pushUiLog(`打开会话：${roomDisplayName(room)}`);
       renderAll();
       try {
         await reloadCurrentRoom({ loadToken, room, signal: controller.signal });
@@ -2905,12 +3058,15 @@
       renderAll();
     }
 
-    const loadMessages = async (beforeTimestamp = null, aroundMessageId = '', limit = 50, roomOverride = null, signal = null) => {
+    const loadMessages = async (beforeTimestamp = null, aroundMessageId = '', limit = 50, roomOverride = null, signal = null, beforeCursor = null) => {
       const room = roomOverride || state.currentRoom;
       if (!state.currentRobot || !room) return [];
       const normalizedLimit = Math.max(1, Math.min(200, Number(limit) || 50));
       let url = `/api/messages?robot_id=${encodeURIComponent(state.currentRobot.id)}&room_id=${encodeURIComponent(room.room_id)}&limit=${normalizedLimit}`;
       if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
+      if (beforeCursor && Number.isFinite(Number(beforeCursor.source_sequence)) && beforeCursor.msg_hash) {
+        url += `&before_source_sequence=${encodeURIComponent(beforeCursor.source_sequence)}&before_msg_hash=${encodeURIComponent(beforeCursor.msg_hash)}`;
+      }
       if (aroundMessageId) url += `&around_message_id=${encodeURIComponent(aroundMessageId)}`;
       if (state.mediaStateFilter !== 'all') url += `&media_state=${encodeURIComponent(state.mediaStateFilter)}`;
       return await apiGet(url, signal ? { signal } : {});
@@ -3021,7 +3177,7 @@
 
     const startLiveRefresh = () => {
       if (state.liveRefreshTimer) window.clearInterval(state.liveRefreshTimer);
-      state.liveRefreshTimer = window.setInterval(refreshLiveMessages, 2000);
+      state.liveRefreshTimer = window.setInterval(refreshLiveMessages, 5000);
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) refreshLiveMessages();
       });
@@ -3074,11 +3230,20 @@
 
     async function reloadCurrentRoom({ loadToken = state.roomLoadToken, room = state.currentRoom, signal = null } = {}) {
       if (!room) return;
-      pushUiLog(`?????${roomDisplayName(room)}`);
+      pushUiLog(`刷新会话：${roomDisplayName(room)}`);
       try {
         const messages = await loadMessages(null, '', 50, room, signal);
         if (loadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== room.room_id) return;
         state.messageList = messages;
+        state.roomLoadError = '';
+      } catch (error) {
+        // 不再抛出：错误已经记录在状态里并会渲染出来，而两个调用点（媒体筛选切换、
+        // 重试按钮）并不捕获，抛出只会变成未处理的 Promise 拒绝。
+        // 中止是切换会话的正常路径，不是加载失败，不应显示给用户。
+        const aborted = Boolean(error && (error.name === 'AbortError' || (signal && signal.aborted)));
+        if (!aborted && loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id) {
+          state.roomLoadError = (error && error.message) || String(error);
+        }
       } finally {
         if (loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id) {
           state.loadingRoom = false;
@@ -3101,12 +3266,15 @@
       const historyToken = ++state.historyLoadToken;
       const oldScrollHeight = chat.scrollHeight;
       const oldScrollTop = chat.scrollTop;
-      const cursorTimestamp = state.messageList[0].timestamp;
+      const oldestMessage = state.messageList[0];
+      const cursorTimestamp = oldestMessage.timestamp;
+      const cursor = { source_sequence: oldestMessage.source_sequence ?? -1, msg_hash: oldestMessage.msg_hash };
+
       state.loadingHistory = true;
       renderChat();
       let restoreScrollTop = oldScrollTop;
       try {
-        const older = await loadMessages(cursorTimestamp, '', 50, state.currentRoom);
+        const older = await loadMessages(cursorTimestamp, '', 50, state.currentRoom, null, cursor);
         if (historyToken !== state.historyLoadToken || roomLoadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== roomId) return;
         if (older.length > 0) {
           state.messageList = [...older, ...state.messageList];
@@ -3383,9 +3551,17 @@
       openModal('messageDetailModal');
     };
 
-    const openModal = (id) => el(id).classList.add('open');
+    const openModal = (id) => {
+      const modal = el(id);
+      state.modalTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      modal.classList.add('open');
+      modal.setAttribute('aria-hidden', 'false');
+      requestAnimationFrame(() => modal.querySelector('[autofocus], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus());
+    };
     const closeModal = (id) => {
-      el(id).classList.remove('open');
+      const modal = el(id);
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
       if (id === 'imagePreviewModal') {
         el('imagePreviewImg').removeAttribute('src');
         el('imagePreviewCaption').textContent = '';
@@ -3395,6 +3571,9 @@
         el('forwardPreviewCaption').textContent = '';
         clearNode(el('forwardPreviewBody'));
       }
+      const trigger = state.modalTrigger;
+      state.modalTrigger = null;
+      if (trigger && document.contains(trigger)) trigger.focus();
     };
 
     const closeFloatingPanels = () => {
@@ -3635,6 +3814,19 @@
         if (!clickedPalette && !clickedLog) closeFloatingPanels();
       });
       document.addEventListener('keydown', (event) => {
+        if (event.key === 'Tab') {
+          const modal = document.querySelector('.modal-backdrop.open');
+          if (modal) {
+            const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+            if (focusable.length) {
+              const first = focusable[0];
+              const last = focusable[focusable.length - 1];
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+            }
+          }
+          return;
+        }
         if (event.key === 'Escape') {
           if (state.selectionMode) {
             exitSelectionMode();
@@ -3690,7 +3882,7 @@
     applyTheme();
     pushUiLog('控制台启动');
     renderAll();
-    loadAdapters().catch((error) => {
+    migrateLegacyAdminApiToken().finally(() => loadAdapters().catch((error) => {
       console.error(error);
       el('roomList').appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '控制台加载失败，请检查 API 或管理 Token。' }));
-    });
+    }));

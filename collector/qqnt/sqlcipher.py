@@ -8,6 +8,28 @@ from typing import Any
 
 QQNT_HEADER_SIZE = 1024
 QQNT_DATABASE_KEY_NAME = "qqnt_database_key"
+SQLITE_PLAINTEXT_MAGIC = b"SQLite format 3\x00"
+
+
+def body_looks_encrypted(source: str | Path, header_size: int = QQNT_HEADER_SIZE) -> bool:
+    """Whether the bytes behind the QQNT custom header can plausibly be SQLCipher ciphertext.
+
+    A SQLCipher body opens with a random 16-byte salt, while a plaintext SQLite body opens
+    with the well-known magic string. This is deliberately cheap — no copy, no decryption and
+    no key — because it runs on every compatibility check. It cannot prove the key is right;
+    only actually opening a stripped copy can do that.
+    """
+    path = Path(source).expanduser().resolve()
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size <= header_size:
+        return False
+    with path.open("rb") as handle:
+        handle.seek(header_size)
+        prefix = handle.read(len(SQLITE_PLAINTEXT_MAGIC))
+    return len(prefix) == len(SQLITE_PLAINTEXT_MAGIC) and prefix != SQLITE_PLAINTEXT_MAGIC
 
 
 def load_sqlcipher() -> Any:

@@ -5,11 +5,12 @@ import json
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.storage_paths import count_local_storage_paths, is_local_storage_path
 from app.import_contract import (
     can_transition_media_state,
     canonical_payload_hash,
@@ -452,16 +453,49 @@ class ImportService:
                 msg_hash = message.msg_hash
 
         if message is None:
+            # Last-resort semantic match, used to fold a message that arrived from
+            # another source (realtime capture) into the same archived row.
+            #
+            # It must never merge two *different rows of the same source database*:
+            # sending the same short text twice within one second is ordinary in a
+            # group, and those rows are separate messages even though session,
+            # sender, second and text all match. Without the guard below the second
+            # row attaches its source record to the first message and is never
+            # stored, which loses a message silently.
+            same_source_other_row = (
+                select(MessageSourceRecord.id)
+                .where(
+                    MessageSourceRecord.msg_hash == Message.msg_hash,
+                    MessageSourceRecord.source_id == source.id,
+                    or_(
+                        MessageSourceRecord.source_table != item.source_record.source_table,
+                        MessageSourceRecord.source_primary_key != item.source_record.source_key,
+                    ),
+                )
+                .exists()
+            )
+            semantic_conditions = [
+                Message.platform == message_data.platform,
+                Message.room_id == canonical_room_id,
+                Message.message_type == message_data.message_type,
+                Message.sender_id == canonical_sender_id,
+                Message.timestamp == message_data.timestamp,
+                Message.local_message == incoming_local,
+                ~same_source_other_row,
+            ]
+            if message_data.source_sequence is not None:
+                # A candidate that already carries a different sequence number is a
+                # different message; one with no sequence (realtime capture) may
+                # still be the same message seen from another source.
+                semantic_conditions.append(
+                    or_(
+                        Message.source_sequence.is_(None),
+                        Message.source_sequence == message_data.source_sequence,
+                    )
+                )
             semantic_result = await db.execute(
                 select(Message)
-                .where(
-                    Message.platform == message_data.platform,
-                    Message.room_id == canonical_room_id,
-                    Message.message_type == message_data.message_type,
-                    Message.sender_id == canonical_sender_id,
-                    Message.timestamp == message_data.timestamp,
-                    Message.local_message == incoming_local,
-                )
+                .where(*semantic_conditions)
                 .order_by(Message.created_at.asc(), Message.msg_hash.asc())
                 .limit(1)
                 .with_for_update()
@@ -491,7 +525,7 @@ class ImportService:
             db.add(message)
             await db.flush()
         else:
-            if message_data.is_outgoing is not None:
+            if message_data.is_outgoing is not None and message.is_outgoing != message_data.is_outgoing:
                 message.is_outgoing = message_data.is_outgoing
                 changed = True
             if not message.external_message_id and message_data.message_id:
@@ -544,9 +578,9 @@ class ImportService:
                         room_id=canonical_room_id,
                         platform=message_data.platform,
                         display_name=room_name.strip() if isinstance(room_name, str) and room_name.strip() else None,
-                        avatar_path=(room_avatar_url.strip() if isinstance(room_avatar_url, str) and room_avatar_url.startswith("/static/storage/") else None),
-                        avatar_source_url=(room_avatar_url.strip() if isinstance(room_avatar_url, str) and not room_avatar_url.startswith("/static/storage/") else None),
-                        avatar_status="local" if isinstance(room_avatar_url, str) and room_avatar_url.startswith("/static/storage/") else "pending",
+                        avatar_path=(room_avatar_url.strip() if isinstance(room_avatar_url, str) and is_local_storage_path(room_avatar_url) else None),
+                        avatar_source_url=(room_avatar_url.strip() if isinstance(room_avatar_url, str) and not is_local_storage_path(room_avatar_url) else None),
+                        avatar_status="local" if isinstance(room_avatar_url, str) and is_local_storage_path(room_avatar_url) else "pending",
                     )
                 )
             else:
@@ -555,7 +589,7 @@ class ImportService:
                 ):
                     room_profile.display_name = room_name.strip()
                 if isinstance(room_avatar_url, str) and room_avatar_url.strip():
-                    if room_avatar_url.startswith("/static/storage/"):
+                    if is_local_storage_path(room_avatar_url):
                         room_profile.avatar_path = room_avatar_url.strip()
                         room_profile.avatar_status = "local"
                     else:
@@ -570,9 +604,9 @@ class ImportService:
                         user_id=canonical_sender_id,
                         platform=message_data.platform,
                         display_name=message_data.nickname,
-                        avatar_path=(sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and sender_avatar_url.startswith("/static/storage/") else None),
-                        avatar_source_url=(sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and not sender_avatar_url.startswith("/static/storage/") else None),
-                        avatar_status="local" if isinstance(sender_avatar_url, str) and sender_avatar_url.startswith("/static/storage/") else "pending",
+                        avatar_path=(sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and is_local_storage_path(sender_avatar_url) else None),
+                        avatar_source_url=(sender_avatar_url.strip() if isinstance(sender_avatar_url, str) and not is_local_storage_path(sender_avatar_url) else None),
+                        avatar_status="local" if isinstance(sender_avatar_url, str) and is_local_storage_path(sender_avatar_url) else "pending",
                     )
                 )
             else:
@@ -581,7 +615,7 @@ class ImportService:
                 ):
                     user_profile.display_name = message_data.nickname
                 if isinstance(sender_avatar_url, str) and sender_avatar_url.strip():
-                    if sender_avatar_url.startswith("/static/storage/"):
+                    if is_local_storage_path(sender_avatar_url):
                         user_profile.avatar_path = sender_avatar_url.strip()
                         user_profile.avatar_status = "local"
                     else:
@@ -647,6 +681,10 @@ class ImportService:
                 media_counts["missing"] += 1
             if applied_archive_state == "failed":
                 media_counts["failed"] += 1
+
+        # Parts were written before the media references above existed, so the
+        # link between them can only be resolved now.
+        await MessageService.link_message_parts_to_media(db, msg_hash)
 
         return msg_hash, ("inserted" if created else "updated" if changed else "unchanged"), media_counts
 
@@ -884,7 +922,7 @@ class ImportService:
     @staticmethod
     def _local_message_score(value: str | None) -> tuple[int, int]:
         text = value or ""
-        return (text.count("/static/storage/"), len(text))
+        return (count_local_storage_paths(text), len(text))
 
     @staticmethod
     def _platform_message_id(item: ImportMessageItemRequest) -> str | None:

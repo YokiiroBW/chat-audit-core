@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from collector.app.config import CollectorConfig
+from collector.app.logging import redact
 from collector.media.indexer import MediaFileIndex
 from collector.media.resolver import MediaResolver
 from collector.media.staging import MediaStagingStore
@@ -105,7 +106,11 @@ class QQNTScanner:
         self.progress_callback = progress_callback or (lambda _event, _detail: None)
 
     def _emit_progress(self, event: str, detail: str) -> None:
-        self.progress_callback(event, detail)
+        # Progress details are database paths, and a QQ data directory is named
+        # after the account. These reach the tray log, which users screenshot
+        # and paste into issue reports, so they get the same redaction the log
+        # file already applies.
+        self.progress_callback(event, str(redact(detail)))
 
     def _resolver(self, database_paths: tuple[Path, ...], result: ScanResult) -> MediaResolver:
         roots = _media_roots(self.config, database_paths)
@@ -113,7 +118,9 @@ class QQNTScanner:
             return MediaResolver()
         index = MediaFileIndex(roots)
         result.media_indexed_files = index.build()
-        return MediaResolver(index)
+        # Same roots bound the explicit paths read out of the database, so a row
+        # cannot point the collector at a file outside the QQ data tree.
+        return MediaResolver(index, allowed_roots=roots)
 
     def _database_key(self, database_path: Path) -> tuple[str | None, str | None, str | None]:
         validator = SQLiteKeyValidator()
@@ -122,9 +129,11 @@ class QQNTScanner:
         if validation.error_code == "DB_KEY_INVALID":
             key = self.credential_getter("qqnt_database_key")
             validation = validator.validate(database_path, key)
-        if not validation.usable:
+        # may_attempt, not usable: a custom-VFS database is only proven readable by the real
+        # open a few lines below, whose failure is recorded as a ScanIssue.
+        if not validation.may_attempt:
             return None, validation.error_code or "DB_OPEN_FAILED", validation.detail or "database is not usable"
-        return key if validation.status == "valid" else None, None, None
+        return key if validation.requires_key else None, None, None
 
     def scan(
         self,
@@ -175,6 +184,19 @@ class QQNTScanner:
             cipher = False
             try:
                 is_qqnt_custom = detect_database_format(source_path) == "qqnt_custom_vfs"
+                if not is_qqnt_custom and self.config.qq.read_mode != "snapshot_copy":
+                    # Reading the live file means the scan sees whatever QQ has
+                    # already flushed, and a busy WAL keeps moving underneath a
+                    # paged read. Not refused -- copying a multi-hundred-megabyte
+                    # database on every cycle is its own problem -- but the
+                    # operator should know which semantics they are getting.
+                    wal_path = source_path.with_name(source_path.name + "-wal")
+                    if wal_path.exists() and wal_path.stat().st_size > 0:
+                        self._emit_progress(
+                            "scan.live_read",
+                            f"{source_path}|QQ 正在写入该库，本次扫描只能看到已落盘的数据；"
+                            "需要一致性快照请设置 [qq].read_mode = \"snapshot_copy\"",
+                        )
                 if self.config.qq.read_mode == "snapshot_copy" or is_qqnt_custom:
                     snapshot = snapshot_manager.create(source_path)
                     target_path = snapshot.database_path
@@ -231,24 +253,28 @@ class QQNTScanner:
                         first_page = False
                         if not page.rows:
                             break
-                        for row in page.rows:
-                            parsed = parse_source_message(row, context, resolver=resolver)
-                            enqueue_parsed_message(
-                                parsed,
-                                source_id=self.source_id,
-                                queue=self.queue,
-                                store=self.store,
-                                staging=staging,
-                                force_refresh=mode == "reconcile",
-                            )
-                            result.scanned_messages += 1
-                            result.enqueued_messages += 1
-                            if result.scanned_messages % 100 == 0:
-                                self._emit_progress(
-                                    "scan.progress",
-                                    f"{result.scanned_messages}|{result.enqueued_messages}|{result.parser_failures}",
+                        # One transaction per page: enqueueing used to open a
+                        # connection and fsync per message, which made a large
+                        # initial import disk-bound rather than parse-bound.
+                        with self.store.transaction():
+                            for row in page.rows:
+                                parsed = parse_source_message(row, context, resolver=resolver)
+                                enqueue_parsed_message(
+                                    parsed,
+                                    source_id=self.source_id,
+                                    queue=self.queue,
+                                    store=self.store,
+                                    staging=staging,
+                                    force_refresh=mode == "reconcile",
                                 )
-                            result.parser_failures += len(parsed.failures)
+                                result.scanned_messages += 1
+                                result.enqueued_messages += 1
+                                if result.scanned_messages % 100 == 0:
+                                    self._emit_progress(
+                                        "scan.progress",
+                                        f"{result.scanned_messages}|{result.enqueued_messages}|{result.parser_failures}",
+                                    )
+                                result.parser_failures += len(parsed.failures)
                         page_cursor = page.next_cursor
                         if adapter.cursor_after(database, candidate, page_cursor, saved_cursor):
                             saved_cursor = page_cursor

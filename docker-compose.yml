@@ -36,9 +36,12 @@ services:
       FFMPEG_LIBRARY_PATH: ${FFMPEG_LIBRARY_PATH:-}
       MEDIA_TRANSCODE_ENABLED: ${MEDIA_TRANSCODE_ENABLED:-false}
 
+    # 绑定地址默认保持 0.0.0.0（对所有网卡开放），以免升级后局域网访问中断。
+    # 公网部署请设 APP_BIND_ADDRESS=127.0.0.1 并在前面加反向代理与 TLS，
+    # 否则控制台与媒体接口会直接暴露在公网上。
     ports:
-      - "8000:8000"
-      - "25810:8000"
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:8000:8000"
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:25810:8000"
 
     # 数据库、聊天媒体和备份可分别挂载到不同磁盘或 NAS 共享目录。
     # 不填写路径变量时，仍会保存在项目目录的 data 子目录中。

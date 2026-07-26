@@ -285,7 +285,7 @@ async def test_onebot_websocket_downloads_cq_media_and_static_route_serves_it(db
     assert_only_group_info_actions(websocket)
     assert stub_client.requested_urls == ["http://media.local/ws-image.jpg"]
     assert len(messages) == 1
-    assert messages[0].local_message.startswith("/static/storage/")
+    assert messages[0].local_message.startswith("/media/")
     assert "http://media.local" not in messages[0].local_message
     assert static_response.status_code == 200
     assert static_response.content == media_bytes
@@ -353,7 +353,7 @@ async def test_onebot_forward_hydration_caches_payload_without_opening(tmp_path,
         await engine.dispose()
 
     assert stub_client.requested_urls == ["http://media.local/forward.jpg"]
-    assert "local=/static/storage/" in messages[0].local_message
+    assert "local=/media/" in messages[0].local_message
 
 
 @pytest.mark.asyncio
@@ -547,3 +547,98 @@ def test_normalize_message_event_preserves_onebot_reply_and_at_segments():
     assert normalized is not None
     assert normalized.msg_data["message_segments"][0]["data"]["id"] == "quoted-1"
     assert normalized.msg_data["message_segments"][1]["data"]["qq"] == "998877"
+
+@pytest.mark.asyncio
+async def test_onebot_websocket_keeps_connection_after_unexpected_single_message_error(db_session, monkeypatch):
+    import app.ws as ws_module
+    from app.ws import onebot11_reverse_ws
+
+    await register_adapter(db_session)
+    original_process = ws_module.MessageService.process_incoming_message
+    calls = 0
+
+    async def fail_first_message(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("simulated media asset conflict")
+        return await original_process(*args, **kwargs)
+
+    monkeypatch.setattr(ws_module.MessageService, "process_incoming_message", fail_first_message)
+    websocket = FakeOneBotWebSocket([
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 123456,
+            "group_id": 998877,
+            "user_id": 445566,
+            "message_id": 1,
+            "raw_message": "first message fails",
+            "time": 1783000800,
+            "sender": {"nickname": "Alice"},
+        },
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 123456,
+            "group_id": 998877,
+            "user_id": 445566,
+            "message_id": 2,
+            "raw_message": "second message survives",
+            "time": 1783000810,
+            "sender": {"nickname": "Alice"},
+        },
+    ])
+
+    await onebot11_reverse_ws(websocket, db_session, media_http_client=None, configured_token="")
+
+    messages = await QueryService.list_messages(db_session, robot_id="123456", room_id="998877")
+    assert websocket.accepted is True
+    assert [message.raw_message for message in messages] == ["second message survives"]
+
+
+def test_websocket_token_comparison_is_constant_time():
+    # A plain == returns as soon as two bytes differ, which leaks the shared
+    # token one character at a time to anyone who can time the handshake.
+    from pathlib import Path
+
+    source = Path("app/ws.py").read_text(encoding="utf-8")
+    authorize = source[source.index("def _is_authorized("):]
+    authorize = authorize[: authorize.index("\ndef ")]
+
+    assert "secrets.compare_digest" in authorize
+    assert "== configured_token" not in authorize
+
+
+def test_websocket_loop_survives_a_frame_that_is_not_json():
+    # One unparsable frame used to end the connection, taking every message
+    # that would have followed it.
+    from pathlib import Path
+
+    source = Path("app/ws.py").read_text(encoding="utf-8")
+
+    assert "except json.JSONDecodeError:" in source
+    assert 'record_onebot_message(status="invalid_json")' in source
+
+
+def test_rate_limit_buckets_do_not_grow_without_bound():
+    import time
+
+    from app.api import _RATE_LIMIT_BUCKETS, _RATE_LIMIT_BUCKET_LIMIT, _enforce_high_risk_rate_limit
+    from app.config import Settings
+
+    _RATE_LIMIT_BUCKETS.clear()
+    expired = time.monotonic() - 3600
+    for index in range(_RATE_LIMIT_BUCKET_LIMIT + 10):
+        _RATE_LIMIT_BUCKETS[(f"198.51.100.{index}", "backup.run")] = [expired]
+
+    class _Request:
+        headers: dict[str, str] = {}
+        client = type("C", (), {"host": "203.0.113.1"})()
+
+    _enforce_high_risk_rate_limit(_Request(), "backup.run", Settings(high_risk_rate_limit_per_minute=10))
+
+    # Expired buckets are dropped; the caller that just arrived is kept.
+    assert len(_RATE_LIMIT_BUCKETS) == 1
+    assert ("203.0.113.1", "backup.run") in _RATE_LIMIT_BUCKETS
+    _RATE_LIMIT_BUCKETS.clear()

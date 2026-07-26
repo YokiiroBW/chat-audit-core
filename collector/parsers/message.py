@@ -69,7 +69,12 @@ def _blob_base64(value: Any) -> str | None:
 
 
 def _source_identity(context: MessageParserContext, row: SourceMessageRow, chat_type: str) -> tuple[str, str]:
-    msg_random = str(_first(row.raw_columns, "msgRandom", "msg_random", "random") or 0)
+    # Falling back to a constant made every row that lacks msgRandom share one
+    # identity component, so two real messages could collapse onto one id. The
+    # source primary key is unique within its table by definition, which is what
+    # the fallback needs to be.
+    msg_random = _first(row.raw_columns, "msgRandom", "msg_random", "random")
+    msg_random = str(msg_random) if msg_random not in (None, "") else f"row:{row.source_primary_key}"
     identity = (
         f"qqnt:{context.account_id}:{chat_type}:{row.conversation_id}:"
         f"{row.msg_id}:{msg_random}:{row.msg_seq}"
@@ -109,11 +114,19 @@ def _qqnt_identity(row: SourceMessageRow, context: MessageParserContext) -> tupl
         is_outgoing = outgoing_value
     elif outgoing_value is not None:
         is_outgoing = str(outgoing_value).strip().lower() in {"1", "true", "yes"}
-    sender_identity = str(_first(row.raw_columns, "40020") or "").strip()
-    conversation_identity = str(_first(row.raw_columns, "40021") or "").strip()
-    if is_outgoing is None and sender_identity and conversation_identity:
-        is_outgoing = sender_identity != conversation_identity
     if chat_type == "private":
+        # 40020/40021 carry private-chat direction: 40020 != 40021 means this
+        # account sent the message, 40020 == 40021 means the peer did.
+        #
+        # The rule is private-only. Group rows reuse both column numbers with
+        # different meanings (40020 is the sender uid, 40021 the group uid), so
+        # they are essentially never equal there — evaluating this for a group row
+        # marks every message, including everyone else's, as sent by the account,
+        # and leaves the correct group check below unreachable.
+        sender_identity = str(_first(row.raw_columns, "40020") or "").strip()
+        conversation_identity = str(_first(row.raw_columns, "40021") or "").strip()
+        if is_outgoing is None and sender_identity and conversation_identity:
+            is_outgoing = sender_identity != conversation_identity
         if is_outgoing is True:
             canonical_sender = str(context.account_id)
         else:

@@ -9,7 +9,7 @@ from typing import Any, Callable
 import httpx
 
 from collector import __version__
-from collector.app.config import CollectorConfig
+from collector.app.config import CollectorConfig, transport_security_warnings
 from collector.sync.queue import CollectorQueue, QueueItem
 from collector.sync.state import CollectorStateStore
 
@@ -47,6 +47,11 @@ class CollectorApiClient:
 
     async def __aenter__(self) -> "CollectorApiClient":
         if self._client is None:
+            # Surfaced every time a connection is opened rather than once at
+            # startup: an operator who edits the server URL mid-session should
+            # see the consequence in the same log they are already watching.
+            for warning in transport_security_warnings(self.config.server):
+                logger.warning("Collector transport is not protected", extra={"warning": warning})
             self._client = httpx.AsyncClient(
                 base_url=self.config.server.base_url,
                 timeout=self.config.server.request_timeout_seconds,
@@ -226,10 +231,20 @@ class QueueUploader:
                     replacement_template = item.payload.get("replacement_template")
                     if not isinstance(replace_token, str) or not isinstance(replacement_template, str):
                         raise CollectorApiError("MEDIA_UPLOAD_FAILED", "artifact queue metadata is incomplete", retryable=False)
+                    local_path = response.get("local_path")
+                    if not isinstance(local_path, str) or not local_path:
+                        # A server reply without a stored path used to raise
+                        # KeyError here, which is not retryable and took the
+                        # upload loop with it instead of failing this one item.
+                        raise CollectorApiError(
+                            "MEDIA_UPLOAD_FAILED",
+                            "server accepted the upload without returning a stored path",
+                            retryable=True,
+                        )
                     patch_payload.update(
                         {
                             "replace_token": replace_token,
-                            "replacement": replacement_template.format(local_path=response["local_path"]),
+                            "replacement": replacement_template.format(local_path=local_path),
                         }
                     )
                 self.queue.patch_message_media(
@@ -335,6 +350,11 @@ class QueueUploader:
     ) -> None:
         if not items:
             return
+        # Bound before the try: creating the batch is itself a request that can
+        # fail, and the error handler below logs batch_id. Leaving it unbound turns
+        # a routine retryable failure into an UnboundLocalError, which is not a
+        # CollectorApiError and so escapes run_once and kills the daemon.
+        batch_id: str | None = None
         try:
             batch_id = await self._create_writable_batch(
                 source_id=source_id,

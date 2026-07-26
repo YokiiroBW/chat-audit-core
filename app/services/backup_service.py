@@ -22,6 +22,7 @@ from app.import_contract import (
     SQL_INTEGER_MAX,
     SQL_INTEGER_MIN,
 )
+from app.atomic_io import atomic_write_bytes, atomic_write_text
 from app.models import (
     ImportBatch,
     ImportSource,
@@ -680,7 +681,9 @@ class BackupService:
         while backup_path.exists():
             backup_path = backup_root / f"auto-backup-{timestamp}-{secrets.token_hex(4)}.json"
 
-        backup_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+        # A half-written backup is indistinguishable from the newest good one
+        # when the scheduler picks the latest file, so this must land atomically.
+        atomic_write_text(backup_path, json.dumps(package, ensure_ascii=False, indent=2))
 
         if keep_latest > 0:
             backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name))
@@ -691,25 +694,74 @@ class BackupService:
         return backup_path
 
     @staticmethod
+    def _parse_cron_field(raw: str, low: int, high: int, cron_expr: str) -> list[int]:
+        """Expand one cron field into the values it matches.
+
+        Accepts ``*``, a plain number, ``a-b``, ``*/step`` and ``a-b/step``,
+        plus comma-separated lists of those. ``5/10`` is rejected rather than
+        guessed at: implementations disagree on whether it means "5, then every
+        10" or just "5", and silently picking one would schedule backups at
+        times the operator did not ask for.
+        """
+        values: set[int] = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                raise ValueError(f"empty cron field entry: {cron_expr!r}")
+            step = 1
+            if "/" in part:
+                part, _, step_raw = part.partition("/")
+                if not step_raw.isdigit() or int(step_raw) < 1:
+                    raise ValueError(f"invalid cron step in {raw!r}: {cron_expr!r}")
+                step = int(step_raw)
+                if part != "*" and "-" not in part:
+                    raise ValueError(f"a cron step needs '*' or a range before '/' in {raw!r}: {cron_expr!r}")
+            if part == "*":
+                start, end = low, high
+            elif "-" in part:
+                start_raw, _, end_raw = part.partition("-")
+                if not start_raw.isdigit() or not end_raw.isdigit():
+                    raise ValueError(f"invalid cron range in {raw!r}: {cron_expr!r}")
+                start, end = int(start_raw), int(end_raw)
+            elif part.isdigit():
+                start = end = int(part)
+            else:
+                raise ValueError(f"unsupported cron field {raw!r}: {cron_expr!r}")
+            if not (low <= start <= end <= high):
+                raise ValueError(f"cron field {raw!r} outside {low}-{high}: {cron_expr!r}")
+            values.update(range(start, end + 1, step))
+        return sorted(values)
+
+    @staticmethod
     def next_run_from_cron(cron_expr: str, now: dt.datetime | None = None) -> dt.datetime:
+        """Next UTC run time for ``cron_expr``.
+
+        Supports any minute/hour pattern that repeats every day; the day,
+        month and weekday fields must stay ``*``. Hour patterns matter in
+        practice because ``DISASTER_RECOVERY.md`` tells operators to raise the
+        backup frequency for a lower RPO, and the obvious way to write that is
+        ``0 */6 * * *``.
+        """
         now = to_utc_naive(now or utc_now()).replace(microsecond=0)
         parts = cron_expr.split()
         if len(parts) != 5:
             raise ValueError(f"unsupported cron expression: {cron_expr!r}")
         minute_raw, hour_raw, day_raw, month_raw, weekday_raw = parts
         if (day_raw, month_raw, weekday_raw) != ("*", "*", "*"):
-            raise ValueError(f"only daily cron is supported: {cron_expr!r}")
-        if not minute_raw.isdigit() or not hour_raw.isdigit():
-            raise ValueError(f"only fixed hour/minute cron is supported: {cron_expr!r}")
-        minute = int(minute_raw)
-        hour = int(hour_raw)
-        if not (0 <= minute <= 59 and 0 <= hour <= 23):
-            raise ValueError(f"invalid cron time: {cron_expr!r}")
+            raise ValueError(f"only every-day cron is supported, so day/month/weekday must be '*': {cron_expr!r}")
+        minutes = BackupService._parse_cron_field(minute_raw, 0, 59, cron_expr)
+        hours = BackupService._parse_cron_field(hour_raw, 0, 23, cron_expr)
 
-        candidate = now.replace(hour=hour, minute=minute, second=0)
-        if candidate <= now:
-            candidate += dt.timedelta(days=1)
-        return candidate
+        # Every day matches, so the next slot is either later today or the first
+        # slot tomorrow; both lists are sorted, so the first hit is the earliest.
+        for day_offset in (0, 1):
+            day = (now + dt.timedelta(days=day_offset)).replace(second=0)
+            for hour in hours:
+                for minute in minutes:
+                    candidate = day.replace(hour=hour, minute=minute)
+                    if candidate > now:
+                        return candidate
+        raise ValueError(f"cron expression matches no time: {cron_expr!r}")
 
     @staticmethod
     def _local_media_file_path(local_path: Any, storage_root: Path, public_storage_prefix: str) -> Path | None:
@@ -993,9 +1045,8 @@ class BackupService:
                 raise ValueError(f"invalid embedded media path: {local_path}")
 
             content = BackupService._decode_embedded_media_file(media_file)
-            file_path.parent.mkdir(parents=True, exist_ok=True)
             if not file_path.exists() or hashlib.sha256(file_path.read_bytes()).hexdigest() != media_file["file_checksum"]["value"]:
-                file_path.write_bytes(content)
+                atomic_write_bytes(file_path, content)
                 restored += 1
         return restored
 
@@ -1005,7 +1056,18 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
+        require_signature: bool = False,
     ) -> dict[str, Any]:
+        """Validate a backup package before import.
+
+        ``require_signature`` turns authenticity into a hard requirement: a package
+        with no checksum or no verifiable signature is rejected. It defaults to off
+        because unsigned legacy packages must stay importable (see
+        ``test_backup_service_validate_allows_unsigned_legacy_package``); operators
+        who need the guarantee enable ``BACKUP_IMPORT_REQUIRE_SIGNATURE``. Without
+        it the checksum is an unkeyed SHA-256 that anyone can recompute, so a
+        package's contents are self-asserted.
+        """
         manifest_value = package.get("manifest")
         manifest = manifest_value if isinstance(manifest_value, dict) else {}
         schema = manifest.get("schema")
@@ -1031,6 +1093,8 @@ class BackupService:
             except ValueError as exc:
                 checksum_valid = False
                 errors.append(str(exc))
+        elif require_signature:
+            errors.append("backup package checksum is required but missing")
 
         signature = manifest.get("signature")
         if signature is not None:
@@ -1045,8 +1109,16 @@ class BackupService:
                     errors.append(str(exc))
             else:
                 signature_valid = None
+                if require_signature:
+                    errors.append(
+                        "backup package signature cannot be verified because no signing key is configured"
+                    )
         elif signing_key:
             signature_valid = None
+            if require_signature:
+                errors.append("backup package signature is required but missing")
+        elif require_signature:
+            errors.append("backup package signature is required but missing")
 
         source = manifest.get("source")
         if source is not None and not isinstance(source, dict):
@@ -1098,12 +1170,14 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
+        require_signature: bool = False,
     ) -> dict[str, Any]:
         report = BackupService.validate_import_package(
             package,
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
+            require_signature=require_signature,
         )
         schema = report.get("schema")
         if not report["valid"]:
@@ -1248,6 +1322,7 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
+        require_signature: bool = False,
     ) -> dict[str, int]:
         manifest_value = package.get("manifest")
         manifest = manifest_value if isinstance(manifest_value, dict) else {}
@@ -1259,6 +1334,7 @@ class BackupService:
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
+            require_signature=require_signature,
         )
         if not report["valid"]:
             raise ValueError("; ".join(report["errors"]))
@@ -1500,15 +1576,41 @@ class BackupService:
 async def _auto_backup_loop(settings, sessionmaker) -> None:
     from app.services.backup_config_service import BackupConfigService
 
+    # Remembers which cron value was already reported as unusable. Without it an
+    # expression this scheduler cannot parse produced one log line and one
+    # appended failures.log record every 60 seconds, forever, while backups
+    # silently never ran.
+    reported_cron_error: str | None = None
+    effective_cron: str | None = None
     while True:
         try:
             async with sessionmaker() as session:
                 backup_config = await BackupConfigService.get_effective_config(session, settings)
+            effective_cron = backup_config.cron
             if not backup_config.enabled:
                 await asyncio.sleep(60)
                 continue
             now = utc_now().replace(microsecond=0)
-            next_run = BackupService.next_run_from_cron(backup_config.cron, now)
+            try:
+                next_run = BackupService.next_run_from_cron(backup_config.cron, now)
+            except ValueError as exc:
+                if reported_cron_error != backup_config.cron:
+                    reported_cron_error = backup_config.cron
+                    logger.error(
+                        "Auto backup cron is unusable, no backup will run until it is fixed",
+                        extra={"cron": backup_config.cron, "cron_source": backup_config.cron_source, "error": str(exc)},
+                    )
+                    BackupService.write_failure_log(
+                        settings.backup_root,
+                        event="auto_backup_cron",
+                        error=str(exc),
+                        context={"cron": backup_config.cron, "cron_source": backup_config.cron_source},
+                    )
+                # Keep polling rather than giving up, so correcting the setting
+                # recovers without restarting the process.
+                await asyncio.sleep(60)
+                continue
+            reported_cron_error = None
             seconds_until_run = max(0, (next_run - now).total_seconds())
             if seconds_until_run > 60:
                 await asyncio.sleep(60)
@@ -1533,15 +1635,16 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
                     extra={"backup_path": str(backup_path), "cron": backup_config.cron, "keep_latest": backup_config.keep_latest},
                 )
         except Exception as exc:
-            logger.exception(
-                "Auto backup failed",
-                extra={"cron": getattr(settings, "auto_backup_cron", None), "error": str(exc)},
-            )
+            # Report the cron actually in force; the database override wins over
+            # the environment value, so logging the latter pointed at settings
+            # the operator may never have set.
+            cron = effective_cron if effective_cron is not None else getattr(settings, "auto_backup_cron", None)
+            logger.exception("Auto backup failed", extra={"cron": cron, "error": str(exc)})
             BackupService.write_failure_log(
                 settings.backup_root,
                 event="auto_backup",
                 error=str(exc),
-                context={"cron": getattr(settings, "auto_backup_cron", None)},
+                context={"cron": cron},
             )
             await asyncio.sleep(60)
 
