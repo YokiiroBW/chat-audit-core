@@ -1,7 +1,9 @@
 import asyncio
 from email.parser import BytesParser
 from email.policy import default as email_policy
+from functools import lru_cache
 import hashlib
+import ipaddress
 import json
 import logging
 from pathlib import Path
@@ -218,11 +220,53 @@ router = APIRouter(dependencies=[Depends(require_admin_api_token)])
 media_router = APIRouter(dependencies=[Depends(require_admin_api_token)])
 
 
-def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    return request.client.host if request.client else None
+@lru_cache(maxsize=8)
+def _trusted_proxy_networks(raw: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    networks = []
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(candidate, strict=False))
+        except ValueError:
+            logger.warning("Ignoring unparsable trusted proxy entry", extra={"entry": candidate})
+    return tuple(networks)
+
+
+def _client_ip(request: Request, settings: Settings | None = None) -> str | None:
+    """The caller's address, trusting ``X-Forwarded-For`` only behind a proxy.
+
+    The header is caller-supplied. Trusting it unconditionally let anyone mint a
+    fresh rate-limit bucket per request and write whatever address they liked
+    into the audit log, so it is only read when the immediate peer is a
+    configured proxy. With TRUSTED_PROXY_IPS unset, which is the default, the
+    header is ignored entirely.
+    """
+    peer = request.client.host if request.client else None
+    networks = _trusted_proxy_networks(str(getattr(settings or get_settings(), "trusted_proxy_ips", "") or ""))
+    if not networks or peer is None:
+        return peer
+    try:
+        peer_address = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not any(peer_address in network for network in networks):
+        return peer
+    # Walk right to left: our own proxies appended the rightmost entries, so the
+    # first address that is not one of them is the real caller. Anything further
+    # left was supplied by that caller and cannot be trusted.
+    for candidate in reversed([item.strip() for item in (request.headers.get("x-forwarded-for") or "").split(",")]):
+        if not candidate:
+            continue
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if any(address in network for network in networks):
+            continue
+        return candidate
+    return peer
 
 
 def _actor(request: Request) -> str:
@@ -257,7 +301,7 @@ def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Setti
     if limit <= 0:
         return
     now = time.monotonic()
-    key = (_client_ip(request) or "unknown", action)
+    key = (_client_ip(request, settings) or "unknown", action)
     bucket = [timestamp for timestamp in _RATE_LIMIT_BUCKETS.get(key, []) if now - timestamp < 60]
     if len(bucket) >= limit:
         _RATE_LIMIT_BUCKETS[key] = bucket

@@ -470,3 +470,60 @@ async def test_admin_api_token_expires_once_a_lifetime_is_configured(db_session,
     rotated, rotated_token = await AdminTokenService.rotate_token(db_session, record.id)
     assert rotated.expires_at > utc_now()
     assert await AdminTokenService.match_token(db_session, rotated_token) is not None
+
+
+def _request_with(headers: dict[str, str], peer: str | None):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(key.lower().encode(), value.encode()) for key, value in headers.items()],
+        "client": (peer, 12345) if peer else None,
+    }
+    return Request(scope)
+
+
+def test_forwarded_for_is_ignored_without_a_configured_proxy():
+    # The header is caller-supplied. Believing it unconditionally let anyone
+    # forge the audited address and mint a fresh rate-limit bucket per request.
+    from app.api import _client_ip
+
+    settings = Settings()
+    request = _request_with({"x-forwarded-for": "203.0.113.9"}, "198.51.100.4")
+
+    assert _client_ip(request, settings) == "198.51.100.4"
+
+
+def test_forwarded_for_is_read_only_from_a_trusted_peer():
+    from app.api import _client_ip
+
+    settings = Settings(trusted_proxy_ips="10.0.0.0/8, 127.0.0.1")
+
+    trusted = _request_with({"x-forwarded-for": "203.0.113.9"}, "10.1.2.3")
+    assert _client_ip(trusted, settings) == "203.0.113.9"
+
+    # Same header, peer outside the trusted set.
+    untrusted = _request_with({"x-forwarded-for": "203.0.113.9"}, "198.51.100.4")
+    assert _client_ip(untrusted, settings) == "198.51.100.4"
+
+
+def test_forwarded_for_takes_the_last_address_the_client_could_not_forge():
+    # Our own proxies append the rightmost entries; anything further left was
+    # supplied by the caller, so a spoofed prefix must not win.
+    from app.api import _client_ip
+
+    settings = Settings(trusted_proxy_ips="10.0.0.0/8")
+    request = _request_with({"x-forwarded-for": "1.2.3.4, 203.0.113.9, 10.0.0.7"}, "10.0.0.7")
+
+    assert _client_ip(request, settings) == "203.0.113.9"
+
+
+def test_forwarded_for_falls_back_to_the_peer_when_every_hop_is_a_proxy():
+    from app.api import _client_ip
+
+    settings = Settings(trusted_proxy_ips="10.0.0.0/8")
+    request = _request_with({"x-forwarded-for": "not-an-ip, 10.0.0.8"}, "10.0.0.7")
+
+    assert _client_ip(request, settings) == "10.0.0.7"

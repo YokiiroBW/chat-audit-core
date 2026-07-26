@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # API tokens are long-lived by design; 0 keeps the previous behaviour of
     # never expiring, and a positive value ages them out from creation.
     admin_token_ttl_days: int = 0
+    # Comma-separated proxy addresses or CIDRs whose X-Forwarded-For header may
+    # be believed. Empty, the default, means the header is ignored: it is
+    # caller-supplied, and trusting it lets anyone forge the audited address and
+    # sidestep per-address rate limits.
+    trusted_proxy_ips: str = ""
 
     onebot_ws_path: str = "/onebot/v11/ws"
     onebot_access_token: str = ""
