@@ -151,6 +151,40 @@ def test_static_assets_include_minified_frontend_bundle():
     assert min_css.stat().st_size < source_css.stat().st_size
 
 
+def test_tracked_text_files_are_free_of_mojibake():
+    # 一次 ASCII 编码写盘曾把多个文件里的 CJK 字符整片换成问号，且不可逆。
+    # 这条断言与 CI 的 Verify text encoding 步骤同源，本地跑测试就能拦住复发。
+    from scripts.check_text_encoding import check_text_encoding
+
+    assert check_text_encoding() == []
+
+
+def test_mojibake_guard_separates_damage_from_legitimate_question_marks():
+    # 问号在源码里到处都是合法的，哨兵的价值全在这几条边界上，所以钉死它们。
+    # 注意：本测试自身不能出现连续问号字面量，否则会被哨兵判为受损，故用 q 拼接。
+    from scripts.check_text_encoding import _line_problems
+
+    q = "?"
+    legitimate = [
+        ("app/x.js", f"const a = b {q}{q} c;"),
+        ("app/x.js", f"const a = b {q}{q}= c;"),
+        ("app/x.js", f"return qqNumber {q} 'a' : 'b';"),
+        ("app/x.js", f"/[),.;:!{q}，。]+$/"),
+        ("app/x.py", f'placeholders = ",".join("{q}" for _ in ids)'),
+    ]
+    for path, line in legitimate:
+        assert _line_problems(path, line) == [], line
+
+    damaged = [
+        ("app/x.js", f"pushUiLog('{q * 5}' + name)"),
+        ("collector/gui/app.py", f'title="{q * 2} QQ {q * 4}"'),
+        # Markdown 散文可以长得和 JS 的空值合并运算符一模一样，所以豁免只对 .js 生效。
+        ("README.md", f"QQNT 16 {q}{q} ASCII"),
+    ]
+    for path, line in damaged:
+        assert _line_problems(path, line), line
+
+
 def test_disaster_recovery_document_covers_restore_drill_and_targets():
     guide = (ROOT / "DISASTER_RECOVERY.md").read_text(encoding="utf-8")
 
@@ -174,6 +208,10 @@ def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     assert "pg_isready" in test_job["services"]["postgres"]["options"]
     steps = {step["name"]: step["run"] for step in test_job["steps"] if "run" in step}
     assert "python -m pip install -r requirements-dev.txt" in steps["Install dependencies"]
+    # 乱码哨兵排在资产门禁之前，让编码损坏先报出来，而不是被误读成 min 产物过期。
+    assert "python scripts/check_text_encoding.py" in steps["Verify text encoding"]
+    step_names = [step["name"] for step in test_job["steps"]]
+    assert step_names.index("Verify text encoding") < step_names.index("Verify minified frontend assets")
     # 资产门禁走 --check：只读比对、不写盘，因此后续步骤看到的仍是干净检出。
     assert "python scripts/minify_static_assets.py --check" in steps["Verify minified frontend assets"]
     assert "python -m pip check" in steps["Verify dependency resolution"]

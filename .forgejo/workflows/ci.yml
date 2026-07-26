@@ -55,6 +55,10 @@ jobs:
           .tmp/audit-venv/bin/python -m pip install --quiet pip-audit
           .tmp/audit-venv/bin/python -m pip_audit -r requirements-prod.txt --progress-spinner off
 
+      # 排在资产门禁之前：乱码先炸，避免被误读成 min 产物过期。
+      - name: Verify text encoding
+        run: python scripts/check_text_encoding.py
+
       - name: Verify minified frontend assets
         run: python scripts/minify_static_assets.py --check
 

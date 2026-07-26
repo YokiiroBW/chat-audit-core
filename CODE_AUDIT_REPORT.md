@@ -132,7 +132,7 @@
 | 编号 | 模块 | 位置 | 问题与触发 | 建议 |
 | --- | --- | --- | --- | --- |
 | M1 | 后端 | api.py:509;query\_service.py:152,160;import\_service.py:549,575 | **(已核验)** 头像"已落地"判定与导入头像状态硬编码 `/static/storage/`,而默认前缀是 `/media` → 每次列表请求头像补全永不收敛,并**放大 H1** 使 `is_outgoing` 每次读取都被擦写;导入头像状态永远判 `pending` | 统一读 `settings.public_storage_prefix`,兼容两套已服务前缀 |
-| M2 | 后端/前端/文档 | query\_service.py:121,145\-154;app.js:830\-831,1526,2937,3151;README:196\-207 | **(已核验)** 源码中文字面量 mojibake:预览显示 `[鍥剧墖]` 等、私聊标签 `? QQ??`、日志 `?????`、README「QQNT」整节乱码 | 以 UTF\-8 恢复正确中文;CI 加乱码哨兵 |
+| M2 | 后端/前端/文档 | query\_service.py:121,145\-154;app.js:830\-831,1526,2937,3151;README:196\-207 | **(已核验)** 源码中文字面量 mojibake:CJK 字符被逐个替换成 ASCII 问号(不可逆),涉及预览占位、私聊 QQ 号标签、会话打开/刷新日志、README「QQNT」整节 | 以 UTF\-8 恢复正确中文;CI 加乱码哨兵 |
 | M3 | 后端 | query\_service.py:586\-603 | **(已核验)** 回复预览回查无账号/房间范围,OneBot 数字 ID 跨机器人碰撞 → 错误预览 \+ 跨账号内容泄露 | 回查加 `room_id` 与 `_robot_message_scope` |
 | M4 | 后端 | message\_service.py:30\-73 | 实时入库缺语义去重层,"先导入后实时"顺序产生重复消息(反向可合并,不对称) | 增加与导入侧一致的语义兜底 |
 | M5 | 后端 | message\_service.py:143\-155 | 单条摄入端点丢弃 `canonical_sender_id/room_id`,不做身份归一化 → 私聊会话分裂 | 落库键改用 canonical 值并写 IdentityAlias |

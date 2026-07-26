@@ -2,7 +2,7 @@
 
 配套《chat\-audit\-core 代码审计报告》。这是一份可按序执行、可勾选的修复 backlog:自上而下推进即可,每项标注了对应审计编号、动作、文件:行号、依赖关系与粗略工作量(S≈\<1h / M≈半天 / L≈1 天以上)。分四个波次:**W0 发布阻断** → **W1 数据/功能/崩溃(P0)** → **W2 安全与一致性(P1)** → **W3 健壮性/性能/迁移(P2)** → **W4 低危与清理(P3)**。
 
-> **进度看这份文档的勾选状态。** 阶段交接见 `HANDOFF_2026-07-26-B.md`(最新现状、复现命令、陷阱清单)。当前进度:W0 / W1 / W1b / V1–V3 已完成,**下一步从 FQ\-14 开始**。
+> **进度看这份文档的勾选状态。** 阶段交接见 `HANDOFF_2026-07-26-B.md`(最新现状、复现命令、陷阱清单)。当前进度:W0 / W1 / W1b / V1–V3 / FQ\-14 已完成,**下一步从 FQ\-15 开始**。
 
 > 关键提示:W1 中先做两项"地基重构"(FQ\-2 前缀集中、FQ\-3 身份/方向统一),它们是 H1、H3、M1 等多个 bug 的共同漂移根源,先抽取再改能一次性收敛。
 
@@ -50,7 +50,19 @@
 
 ## W2 · 安全与一致性(P1)
 
-- [ ] **FQ\-14 · M2 修复全部乱码** —— `query_service.py:145-154` 预览占位、`app.js:830-831/1526/2937/3151`、`README:196-207` 以 UTF\-8 恢复正确中文;CI 加乱码哨兵(如 `grep -P` 检测)。工作量 S。
+- [x] **FQ\-14 · M2 修复全部乱码** —— 已完成。损坏只有一种形态:**CJK 字符被逐个替换成 ASCII 问号**(某次以 ASCII/`errors='replace'` 写盘),字节已丢失,**不能靠重新解码还原**。全仓无 latin\-1/gbk 型乱码,也无 U+FFFD 替换字符,所有文件都是合法 UTF\-8。
+
+  **根因定位到单一提交**\:`1b4c1c6 feat: integrate QQNT import and chat console UI` 一次性引入全部乱码(各文件计数 0 → N),其后 `2d66a87` 又在 `app.js` 上追加 6 处。
+
+  **恢复依据(不是猜)**\:`app.js` 的 `打开会话：` / `刷新会话：` / 分隔符 `·` 直接取自 `1b4c1c6^` 与 `2d66a87` 的删除行;`QQ号：` 取自同文件 779/874 行既有写法(无空格,正好 2 字);`QQ好友` 对应 776 行私聊兜底名;`选择 QQ 安装目录` 对照 594 行同构标题与 300 行字段标签;`开机自动启动仅支持 Windows` 对应 `gui/app.py:331` 复选框标签(9 字精确吻合)。README 两节由 `1b4c1c6` 新增时即已损坏,**git 无干净祖先,按当前代码行为重写**(含 W1b 之后的三个停止码与 `needs_verification` 语义)。
+
+  **实际改动**\:`app.js`(5 行,并重新生成 `app.min.js`)、`collector/gui/app.py`(7 处)、`collector/gui/controller.py`(1 处)、`tests/test_collector_parsers.py`(2 处夹具)、`README.md` 与 `collector/README.md` 两节重写。
+
+  **哨兵**\:新增 `scripts/check_text_encoding.py`(照 `minify_static_assets.py` 骨架,纯 ASCII 源码,非 ASCII 标记一律用 `chr()` 构造,以免自我误报),检查 UTF\-8 可解码性、U+FFFD 替换字符、latin\-1/gbk 特征串、以及**连续 ≥2 个问号**。已接入 CI 的 `Verify text encoding` 步骤(排在资产门禁**之前**),并由 `tests/test_deployment_files.py` 两条测试锁定:一条跑全树、一条钉死边界规则。
+
+  **两条规则上的取舍,改哨兵前务必先读**\:(1) JS 空值合并运算符的豁免**只对 `.js` 生效**——`README.md` 的 `16` \+ 两个问号 \+ ` ASCII` 长得与它一模一样,若对 `.md` 也豁免就会漏报真实损坏;(2) **不检查单个问号**——SQL 占位符、URL query、正则字符类 `[!?，。]` 都合法,单问号规则误报率过高,代价是 `app.js:845` 那种单字损坏(`'我'` → 一个问号)哨兵抓不到,只能靠 review。
+
+  **三处原判被推翻**\:`query_service.py:145-154` 预览占位**早已是正确中文**,无需改动;`.gitattributes` 最后一行**不是乱码**(合法 UTF\-8,真实问题是 7\-13 行的 `export-ignore` 全部指向不存在的文件,归 FQ\-50);`collector/gui/*` 的 `_ui_text(r"\u...")` **也不是乱码**,是刻意的 ASCII 安全写法(`app.py:23` 运行时 `decode("unicode_escape")`),显示正确,本轮未动。另:审计给的 `app.js` 行号已因 W0/W1 漂移,且**新发现** `collector/README.md`(9 行,最大一块)、`collector/gui/*`、`tests/` 三处审计未列的损坏。
 - [ ] **FQ\-15 · R4 账号范围下沉 \+ M3 回复预览范围** —— `_robot_message_scope` 提为公共 scope;回复预览回查(`query_service.py:586-603`)加 `room_id` 与该 scope,堵住跨机器人 ID 碰撞导致的错误预览/内容泄露。工作量 M。
 - [ ] **FQ\-16 · M4 实时链路语义去重** —— `message_service.py:30-73` 增加与导入侧一致的语义兜底层(可与 FQ\-2/FQ\-5 复用)。工作量 M。
 - [ ] **FQ\-17 · M5 单条摄入身份归一化** —— `message_service.py:143-155` 落库键改用 `canonical_room_id/sender_id` 并写 IdentityAlias(或从 schema 移除该二字段)。工作量 S。

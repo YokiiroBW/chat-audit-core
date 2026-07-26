@@ -198,7 +198,7 @@ class CollectorGuiController:
     def _set_autostart(self, enabled: bool) -> None:
         if winreg is None:
             if enabled:
-                raise RuntimeError("????????? Windows")
+                raise RuntimeError("开机自动启动仅支持 Windows")
             return
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         value_name = "ChatAuditQQCollector"

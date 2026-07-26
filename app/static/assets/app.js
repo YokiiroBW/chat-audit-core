@@ -842,9 +842,9 @@
         ? (state.currentRobot ? state.currentRobot.id : '')
         : (state.currentRoom ? state.currentRoom.qq_number : ''));
       const name = displayName || (message.is_outgoing
-        ? (state.currentRobot ? (state.currentRobot.display_name || '?') : '?')
-        : 'QQ??');
-      return qqNumber ? `${name} ? QQ??${qqNumber}` : name;
+        ? (state.currentRobot ? (state.currentRobot.display_name || '我') : '我')
+        : 'QQ好友');
+      return qqNumber ? `${name} · QQ号：${qqNumber}` : name;
     };
 
     const isOutgoingMessage = (message) => {
@@ -1542,7 +1542,7 @@
         const meta = document.createElement('div');
         meta.className = 'message-meta';
         const metaText = document.createElement('span');
-        metaText.textContent = `${messageSenderLabel(msg)} ? ${formatTs(msg.timestamp)}`;
+        metaText.textContent = `${messageSenderLabel(msg)} · ${formatTs(msg.timestamp)}`;
         const detailButton = document.createElement('button');
         detailButton.type = 'button';
         detailButton.className = 'message-detail-button';
@@ -2982,7 +2982,7 @@
       state.loadingRoom = true;
       state.loadingHistory = false;
       if (updateRoute) writeRouteState();
-      pushUiLog(`?????${roomDisplayName(room)}`);
+      pushUiLog(`打开会话：${roomDisplayName(room)}`);
       renderAll();
       try {
         await reloadCurrentRoom({ loadToken, room, signal: controller.signal });
@@ -3196,7 +3196,7 @@
 
     async function reloadCurrentRoom({ loadToken = state.roomLoadToken, room = state.currentRoom, signal = null } = {}) {
       if (!room) return;
-      pushUiLog(`?????${roomDisplayName(room)}`);
+      pushUiLog(`刷新会话：${roomDisplayName(room)}`);
       try {
         const messages = await loadMessages(null, '', 50, room, signal);
         if (loadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== room.room_id) return;

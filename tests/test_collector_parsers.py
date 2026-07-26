@@ -82,8 +82,8 @@ def test_message_parser_normalizes_text_face_reply_and_cards():
 def test_message_parser_attaches_qqnt_profile_metadata():
     context = MessageParserContext(
         account_id="123456789",
-        sender_nicknames={"user-a": "????"},
-        room_names={"group-a": "????"},
+        sender_nicknames={"user-a": "测试昵称"},
+        room_names={"group-a": "测试群名"},
         sender_avatars={"user-a": "https://example.test/user.jpg"},
         room_avatars={"group-a": "https://example.test/group.jpg"},
     )

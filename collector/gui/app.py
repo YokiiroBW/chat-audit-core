@@ -583,7 +583,7 @@ class CollectorTrayApp:
             else:
                 self.status_var.set(_ui_text(r"\u914d\u7f6e\u9519\u8bef"))
                 status_read_failed = _ui_text(r"\u72b6\u6001\u8bfb\u53d6\u5931\u8d25")
-                self._append_log(f"{status_read_failed}?{exc}")
+                self._append_log(f"{status_read_failed}：{exc}")
         self._refresh_after_id = self.root.after(3000, self._refresh_status)
 
     def _show_compatibility(self, report: Any) -> None:
@@ -596,7 +596,7 @@ class CollectorTrayApp:
             self.data_root_var.set(selected)
 
     def browse_qq_install_dir(self) -> None:
-        selected = filedialog.askdirectory(title="?? QQ ????")
+        selected = filedialog.askdirectory(title="选择 QQ 安装目录")
         if selected:
             self.qq_install_dir_var.set(selected)
 
@@ -636,11 +636,11 @@ class CollectorTrayApp:
         def success(launcher: Path) -> None:
             powershell_script = launcher.with_suffix(".ps1")
             message = (
-                _ui_text(r"\u5df2\u751f\u6210\u4e00\u952e\u542f\u52a8\u6587\u4ef6") + f"?{launcher}\n"
-                + _ui_text(r"\u540c\u65f6\u751f\u6210 PowerShell \u811a\u672c") + f"?{powershell_script}\n\n"
-                + _ui_text(r"\u53ef\u76f4\u63a5\u53cc\u51fb BAT \u8fd0\u884c\uff0c\u6216\u5728 PowerShell \u4e2d\u6267\u884c") + "?\n"
+                _ui_text(r"\u5df2\u751f\u6210\u4e00\u952e\u542f\u52a8\u6587\u4ef6") + f"\uff1a{launcher}\n"
+                + _ui_text(r"\u540c\u65f6\u751f\u6210 PowerShell \u811a\u672c") + f"\uff1a{powershell_script}\n\n"
+                + _ui_text(r"\u53ef\u76f4\u63a5\u53cc\u51fb BAT \u8fd0\u884c\uff0c\u6216\u5728 PowerShell \u4e2d\u6267\u884c") + "\uff1a\n"
                 + f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{powershell_script}\"\n\n"
-                + _ui_text(r"\u8fd0\u884c\u524d\u8bf7\u5148\u5b8c\u5168\u9000\u51fa QQ\uff0c\u811a\u672c\u4e0d\u4f1a\u81ea\u52a8\u6267\u884c") + "?"
+                + _ui_text(r"\u8fd0\u884c\u524d\u8bf7\u5148\u5b8c\u5168\u9000\u51fa QQ\uff0c\u811a\u672c\u4e0d\u4f1a\u81ea\u52a8\u6267\u884c") + "\u3002"
             )
             messagebox.showinfo(_ui_text(r"\u811a\u672c\u5df2\u751f\u6210"), message)
 
@@ -710,7 +710,7 @@ class CollectorTrayApp:
         history_repair_label = _ui_text(r"\u5386\u53f2\u8d44\u6599\u4fee\u590d\u5b8c\u6210")
         self._run_task(
             lambda: self.controller.run_once("reconcile"),
-            lambda result: self._append_log(f"{history_repair_label}?{result.get('status')}"),
+            lambda result: self._append_log(f"{history_repair_label}：{result.get('status')}"),
         )
 
     def simulate_upload(self) -> None:
