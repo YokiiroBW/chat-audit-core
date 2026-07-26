@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import yaml
 
@@ -225,3 +226,18 @@ def test_forgejo_ci_workflow_runs_tests_and_docker_build():
     assert steps["Compile Python modules"] == "python -m compileall app tests"
     assert steps["Run tests"] == "python -m pytest tests -q"
     assert steps["Build Docker image"] == "docker build -t chat-audit-core:ci ."
+
+
+def test_identity_repair_script_has_no_baked_in_account_and_guards_its_dialect():
+    # This script rewrites and merges one account's archived messages. A default
+    # QQ number meant a mistyped invocation repaired somebody else's history,
+    # and its DELETE ... USING statements are PostgreSQL-only, so on SQLite it
+    # would fail partway through a destructive run.
+    script = (ROOT / "scripts/repair_qq_identity_and_duplicates.py").read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--account-id", required=True)' in script
+    assert "default=ACCOUNT_ID" not in script
+    assert 'SUPPORTED_DIALECTS = {"postgresql"}' in script
+    assert "dialect not in SUPPORTED_DIALECTS" in script
+    # No QQ-number-shaped literal left behind.
+    assert not re.search(r"\b\d{9,11}\b", script)
