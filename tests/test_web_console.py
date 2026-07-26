@@ -161,6 +161,9 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "roomDisplayName" in page_bundle
     # 加载失败与"确无消息"必须可区分，否则一次失败的请求会被说成会话是空的。
     assert "roomLoadError" in page_bundle
+    # 单条消息渲染失败不能清空整个会话，Service Worker 也不能缓存错误响应。
+    assert "该消息无法渲染：" in page_bundle
+    assert "response.ok" in sw_response.text
     assert "加载失败：" in page_bundle
     assert "暂无消息" in page_bundle
     assert "sender_avatar_path" in page_bundle

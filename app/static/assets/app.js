@@ -1542,6 +1542,9 @@
         return;
       }
       state.messageList.forEach((msg) => {
+        // 单条消息渲染失败不应清空整个会话：审计视图里，一条畸形记录
+        // 把其余全部消息一起隐藏，比显示一行占位危险得多。
+        try {
         const mine = isOutgoingMessage(msg);
         const msgKey = messageKey(msg);
         const selected = state.selectedMessageHashes.has(msgKey);
@@ -1583,6 +1586,13 @@
         row.append(selector, avatar, body);
         bindMessageSelectionEvents(row, msg);
         chat.appendChild(row);
+        } catch (error) {
+          const broken = document.createElement('div');
+          broken.className = 'message';
+          broken.textContent = `该消息无法渲染：${(error && error.message) || error}`;
+          chat.appendChild(broken);
+          pushUiLog(`消息渲染失败：${(error && error.message) || error}`, 'error');
+        }
       });
       renderSelectionToolbar();
     };
