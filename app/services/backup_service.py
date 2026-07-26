@@ -22,6 +22,7 @@ from app.import_contract import (
     SQL_INTEGER_MAX,
     SQL_INTEGER_MIN,
 )
+from app.atomic_io import atomic_write_bytes, atomic_write_text
 from app.models import (
     ImportBatch,
     ImportSource,
@@ -680,7 +681,9 @@ class BackupService:
         while backup_path.exists():
             backup_path = backup_root / f"auto-backup-{timestamp}-{secrets.token_hex(4)}.json"
 
-        backup_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+        # A half-written backup is indistinguishable from the newest good one
+        # when the scheduler picks the latest file, so this must land atomically.
+        atomic_write_text(backup_path, json.dumps(package, ensure_ascii=False, indent=2))
 
         if keep_latest > 0:
             backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name))
@@ -1042,9 +1045,8 @@ class BackupService:
                 raise ValueError(f"invalid embedded media path: {local_path}")
 
             content = BackupService._decode_embedded_media_file(media_file)
-            file_path.parent.mkdir(parents=True, exist_ok=True)
             if not file_path.exists() or hashlib.sha256(file_path.read_bytes()).hexdigest() != media_file["file_checksum"]["value"]:
-                file_path.write_bytes(content)
+                atomic_write_bytes(file_path, content)
                 restored += 1
         return restored
 

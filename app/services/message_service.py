@@ -1,16 +1,15 @@
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.atomic_io import atomic_write_bytes
 from app.config import get_settings
 from app.storage_paths import count_local_storage_paths, known_storage_prefixes
 from app.models import MediaAsset, Message, MessageMediaReference, MessagePart, MessageSourceRecord, RobotMessage
@@ -102,12 +101,7 @@ class MessageService:
         target_path = root / filename
 
         if not target_path.exists():
-            temp_path = root / f".{filename}.{uuid4().hex}.tmp"
-            try:
-                temp_path.write_bytes(file_content)
-                os.replace(temp_path, target_path)
-            finally:
-                temp_path.unlink(missing_ok=True)
+            atomic_write_bytes(target_path, file_content)
 
         local_path = f"{prefix.rstrip('/')}/{filename}"
         asset_values = {

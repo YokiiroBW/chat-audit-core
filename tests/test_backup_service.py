@@ -1,5 +1,6 @@
 import gzip
 import json
+from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 import pytest
@@ -935,3 +936,40 @@ async def test_auto_backup_loop_reports_an_unusable_cron_once_not_every_minute(t
     assert len(records) == 1
     assert records[0]["event"] == "auto_backup_cron"
     assert records[0]["context"]["cron"] == "0 3 * * 1"
+
+
+def test_atomic_write_leaves_no_partial_file_when_the_write_fails(tmp_path, monkeypatch):
+    # A truncated backup is indistinguishable from the newest good one when the
+    # scheduler picks the latest file, so a failed write must leave the previous
+    # content in place rather than a prefix of the new one.
+    from app import atomic_io
+
+    target = tmp_path / "auto-backup-existing.json"
+    target.write_text("previous good content", encoding="utf-8")
+
+    original_write_bytes = Path.write_bytes
+
+    def exploding_write_bytes(self, data):
+        original_write_bytes(self, data[: len(data) // 2])
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", exploding_write_bytes)
+    with pytest.raises(OSError):
+        atomic_io.atomic_write_text(target, "brand new content")
+    monkeypatch.undo()
+
+    assert target.read_text(encoding="utf-8") == "previous good content"
+    # The temporary file is cleaned up rather than left beside the real one.
+    assert [path.name for path in tmp_path.iterdir()] == ["auto-backup-existing.json"]
+
+
+def test_atomic_write_replaces_content_and_creates_parents(tmp_path):
+    from app.atomic_io import atomic_write_bytes
+
+    target = tmp_path / "nested" / "media.bin"
+
+    atomic_write_bytes(target, b"first")
+    atomic_write_bytes(target, b"second")
+
+    assert target.read_bytes() == b"second"
+    assert [path.name for path in target.parent.iterdir()] == ["media.bin"]
