@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     public_storage_prefix: str = "/media"
     auth_session_cookie_name: str = "chat_audit_session"
     auth_session_cookie_secure: bool = False
+    # Browser login lifetime. Applies to sessions created before the column
+    # existed too, measured from their creation, so no session outlives the
+    # policy by predating it. Set to 0 to keep sessions valid until revoked.
+    admin_session_ttl_hours: int = 12
+    # API tokens are long-lived by design; 0 keeps the previous behaviour of
+    # never expiring, and a positive value ages them out from creation.
+    admin_token_ttl_days: int = 0
 
     onebot_ws_path: str = "/onebot/v11/ws"
     onebot_access_token: str = ""

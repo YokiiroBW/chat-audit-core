@@ -72,6 +72,18 @@ async def _add_message_source_sequence(conn) -> None:
     )
 
 
+async def _add_admin_credential_expiry(conn) -> None:
+    for table_name in ("admin_sessions", "admin_tokens"):
+        columns = await _table_columns(conn, table_name)
+        if "expires_at" not in columns:
+            await conn.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN expires_at TIMESTAMP")
+
+
+async def _rollback_admin_credential_expiry(conn) -> None:
+    for table_name in ("admin_sessions", "admin_tokens"):
+        await _drop_column_if_exists(conn, table_name, "expires_at")
+
+
 async def _add_performance_indexes(conn) -> None:
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_room_timestamp ON messages (room_id, timestamp)")
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_platform_room_timestamp ON messages (platform, room_id, timestamp)")
@@ -144,6 +156,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_010_qqnt_import_models", "Create QQNT import and media reference tables", _create_qqnt_import_tables, _rollback_qqnt_import_tables),
     LightweightMigration("20260705_011_message_source_sequence", "Add source message sequence ordering", _add_message_source_sequence, None),
     LightweightMigration("20260705_012_unified_archive_schema", "Add unified identities, message parts, profile and media metadata", _add_unified_archive_schema, None),
+    LightweightMigration("20260705_013_admin_credential_expiry", "Add admin session and token expiry", _add_admin_credential_expiry, _rollback_admin_credential_expiry),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}

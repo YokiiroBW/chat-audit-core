@@ -393,6 +393,9 @@ class AdminToken(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    # API tokens are long-lived by design, so this stays NULL unless a lifetime
+    # is configured; see ADMIN_TOKEN_TTL_DAYS.
+    expires_at = Column(DateTime, nullable=True)
 
 
 class AdminUser(Base):
@@ -424,6 +427,10 @@ class AdminSession(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    # NULL on rows created before expiry existed; those fall back to
+    # created_at plus the configured lifetime, so an old session cannot outlive
+    # the policy simply by predating it.
+    expires_at = Column(DateTime, nullable=True)
 
 
 class SystemSetting(Base):

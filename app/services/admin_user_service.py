@@ -1,4 +1,5 @@
 import base64
+import datetime as dt
 import hashlib
 import hmac
 import re
@@ -9,6 +10,7 @@ import bcrypt
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.models import AdminSession, AdminUser
 from app.services.admin_token_service import AdminTokenService
 from app.time_utils import utc_now
@@ -139,13 +141,37 @@ class AdminUserService:
         return user
 
     @staticmethod
+    def session_ttl() -> dt.timedelta | None:
+        hours = int(getattr(get_settings(), "admin_session_ttl_hours", 0) or 0)
+        return dt.timedelta(hours=hours) if hours > 0 else None
+
+    @staticmethod
+    def session_expires_at(session: AdminSession) -> dt.datetime | None:
+        """When ``session`` stops being valid, or None when it never does.
+
+        Rows created before the column existed carry NULL, so their lifetime is
+        measured from ``created_at``; otherwise a session predating the policy
+        would outlive every session created under it.
+        """
+        if session.expires_at is not None:
+            return session.expires_at
+        ttl = AdminUserService.session_ttl()
+        if ttl is None or session.created_at is None:
+            return None
+        return session.created_at + ttl
+
+    @staticmethod
     async def create_session(db: AsyncSession, user: AdminUser) -> tuple[AdminSession, str]:
         token = AdminUserService.generate_session_token()
+        ttl = AdminUserService.session_ttl()
+        created_at = utc_now()
         session = AdminSession(
             user_id=user.id,
             token_hash=AdminTokenService.hash_token(token),
             token_prefix=token[:12],
             status="active",
+            created_at=created_at,
+            expires_at=created_at + ttl if ttl is not None else None,
         )
         db.add(session)
         await db.commit()
@@ -164,7 +190,16 @@ class AdminUserService:
         if row is None:
             return None
         session, user = row
-        session.last_used_at = utc_now()
+        now = utc_now()
+        expires_at = AdminUserService.session_expires_at(session)
+        if expires_at is not None and expires_at <= now:
+            # Retire it rather than just refusing, so the session list shows why
+            # it stopped working and the row cannot be matched again.
+            session.status = "revoked"
+            session.revoked_at = now
+            await db.commit()
+            return None
+        session.last_used_at = now
         await db.commit()
         return MatchedAdminSession(
             role=user.role,

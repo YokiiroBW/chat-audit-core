@@ -183,6 +183,12 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "applied": True,
             "applied_at": migrations_response.json()[11]["applied_at"],
         },
+        {
+            "version": "20260705_013_admin_credential_expiry",
+            "description": "Add admin session and token expiry",
+            "applied": True,
+            "applied_at": migrations_response.json()[12]["applied_at"],
+        },
     ]
     assert storage_root.exists()
     assert backup_root.exists()
@@ -216,6 +222,7 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "20260705_010_qqnt_import_models",
             "20260705_011_message_source_sequence",
             "20260705_012_unified_archive_schema",
+            "20260705_013_admin_credential_expiry",
         ]
 
 

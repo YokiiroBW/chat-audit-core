@@ -1,14 +1,17 @@
 import base64
+import datetime
 import hashlib
 
 from httpx import ASGITransport, AsyncClient
 import pytest
+from sqlalchemy import select
 
 from app.config import Settings, get_settings
 from app.database import get_db_session
 from app.main import app
-from app.models import AdminUser
+from app.models import AdminSession, AdminUser
 from app.services.admin_user_service import PASSWORD_HASH_ITERATIONS, AdminUserService
+from app.time_utils import utc_now
 
 
 def _legacy_pbkdf2_hash(password: str) -> str:
@@ -360,3 +363,110 @@ async def test_archived_html_snapshot_cannot_run_scripts_in_the_console_origin(d
     assert image_response.status_code == 200
     assert "content-security-policy" not in image_response.headers
     assert image_response.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_expired_session_is_rejected_and_retired(db_session, tmp_path, monkeypatch):
+    # A login that never expires is a credential that survives every laptop it
+    # was ever used on, so the lifetime has to be enforced on use.
+    from app.services import admin_user_service
+    from app.services.admin_user_service import AdminUserService
+
+    # The service reads settings directly, so a dependency override would not
+    # reach it.
+    settings = Settings(storage_root=tmp_path, admin_session_ttl_hours=12)
+    monkeypatch.setattr(admin_user_service, "get_settings", lambda: settings)
+
+    user = await AdminUserService.create_user(db_session, username="ttl-user", password="StrongPass!42", role="admin")
+    session, token = await AdminUserService.create_session(db_session, user)
+    assert session.expires_at is not None
+
+    assert await AdminUserService.match_session(db_session, token) is not None
+
+    session.expires_at = utc_now() - datetime.timedelta(seconds=1)
+    await db_session.commit()
+
+    assert await AdminUserService.match_session(db_session, token) is None
+    await db_session.refresh(session)
+    # Retired rather than merely refused, so the session list explains it.
+    assert session.status == "revoked"
+    assert session.revoked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_session_predating_the_expiry_column_still_ages_out(db_session, tmp_path, monkeypatch):
+    # Rows written before expires_at existed carry NULL. Treating NULL as
+    # "never expires" would let exactly the oldest sessions live forever.
+    from app.services import admin_user_service
+    from app.services.admin_user_service import AdminUserService
+
+    settings = Settings(storage_root=tmp_path, admin_session_ttl_hours=12)
+    monkeypatch.setattr(admin_user_service, "get_settings", lambda: settings)
+
+    user = await AdminUserService.create_user(db_session, username="legacy-user", password="StrongPass!42", role="admin")
+    _session, token = await AdminUserService.create_session(db_session, user)
+    legacy = (await db_session.execute(select(AdminSession).where(AdminSession.token_prefix == token[:12]))).scalar_one()
+    legacy.expires_at = None
+    legacy.created_at = utc_now() - datetime.timedelta(hours=13)
+    await db_session.commit()
+
+    assert await AdminUserService.match_session(db_session, token) is None
+
+
+@pytest.mark.asyncio
+async def test_sessions_never_expire_when_the_lifetime_is_disabled(db_session, tmp_path, monkeypatch):
+    from app.services import admin_user_service
+    from app.services.admin_user_service import AdminUserService
+
+    settings = Settings(storage_root=tmp_path, admin_session_ttl_hours=0)
+    monkeypatch.setattr(admin_user_service, "get_settings", lambda: settings)
+
+    user = await AdminUserService.create_user(db_session, username="forever-user", password="StrongPass!42", role="admin")
+    session, token = await AdminUserService.create_session(db_session, user)
+    assert session.expires_at is None
+    session.created_at = utc_now() - datetime.timedelta(days=3650)
+    await db_session.commit()
+
+    assert await AdminUserService.match_session(db_session, token) is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_api_tokens_keep_working_when_no_lifetime_is_configured(db_session, tmp_path, monkeypatch):
+    # Long-lived API tokens are the documented behaviour; turning expiry on by
+    # default would cut off every deployment on upgrade.
+    from app.services import admin_token_service
+    from app.services.admin_token_service import AdminTokenService
+
+    settings = Settings(storage_root=tmp_path)
+    monkeypatch.setattr(admin_token_service, "get_settings", lambda: settings)
+
+    record, token = await AdminTokenService.create_token(db_session, name="ci", role="admin")
+    assert record.expires_at is None
+    record.created_at = utc_now() - datetime.timedelta(days=3650)
+    await db_session.commit()
+
+    assert await AdminTokenService.match_token(db_session, token) is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_api_token_expires_once_a_lifetime_is_configured(db_session, tmp_path, monkeypatch):
+    from app.services import admin_token_service
+    from app.services.admin_token_service import AdminTokenService
+
+    settings = Settings(storage_root=tmp_path, admin_token_ttl_days=30)
+    monkeypatch.setattr(admin_token_service, "get_settings", lambda: settings)
+
+    record, token = await AdminTokenService.create_token(db_session, name="rotating", role="admin")
+    assert record.expires_at is not None
+    record.expires_at = utc_now() - datetime.timedelta(seconds=1)
+    await db_session.commit()
+
+    assert await AdminTokenService.match_token(db_session, token) is None
+    await db_session.refresh(record)
+    assert record.status == "revoked"
+
+    # Rotation issues a new credential, so it must not hand back one that is
+    # already past its own expiry.
+    rotated, rotated_token = await AdminTokenService.rotate_token(db_session, record.id)
+    assert rotated.expires_at > utc_now()
+    assert await AdminTokenService.match_token(db_session, rotated_token) is not None
