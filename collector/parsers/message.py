@@ -109,11 +109,19 @@ def _qqnt_identity(row: SourceMessageRow, context: MessageParserContext) -> tupl
         is_outgoing = outgoing_value
     elif outgoing_value is not None:
         is_outgoing = str(outgoing_value).strip().lower() in {"1", "true", "yes"}
-    sender_identity = str(_first(row.raw_columns, "40020") or "").strip()
-    conversation_identity = str(_first(row.raw_columns, "40021") or "").strip()
-    if is_outgoing is None and sender_identity and conversation_identity:
-        is_outgoing = sender_identity != conversation_identity
     if chat_type == "private":
+        # 40020/40021 carry private-chat direction: 40020 != 40021 means this
+        # account sent the message, 40020 == 40021 means the peer did.
+        #
+        # The rule is private-only. Group rows reuse both column numbers with
+        # different meanings (40020 is the sender uid, 40021 the group uid), so
+        # they are essentially never equal there — evaluating this for a group row
+        # marks every message, including everyone else's, as sent by the account,
+        # and leaves the correct group check below unreachable.
+        sender_identity = str(_first(row.raw_columns, "40020") or "").strip()
+        conversation_identity = str(_first(row.raw_columns, "40021") or "").strip()
+        if is_outgoing is None and sender_identity and conversation_identity:
+            is_outgoing = sender_identity != conversation_identity
         if is_outgoing is True:
             canonical_sender = str(context.account_id)
         else:

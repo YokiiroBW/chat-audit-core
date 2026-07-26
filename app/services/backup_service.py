@@ -1005,7 +1005,18 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
+        require_signature: bool = False,
     ) -> dict[str, Any]:
+        """Validate a backup package before import.
+
+        ``require_signature`` turns authenticity into a hard requirement: a package
+        with no checksum or no verifiable signature is rejected. It defaults to off
+        because unsigned legacy packages must stay importable (see
+        ``test_backup_service_validate_allows_unsigned_legacy_package``); operators
+        who need the guarantee enable ``BACKUP_IMPORT_REQUIRE_SIGNATURE``. Without
+        it the checksum is an unkeyed SHA-256 that anyone can recompute, so a
+        package's contents are self-asserted.
+        """
         manifest_value = package.get("manifest")
         manifest = manifest_value if isinstance(manifest_value, dict) else {}
         schema = manifest.get("schema")
@@ -1031,6 +1042,8 @@ class BackupService:
             except ValueError as exc:
                 checksum_valid = False
                 errors.append(str(exc))
+        elif require_signature:
+            errors.append("backup package checksum is required but missing")
 
         signature = manifest.get("signature")
         if signature is not None:
@@ -1045,8 +1058,16 @@ class BackupService:
                     errors.append(str(exc))
             else:
                 signature_valid = None
+                if require_signature:
+                    errors.append(
+                        "backup package signature cannot be verified because no signing key is configured"
+                    )
         elif signing_key:
             signature_valid = None
+            if require_signature:
+                errors.append("backup package signature is required but missing")
+        elif require_signature:
+            errors.append("backup package signature is required but missing")
 
         source = manifest.get("source")
         if source is not None and not isinstance(source, dict):
@@ -1098,12 +1119,14 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
+        require_signature: bool = False,
     ) -> dict[str, Any]:
         report = BackupService.validate_import_package(
             package,
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
+            require_signature=require_signature,
         )
         schema = report.get("schema")
         if not report["valid"]:
@@ -1248,6 +1271,7 @@ class BackupService:
         storage_root: Path | None = None,
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
+        require_signature: bool = False,
     ) -> dict[str, int]:
         manifest_value = package.get("manifest")
         manifest = manifest_value if isinstance(manifest_value, dict) else {}
@@ -1259,6 +1283,7 @@ class BackupService:
             storage_root=storage_root,
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
+            require_signature=require_signature,
         )
         if not report["valid"]:
             raise ValueError("; ".join(report["errors"]))

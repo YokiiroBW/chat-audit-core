@@ -5,6 +5,18 @@ import re
 from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm.attributes import set_committed_value
+
+from app.qqnt_identity import (
+    GROUP_SENDER_QQ_COLUMN,
+    PRIVATE_PEER_QQ_COLUMN,
+    is_qq_number,
+    load_raw_columns,
+    message_is_outgoing,
+    private_is_outgoing,
+    private_peer_qq,
+)
+from app.storage_paths import is_local_storage_path, stored_media_pattern
 
 from app.models import (
     Adapter,
@@ -118,7 +130,7 @@ def _qqnt_historical_reply_parts(raw_base64: str | None) -> list[dict[str, str]]
                     if preview:
                         break
             if not preview and nested_fields.get(45402):
-                preview = "[鍥剧墖]"
+                preview = "[图片]"
             if preview:
                 break
         results.append({"id": str(reply_id), "preview": preview})
@@ -144,20 +156,20 @@ def _plain_message_preview(value: str | None) -> str:
     text = value or ""
     text = re.sub(r"\[CQ:reply,[^\]]+\]", "", text)
     text = re.sub(r"\[CQ:at,qq=([^\],]+)[^\]]*\]", r"@\1", text)
-    text = re.sub(r"\[CQ:image,[^\]]+\]", "[鍥剧墖]", text)
-    text = re.sub(r"\[CQ:record,[^\]]+\]", "[璇煶]", text)
-    text = re.sub(r"\[CQ:video,[^\]]+\]", "[瑙嗛]", text)
-    text = re.sub(r"\[CQ:forward,[^\]]+\]", "[鍚堝苟杞彂]", text)
-    text = re.sub(r"\[CQ:json,[^\]]+\]", "[鍗＄墖]", text)
-    text = re.sub(r"/static/storage/[a-f0-9]{32}\.[a-z0-9]+", "[濯掍綋]", text, flags=re.I)
+    text = re.sub(r"\[CQ:image,[^\]]+\]", "[图片]", text)
+    text = re.sub(r"\[CQ:record,[^\]]+\]", "[语音]", text)
+    text = re.sub(r"\[CQ:video,[^\]]+\]", "[视频]", text)
+    text = re.sub(r"\[CQ:forward,[^\]]+\]", "[合并转发]", text)
+    text = re.sub(r"\[CQ:json,[^\]]+\]", "[卡片]", text)
+    text = stored_media_pattern().sub("[媒体]", text)
     compact = re.sub(r"\s+", " ", text).strip()
-    return compact or "[娑堟伅]"
+    return compact or "[消息]"
 
 
 def _prefer_avatar_path(*paths: str | None) -> str | None:
     values = [str(path).strip() for path in paths if path]
     for value in values:
-        if value.startswith("/static/storage/"):
+        if is_local_storage_path(value):
             return value
     return values[0] if values else None
 
@@ -180,6 +192,19 @@ def _usable_profile_name(
     ):
         return None
     return name
+
+
+def _robot_message_join(robot_id: str):
+    """ON clause for the RobotMessage outer join.
+
+    The robot filter has to live in the JOIN, not only in the WHERE: a message
+    visible to several accounts has one RobotMessage row per account, so an
+    unrestricted join multiplies the message by that count. Rows that also
+    satisfy the imported-source branch of :func:`_robot_message_scope` then pass
+    the WHERE more than once and the message is returned repeatedly, eating the
+    caller's ``limit``.
+    """
+    return and_(RobotMessage.msg_hash == Message.msg_hash, RobotMessage.robot_id == robot_id)
 
 
 def _robot_message_scope(robot_id: str):
@@ -205,7 +230,7 @@ async def _private_robot_display_name(
 ) -> str | None:
     stmt = (
         select(Message.nickname)
-        .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+        .outerjoin(RobotMessage, _robot_message_join(robot_id))
         .where(
             _robot_message_scope(robot_id),
             Message.message_type == "private",
@@ -228,25 +253,17 @@ def _qq_number_from_raw(
     message_type: str | None = None,
     exclude_robot: bool = True,
 ) -> str | None:
-    try:
-        raw = json.loads(raw_columns_json or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return None
+    raw = load_raw_columns(raw_columns_json)
     if message_type == "private":
-        sender_identity = str(raw.get("40020") or "").strip()
-        conversation_identity = str(raw.get("40021") or "").strip()
-        if sender_identity and conversation_identity and sender_identity != conversation_identity:
-            return str(robot_id) if not exclude_robot else None
-        private_peer = str(raw.get("40030") or "").strip()
-        if private_peer.isdigit() and 5 <= len(private_peer) <= 12:
-            return private_peer
-    for key in ("qq", "uin", "user_id", "40033", "40030"):
+        if private_is_outgoing(raw):
+            # The account itself sent this one, so the peer column is not the sender.
+            return None if exclude_robot else str(robot_id)
+        peer = private_peer_qq(raw)
+        if peer:
+            return peer
+    for key in ("qq", "uin", "user_id", GROUP_SENDER_QQ_COLUMN, PRIVATE_PEER_QQ_COLUMN):
         value = str(raw.get(key) or "").strip()
-        if (
-            value.isdigit()
-            and (not exclude_robot or value != str(robot_id))
-            and 5 <= len(value) <= 12
-        ):
+        if is_qq_number(value) and (not exclude_robot or value != str(robot_id)):
             return value
     return None
 
@@ -288,7 +305,7 @@ class QueryService:
                 func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
-            .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(RobotMessage, _robot_message_join(robot_id))
             .outerjoin(RoomProfile, RoomProfile.room_id == Message.room_id)
             .outerjoin(UserProfile, UserProfile.user_id == Message.room_id)
             .where(_robot_message_scope(robot_id))
@@ -309,7 +326,7 @@ class QueryService:
                         order_by=(Message.timestamp.desc(), func.coalesce(Message.source_sequence, -1).desc(), Message.msg_hash.desc()),
                     ).label("room_rank"),
                 )
-                .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                .outerjoin(RobotMessage, _robot_message_join(robot_id))
                 .outerjoin(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
                 .where(_robot_message_scope(robot_id), Message.room_id.in_(room_ids), Message.message_type == "private")
                 .subquery()
@@ -389,7 +406,7 @@ class QueryService:
         if around_message_id:
             target_result = await db.execute(
                 select(Message)
-                .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                .outerjoin(RobotMessage, _robot_message_join(robot_id))
                 .where(
                     _robot_message_scope(robot_id),
                     Message.room_id == room_id,
@@ -401,7 +418,7 @@ class QueryService:
             if target is None:
                 alias_result = await db.execute(
                     select(Message)
-                    .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+                    .outerjoin(RobotMessage, _robot_message_join(robot_id))
                     .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
                     .where(
                         _robot_message_scope(robot_id),
@@ -424,7 +441,7 @@ class QueryService:
                 UserProfile.display_name.label("sender_display_name"),
                 UserProfile.avatar_path.label("sender_avatar_path"),
             )
-            .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(RobotMessage, _robot_message_join(robot_id))
             .outerjoin(UserProfile, UserProfile.user_id == Message.sender_id)
             .where(_robot_message_scope(robot_id), Message.room_id == room_id)
         )
@@ -469,18 +486,18 @@ class QueryService:
         outgoing_by_hash: dict[str, bool] = {}
         profile_id_by_hash: dict[str, str] = {}
         for msg_hash, raw_columns_json in source_result.all():
-            try:
-                raw_columns = json.loads(raw_columns_json or "{}")
-            except (TypeError, json.JSONDecodeError):
-                raw_columns = {}
+            raw_columns = load_raw_columns(raw_columns_json)
             message_type = message_types.get(msg_hash)
-            if message_type == "private":
-                sender_identity = str(raw_columns.get("40020") or "").strip()
-                conversation_identity = str(raw_columns.get("40021") or "").strip()
-                if sender_identity and conversation_identity:
-                    outgoing_by_hash[msg_hash] = sender_identity != conversation_identity
-            elif "40033" in raw_columns:
-                outgoing_by_hash[msg_hash] = outgoing_by_hash.get(msg_hash, False) or str(raw_columns.get("40033")) == str(robot_id)
+            outgoing = message_is_outgoing(
+                raw_columns, message_type=message_type, account_id=robot_id
+            )
+            if outgoing is not None:
+                if message_type == "private":
+                    outgoing_by_hash[msg_hash] = outgoing
+                else:
+                    # Several sources may describe one group message; any source
+                    # that attributes it to this account settles the direction.
+                    outgoing_by_hash[msg_hash] = outgoing_by_hash.get(msg_hash, False) or outgoing
 
             profile_id = _qq_number_from_raw(
                 raw_columns_json,
@@ -501,7 +518,14 @@ class QueryService:
             for row in (profile_result.all() if profile_result is not None else [])
         }
         for message in messages:
-            message.is_outgoing = outgoing_by_hash.get(message.msg_hash)
+            # Only messages carrying a source record have a derivable direction.
+            # Assigning ``None`` for the rest would erase the value the realtime
+            # ingest path stored, and because this object stays attached to the
+            # request session, any later commit (avatar hydration, for one) would
+            # persist that erasure. ``set_committed_value`` attaches the derived
+            # value for serialisation without marking the row dirty.
+            if message.msg_hash in outgoing_by_hash:
+                set_committed_value(message, "is_outgoing", outgoing_by_hash[message.msg_hash])
             profile_id = profile_id_by_hash.get(message.msg_hash)
             profile = profiles.get(profile_id)
             message.sender_qq_number = profile_id
@@ -558,22 +582,33 @@ class QueryService:
             parts = parts_by_hash.setdefault(message.msg_hash, [])
             historical_replies = _qqnt_historical_reply_parts(raw_by_hash.get(message.msg_hash))
             for reply_index, reply in enumerate(historical_replies):
-                part = next((item for item in parts if item.ordinal == reply_index), None)
+                part_index = next(
+                    (index for index, item in enumerate(parts) if item.ordinal == reply_index),
+                    None,
+                )
                 payload = json.dumps(reply, ensure_ascii=False, sort_keys=True)
-                if part is None:
-                    part = MessagePart(
+                if part_index is None:
+                    parts.append(MessagePart(
                         id=-(reply_index + 1), msg_hash=message.msg_hash, ordinal=reply_index,
                         part_type="reply", text_content=None, payload_json=payload,
                         source_format="qqnt_local_db", render_status="parsed",
+                    ))
+                    continue
+                part = parts[part_index]
+                if part.part_type in {"system", "unknown", "reply"}:
+                    # Render-only overlay. Mutating the loaded row here would turn a
+                    # read into a pending UPDATE that the next commit in this session
+                    # writes back, so swap in a detached copy instead.
+                    parts[part_index] = MessagePart(
+                        id=part.id, msg_hash=part.msg_hash, ordinal=part.ordinal,
+                        part_type="reply", text_content=None,
+                        media_reference_id=part.media_reference_id, payload_json=payload,
+                        source_format=part.source_format or "qqnt_local_db",
+                        render_status="parsed",
                     )
-                    parts.append(part)
-                elif part.part_type in {"system", "unknown", "reply"}:
-                    part.part_type = "reply"
-                    part.text_content = None
-                    part.payload_json = payload
-                    part.source_format = part.source_format or "qqnt_local_db"
-                    part.render_status = "parsed"
             message.parts = sorted(parts, key=lambda item: item.ordinal)
+
+
     @staticmethod
     async def _attach_reply_previews(db: AsyncSession, messages: list[Message]) -> None:
         reply_ids = {
@@ -623,7 +658,7 @@ class QueryService:
     ) -> list[Message]:
         stmt = (
             select(Message)
-            .outerjoin(RobotMessage, RobotMessage.msg_hash == Message.msg_hash)
+            .outerjoin(RobotMessage, _robot_message_join(robot_id))
             .where(_robot_message_scope(robot_id))
         )
         if keyword:

@@ -196,7 +196,7 @@ class OfflineRepairService:
                     db,
                     profile.avatar_path,
                     media_type='image',
-                    file_name=f'{room_id}.jpg',
+                    file_name=f'{user_id}.jpg',
                     storage_root=storage_root,
                     public_prefix=public_storage_prefix,
                 )

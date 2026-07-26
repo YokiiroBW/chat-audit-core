@@ -182,9 +182,18 @@ class CollectorQueue:
             )
             readiness = ""
             if kind == "message":
+                # A message waits for its media, but only for media that can still
+                # make progress. Media that reached dead_letter never becomes
+                # 'completed', so gating on 'completed' alone parks the message in
+                # 'pending' for ever: it is never uploaded, never counted as a dead
+                # letter, and requeue_dead_letter cannot reach it because the
+                # message row itself is not dead. The message reference already has
+                # an archive_state of 'failed' to describe the missing media, so let
+                # it ship with that.
                 readiness = (
                     "AND NOT EXISTS (SELECT 1 FROM pending_media media "
-                    "WHERE media.message_queue_id=pending_messages.id AND media.status!='completed')"
+                    "WHERE media.message_queue_id=pending_messages.id "
+                    "AND media.status NOT IN ('completed','dead_letter'))"
                 )
             rows = connection.execute(
                 f"SELECT * FROM {table} WHERE status IN ('pending','retry') "

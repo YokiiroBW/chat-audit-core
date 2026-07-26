@@ -19,6 +19,7 @@ from app.config import Settings, get_settings
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
 from app.metrics import metrics_registry
 from app.models import AdminUser, Message, RobotMessage, SchemaMigration
+from app.storage_paths import is_local_storage_path
 from app.schemas import (
     AdapterCreateRequest,
     AdapterResponse,
@@ -506,7 +507,11 @@ async def _hydrate_missing_bot_profiles(db: AsyncSession, profiles: list[Any], s
 def _needs_qq_avatar_refresh(avatar_path: str | None) -> bool:
     if not avatar_path:
         return True
-    return (not avatar_path.startswith("/static/storage/")) or avatar_path.lower().endswith(".svg")
+    # A cached avatar is one served from any prefix this deployment exposes.
+    # Checking a single hard-coded prefix makes every already-cached avatar look
+    # stale under a different `public_storage_prefix`, so each list request would
+    # re-download the whole page of avatars and never converge.
+    return (not is_local_storage_path(avatar_path)) or avatar_path.lower().endswith(".svg")
 
 
 @router.get("/bots/{robot_id}/capture-targets", response_model=list[CaptureTargetSettingResponse])
@@ -1678,6 +1683,7 @@ async def validate_import_data(
         storage_root=settings.storage_root,
         public_storage_prefix=settings.public_storage_prefix,
         signing_key=settings.app_secret_key,
+        require_signature=settings.backup_import_require_signature,
     )
     return ImportValidationResponse(**report)
 
@@ -1708,6 +1714,7 @@ async def import_data(
             storage_root=settings.storage_root,
             public_storage_prefix=settings.public_storage_prefix,
             signing_key=settings.app_secret_key,
+            require_signature=settings.backup_import_require_signature,
         )
     except ValueError as exc:
         await db.rollback()

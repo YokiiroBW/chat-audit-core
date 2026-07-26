@@ -48,6 +48,10 @@ class Settings(BaseSettings):
 
     auto_backup_cron: str = "0 3 * * *"
     auto_backup_keep_latest: int = 7
+    # Reject import packages that carry no checksum or no verifiable signature.
+    # Off by default so unsigned legacy packages stay importable; turn it on to
+    # require that every imported archive proves where it came from.
+    backup_import_require_signature: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

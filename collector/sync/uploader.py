@@ -335,6 +335,11 @@ class QueueUploader:
     ) -> None:
         if not items:
             return
+        # Bound before the try: creating the batch is itself a request that can
+        # fail, and the error handler below logs batch_id. Leaving it unbound turns
+        # a routine retryable failure into an UnboundLocalError, which is not a
+        # CollectorApiError and so escapes run_once and kills the daemon.
+        batch_id: str | None = None
         try:
             batch_id = await self._create_writable_batch(
                 source_id=source_id,

@@ -12,9 +12,14 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.storage_paths import count_local_storage_paths, known_storage_prefixes
 from app.models import MediaAsset, Message, MessageMediaReference, MessagePart, MessageSourceRecord, RobotMessage
 from app.services.capture_policy_service import CapturePolicyService
 from app.time_utils import utc_now
+
+# Segment types that render an archived file and therefore consume one media
+# reference ordinal. Keep in step with the media branch of the web console.
+MEDIA_PART_TYPES = frozenset({"image", "record", "video", "file"})
 
 
 class MessageService:
@@ -227,6 +232,7 @@ class MessageService:
             local_message=local_message,
             public_prefix=media_public_prefix or get_settings().public_storage_prefix,
         )
+        await MessageService.link_message_parts_to_media(db, msg_hash)
 
         assoc_result = await db.execute(
             select(RobotMessage).where(
@@ -334,6 +340,47 @@ class MessageService:
                 if data.get(key) is not None:
                     data[key] = str(data[key])
         return {"type": part_type[:20], "data": data}
+
+    @staticmethod
+    async def link_message_parts_to_media(db: AsyncSession, msg_hash: str) -> int:
+        """Point each media part at the media reference it renders.
+
+        Parts are numbered across every segment of a message while media
+        references are numbered across media only, so the two ordinals do not line
+        up: in "text then image" the image is part ordinal 1 but media ordinal 0.
+        A reader pairing them by raw ordinal therefore finds nothing and falls back
+        to the remote URL, losing both the archived asset and the availability
+        reason that explains why a file is unavailable.
+
+        Resolve the mapping once and store it on the part. Call this after the
+        media references exist — parts are written first, so the link cannot be
+        made at insert time.
+        """
+        reference_result = await db.execute(
+            select(MessageMediaReference.ordinal, MessageMediaReference.id)
+            .where(MessageMediaReference.msg_hash == msg_hash)
+        )
+        reference_by_ordinal = {ordinal: reference_id for ordinal, reference_id in reference_result.all()}
+        if not reference_by_ordinal:
+            return 0
+        part_result = await db.execute(
+            select(MessagePart)
+            .where(MessagePart.msg_hash == msg_hash)
+            .order_by(MessagePart.ordinal.asc())
+        )
+        linked = 0
+        media_ordinal = 0
+        for part in part_result.scalars().all():
+            if str(part.part_type or "").lower() not in MEDIA_PART_TYPES:
+                continue
+            reference_id = reference_by_ordinal.get(media_ordinal)
+            media_ordinal += 1
+            if reference_id is not None and part.media_reference_id != reference_id:
+                part.media_reference_id = reference_id
+                linked += 1
+        return linked
+
+    @staticmethod
     async def _upsert_message_parts(
         db: AsyncSession,
         *,
@@ -386,7 +433,7 @@ class MessageService:
     @staticmethod
     def _local_message_score(value: str | None) -> tuple[int, int]:
         text = value or ""
-        return (text.count("/static/storage/"), len(text))
+        return (count_local_storage_paths(text), len(text))
 
     @staticmethod
     async def _upgrade_structured_media_from_local_message(
@@ -438,11 +485,7 @@ class MessageService:
     def local_media_paths_by_ordinal(local_message: str | None, public_prefix: str = "/static/storage") -> list[str | None]:
         from app.services.media_service import _parse_cq_params
 
-        prefixes = tuple(dict.fromkeys((
-            public_prefix.rstrip("/") + "/",
-            "/media/",
-            "/static/storage/",
-        )))
+        prefixes = known_storage_prefixes(public_prefix)
         escaped_prefixes = "|".join(re.escape(prefix) for prefix in prefixes)
         local_path_pattern = rf"(?:{escaped_prefixes})[^\s\"'<>),\]]+?\.[a-z0-9]+"
         pattern = re.compile(rf"\[CQ:(?:image|record|video|file),([^\]]*)\]|({local_path_pattern})", re.I)

@@ -52,6 +52,7 @@
       loadingHistory: false,
       loadingRoom: false,
       roomLoadToken: 0,
+      accountLoadToken: 0,
       roomRequestController: null,
       historyLoadToken: 0,
       highlightedMessageId: '',
@@ -140,6 +141,18 @@
       }
     };
 
+    // One sign-in at a time. The initial load fires several requests at once and
+    // the live refresh fires more every few seconds, so without a shared gate an
+    // expired session shows a separate blocking prompt for every request in
+    // flight. The first 401 opens the prompt; the rest wait for that answer.
+    let pendingAuthPrompt = null;
+    const requestAdminApiToken = () => {
+      if (!pendingAuthPrompt) {
+        pendingAuthPrompt = promptForAdminApiToken().finally(() => { pendingAuthPrompt = null; });
+      }
+      return pendingAuthPrompt;
+    };
+
     const migrateLegacyAdminApiToken = async () => {
       const legacyToken = localStorage.getItem('chatAuditAdminApiToken');
       if (!legacyToken) return;
@@ -217,9 +230,12 @@
           const headers = csrfHeaders(method, authHeaders(options.headers || {}));
           let response = await fetch(url, { ...options, headers });
           if (response.status === 401 && attempt === 0) {
-            const tokenChangedWhileRequesting = state.authGeneration !== requestAuthGeneration;
-            const canReuseNewToken = tokenChangedWhileRequesting && Boolean(state.adminApiToken);
-            if (!canReuseNewToken && !(await promptForAdminApiToken())) return response;
+            // A session established while this request was in flight is enough to
+            // retry: the credential lives in an HttpOnly cookie, so there is no
+            // token in `state` to check for. Testing one would make this branch
+            // unreachable and re-prompt for every concurrent request.
+            const sessionChangedWhileRequesting = state.authGeneration !== requestAuthGeneration;
+            if (!sessionChangedWhileRequesting && !(await requestAdminApiToken())) return response;
             response = await fetch(url, {
               ...options,
               headers: csrfHeaders(method, authHeaders(options.headers || {})),
@@ -900,7 +916,10 @@
     const renderAuthStatus = () => {
       const identity = state.authIdentity;
       el('authActor').textContent = identity ? `${identity.actor} · ${identity.role}` : (state.adminApiToken ? 'Token 已设置' : '未登录');
-      el('logoutButton').disabled = !state.adminApiToken;
+      // Sessions live in an HttpOnly cookie, so `adminApiToken` is always empty and
+      // gating on it left the button permanently disabled. Signed in means having
+      // an identity.
+      el('logoutButton').disabled = !state.authIdentity;
       const box = el('authStatusReport');
       clearNode(box);
       const rows = [
@@ -1587,26 +1606,46 @@
       if (!parts.length) return false;
       const mediaById = new Map((message.media || []).map((reference) => [String(reference.id), reference]));
       const mediaByOrdinal = new Map((message.media || []).map((reference) => [Number(reference.ordinal || 0), reference]));
+      const consumedReferences = new Set();
       const wrapper = document.createElement('div');
       wrapper.className = 'cq-parts';
       let rendered = false;
+      // Media references are numbered across media only, while parts are numbered
+      // across every segment, so "text then image" puts the image at part ordinal 1
+      // and media ordinal 0. Pairing them by raw ordinal misses on any message whose
+      // media is not first, which drops the archived file and the availability
+      // reason. Count media parts separately to line the two up.
+      let mediaPartOrdinal = 0;
       parts.forEach((part) => {
         const normalizedPart = normalizeMessagePartForView(part);
         const payload = normalizedPart.data;
-        const reference = part.media_reference_id !== null && part.media_reference_id !== undefined
+        const isMediaPart = ['image', 'record', 'video', 'file'].includes(normalizedPart.type);
+        let reference = part.media_reference_id !== null && part.media_reference_id !== undefined
           ? mediaById.get(String(part.media_reference_id))
           : null;
-        const fallbackReference = reference || (['image', 'record', 'video', 'file'].includes(String(part.part_type || '').toLowerCase())
-          ? mediaByOrdinal.get(Number(part.ordinal || 0))
-          : null);
-        if (fallbackReference) {
-          renderMediaReference(wrapper, fallbackReference);
+        if (!reference && isMediaPart) {
+          const byOrdinal = mediaByOrdinal.get(mediaPartOrdinal);
+          // Never render a reference twice: an earlier part may already have
+          // claimed this one through an explicit media_reference_id.
+          if (byOrdinal && !consumedReferences.has(String(byOrdinal.id))) reference = byOrdinal;
+        }
+        if (isMediaPart) mediaPartOrdinal += 1;
+        if (reference) {
+          consumedReferences.add(String(reference.id));
+          renderMediaReference(wrapper, reference);
           rendered = true;
           return;
         }
         const segment = { type: normalizedPart.type, data: payload };
         if (part.text_content && !payload.text) segment.data.text = part.text_content;
         renderOneBotSegment(wrapper, segment);
+        rendered = true;
+      });
+      // Anything the parts did not account for still has to be shown; silently
+      // dropping it would hide media whose state the audit view exists to report.
+      (message.media || []).forEach((reference) => {
+        if (consumedReferences.has(String(reference.id))) return;
+        renderMediaReference(wrapper, reference);
         rendered = true;
       });
       const hasTextPart = parts.some((part) => normalizeMessagePartForView(part).type === "text");
@@ -2525,21 +2564,30 @@
       pushUiLog(`切换账号：${acc.display_name || acc.id}`);
       clearSearch();
       state.loadingRooms = true;
+      // Switching again before these requests land must not let the slower, older
+      // response install its rooms over the newer account's: the sidebar would then
+      // list one account's conversations under another's name.
+      state.accountLoadToken = (state.accountLoadToken || 0) + 1;
+      const loadToken = state.accountLoadToken;
       renderAll();
       try {
         const [rooms, captureTargets] = await Promise.all([
           apiGet(`/api/rooms?robot_id=${encodeURIComponent(acc.id)}`),
           apiGet(`/api/bots/${encodeURIComponent(acc.id)}/capture-targets`),
         ]);
+        if (loadToken !== state.accountLoadToken) return;
         state.roomList = rooms;
         state.captureTargetList = captureTargets;
         state.capturePolicyError = '';
       } catch (error) {
+        if (loadToken !== state.accountLoadToken) return;
         state.capturePolicyError = error.message || String(error);
         throw error;
       } finally {
-        state.loadingRooms = false;
-        renderAll();
+        if (loadToken === state.accountLoadToken) {
+          state.loadingRooms = false;
+          renderAll();
+        }
       }
     }
 
