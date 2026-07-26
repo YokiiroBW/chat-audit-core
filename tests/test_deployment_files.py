@@ -59,7 +59,9 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
 
     services = compose["services"]
     assert set(services) == {"app"}
-    assert "8000:8000" in services["app"]["ports"]
+    # 端口保留可覆盖的绑定地址前缀，默认仍对所有网卡开放。
+    assert any(entry.endswith("8000:8000") for entry in services["app"]["ports"])
+    assert all(entry.startswith("${APP_BIND_ADDRESS:-0.0.0.0}:") for entry in services["app"]["ports"])
     assert "${DATABASE_DATA_PATH:-./data/database}:/app/data/database" in services["app"]["volumes"]
     assert "${MEDIA_STORAGE_PATH:-./data/storage}:/app/data/storage" in services["app"]["volumes"]
     assert "${BACKUP_STORAGE_PATH:-./data/backups}:/app/data/backups" in services["app"]["volumes"]
