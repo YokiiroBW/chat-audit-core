@@ -115,7 +115,7 @@
 - [ ] **FQ\-37 · M23 GUI 线程安全** —— `gui/app.py:663,647-651` 进 `_run_task` 前于主线程取 Tk 变量值再传纯数据(参照 `auto_detect`)。工作量 S。
 - [ ] **FQ\-38 · M24 protobuf 递归深度** —— `parsers/protobuf.py:156-191` 加 `max_depth` 参数(参照 `forward.py`),防畸形 reply 中断整库扫描。工作量 S。
 - [ ] **FQ\-39 · M25 迁移守护 \+ 索引/约束漂移** —— 增"旧库全链迁移后与全新库逐表 diff"守护测试;统一索引名(`ix_` vs `idx_`);为旧库补 `content_sha256` 唯一约束(先清重)与 `avatar_status` NULL 回填。位置 `helpers.py`、`database.py:62-63`、`models.py:70,85,101,137`。工作量 M。
-- [ ] **FQ\-40 · M28 采集器打包图标** —— 补 `collector/packaging/chat-audit-collector.ico` 或从两份 `.spec` 移除 `icon=`。工作量 S。
+- [x] **FQ\-40 · M28 采集器打包图标** —— **审计结论已过时**:该图标在 `2d66a87` 就已加入仓库并被 `git ls-files` 跟踪(5682 字节、合法 ICONDIR、含 7 种尺寸),两份 spec 的 `icon=` 一直指向真实文件。本轮只补上缺失的测试:校验文件存在、ICO 头合法、且两份 spec 都仍引用它 —— 因为图标缺失只会在打包那一刻炸,那是最不该发现问题的时机。
 - [ ] **FQ\-41 · M29 前端加载失败提示** —— `app.js:2941-2942` 增 `roomLoadError` 状态,`renderChat` 空列表时区分"确无消息"与"加载失败\+重试"。工作量 S。
 - [ ] **FQ\-42 · M30 前端渲染增量化** —— `renderChat`(`app.js:1458-1546`)按 `messageKey` 做增量 diff(新增 append、状态变化局部更新),避免轮询打断媒体播放/丢选区;媒体筛选下轮询沿用合并策略(`:3075-3077`)。工作量 L。
 - [ ] **FQ\-43 · M31 GUI 主线程阻塞** —— stop/exit(`controller.py:544`)异步化;状态刷新(`app.py:550,587`)移后台线程回填、`initialize()` 只启动一次、缓存 `has_api_token`。工作量 M。
