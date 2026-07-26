@@ -39,7 +39,20 @@ class MessageService:
         room_id: str,
         sender_id: str,
         event_identity: str,
+        message_type: str | None = None,
+        timestamp: int | None = None,
+        raw_message: str | None = None,
     ) -> tuple[str, Message | None]:
+        """Find the row this event already lives in, if any.
+
+        The import path carries a stable per-source key, so the same QQNT
+        message re-imported twice converges. A realtime NapCat event has only
+        its own connection-scoped message id, which never matches the id the
+        importer recorded, so archiving the same conversation both ways
+        produced two rows for one message -- and only in that order, since an
+        import arriving second does find the realtime row through the source
+        record lookup below.
+        """
         msg_hash = MessageService.message_hash(
             platform=platform,
             room_id=room_id,
@@ -74,7 +87,53 @@ class MessageService:
                 .with_for_update()
             )
             message = result.scalars().first()
+        if message is None and message_type is not None and timestamp is not None and raw_message is not None:
+            message = await MessageService._resolve_imported_twin(
+                db,
+                platform=platform,
+                room_id=room_id,
+                sender_id=sender_id,
+                message_type=message_type,
+                timestamp=timestamp,
+                raw_message=raw_message,
+            )
         return (message.msg_hash if message is not None else msg_hash), message
+
+    @staticmethod
+    async def _resolve_imported_twin(
+        db: AsyncSession,
+        *,
+        platform: str,
+        room_id: str,
+        sender_id: str,
+        message_type: str,
+        timestamp: int,
+        raw_message: str,
+    ) -> Message | None:
+        """The already-imported row this realtime event is a second copy of.
+
+        Deliberately narrower than the importer's own semantic fallback. It only
+        considers rows that carry an import source record, so two realtime
+        events can never be merged into each other -- that is the failure this
+        avoids repeating, where a group member sending the same short text twice
+        in one second lost the second message. An imported row, by contrast,
+        cannot be the same realtime delivery arriving twice.
+        """
+        result = await db.execute(
+            select(Message)
+            .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
+            .where(
+                Message.platform == platform,
+                Message.room_id == room_id,
+                Message.sender_id == sender_id,
+                Message.message_type == message_type,
+                Message.timestamp == timestamp,
+                Message.raw_message == raw_message,
+            )
+            .order_by(Message.msg_hash.asc())
+            .with_for_update()
+        )
+        return result.scalars().first()
 
     @staticmethod
     async def save_media_asset(
@@ -151,6 +210,9 @@ class MessageService:
             room_id=room_id,
             sender_id=sender_id,
             event_identity=str(event_identity),
+            message_type=msg_data.get("message_type"),
+            timestamp=msg_data.get("timestamp"),
+            raw_message=raw_message,
         )
 
         local_message = msg_data.get("local_message", raw_message)

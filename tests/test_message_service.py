@@ -1,5 +1,7 @@
 import pytest
+from sqlalchemy import func, select
 
+from app.models import ImportSource, Message, MessageSourceRecord
 from app.services.message_service import MessageService
 
 
@@ -163,3 +165,82 @@ def test_normalize_message_segment_has_stable_face_fallback_for_object_raw_value
         "type": "face",
         "data": {"id": "277", "raw": "[object Object]", "name": "QQ 表情 #277"},
     }
+
+
+@pytest.mark.asyncio
+async def test_realtime_event_converges_with_an_already_imported_message(db_session):
+    # A QQNT import and a NapCat capture of the same conversation produced two
+    # rows for one message, because the realtime event's connection-scoped id
+    # never matches the id the importer recorded.
+    source = ImportSource(
+        id="qqnt-source-twin",
+        source_type="qqnt_local_db",
+        platform="qq",
+        account_id="robot-a",
+        device_id="main-pc",
+        status="active",
+    )
+    imported = Message(
+        msg_hash="imported-twin-hash",
+        platform="qq",
+        room_id="group-twin",
+        message_type="group",
+        external_message_id="qqnt-9001",
+        sender_id="user-a",
+        nickname="A",
+        raw_message="same message body",
+        local_message="same message body",
+        timestamp=1783000000,
+    )
+    db_session.add_all(
+        [
+            source,
+            imported,
+            MessageSourceRecord(
+                msg_hash=imported.msg_hash,
+                source_id=source.id,
+                source_table="group_msg_table",
+                source_primary_key="row-1",
+                source_external_message_id="qqnt-9001",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    msg_hash = await MessageService.process_incoming_message(
+        db_session,
+        "robot-a",
+        "qq",
+        {
+            "message_id": "napcat-4242",
+            "room_id": "group-twin",
+            "message_type": "group",
+            "sender_id": "user-a",
+            "nickname": "A",
+            "raw_message": "same message body",
+            "timestamp": 1783000000,
+        },
+    )
+
+    assert msg_hash == "imported-twin-hash"
+    assert await db_session.scalar(select(func.count(Message.msg_hash))) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_realtime_events_with_identical_text_stay_separate(db_session):
+    # The failure this must not repeat: a member sending the same short text
+    # twice within one second is two messages, not one.
+    payload = {
+        "room_id": "group-echo",
+        "message_type": "group",
+        "sender_id": "user-a",
+        "nickname": "A",
+        "raw_message": "+1",
+        "timestamp": 1783000000,
+    }
+
+    first = await MessageService.process_incoming_message(db_session, "robot-a", "qq", {**payload, "message_id": "napcat-1"})
+    second = await MessageService.process_incoming_message(db_session, "robot-a", "qq", {**payload, "message_id": "napcat-2"})
+
+    assert first != second
+    assert await db_session.scalar(select(func.count(Message.msg_hash))) == 2
