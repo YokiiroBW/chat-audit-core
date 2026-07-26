@@ -107,6 +107,9 @@ class Message(Base):
 
     __table_args__ = (
         Index("idx_room_timestamp", "room_id", "timestamp"),
+        # Declared here as well as in migration 011: a database built straight
+        # from the models used to lack it entirely.
+        Index("idx_room_timestamp_sequence", "room_id", "timestamp", "source_sequence"),
         Index("idx_platform_room_timestamp", "platform", "room_id", "timestamp"),
         Index("idx_sender_timestamp", "sender_id", "timestamp"),
         Index("idx_message_type_timestamp", "message_type", "timestamp"),

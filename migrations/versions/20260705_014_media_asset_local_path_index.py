@@ -12,8 +12,8 @@ from migrations.helpers import create_current_schema, has_index
 
 def upgrade() -> None:
     create_current_schema()
-    if not has_index("media_assets", "idx_media_assets_local_path"):
-        op.create_index("idx_media_assets_local_path", "media_assets", ["local_path"])
+    if not has_index("media_assets", "ix_media_assets_local_path"):
+        op.create_index("ix_media_assets_local_path", "media_assets", ["local_path"])
 
 
 def downgrade() -> None:

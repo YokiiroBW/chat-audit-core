@@ -87,11 +87,19 @@ async def _rollback_admin_credential_expiry(conn) -> None:
 async def _add_media_asset_local_path_index(conn) -> None:
     # Six services look assets up by local_path, including the per-message media
     # resolution on every read, and the column had no index.
-    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_media_assets_local_path ON media_assets (local_path)")
+    await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_media_assets_local_path ON media_assets (local_path)")
 
 
 async def _rollback_media_asset_local_path_index(conn) -> None:
-    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_media_assets_local_path")
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS ix_media_assets_local_path")
+
+
+async def _drop_duplicate_column_indexes(conn) -> None:
+    # These shadow indexes the models already declare on the same single column,
+    # under a different prefix, so every write maintained two identical trees.
+    # The model's ix_ index stays; only the idx_ twin goes.
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_media_assets_content_sha256")
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_messages_is_outgoing")
 
 
 async def _add_performance_indexes(conn) -> None:
@@ -168,6 +176,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_012_unified_archive_schema", "Add unified identities, message parts, profile and media metadata", _add_unified_archive_schema, None),
     LightweightMigration("20260705_013_admin_credential_expiry", "Add admin session and token expiry", _add_admin_credential_expiry, _rollback_admin_credential_expiry),
     LightweightMigration("20260705_014_media_asset_local_path_index", "Index media assets by local path", _add_media_asset_local_path_index, _rollback_media_asset_local_path_index),
+    LightweightMigration("20260705_015_drop_duplicate_column_indexes", "Drop duplicate single-column indexes", _drop_duplicate_column_indexes, None),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}
