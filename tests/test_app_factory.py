@@ -201,6 +201,12 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "applied": True,
             "applied_at": migrations_response.json()[14]["applied_at"],
         },
+        {
+            "version": "20260705_016_media_asset_content_uniqueness",
+            "description": "Merge duplicate media assets and backfill avatar status",
+            "applied": True,
+            "applied_at": migrations_response.json()[15]["applied_at"],
+        },
     ]
     assert storage_root.exists()
     assert backup_root.exists()
@@ -237,6 +243,7 @@ def test_create_app_lifespan_initializes_storage_and_database(tmp_path):
             "20260705_013_admin_credential_expiry",
             "20260705_014_media_asset_local_path_index",
             "20260705_015_drop_duplicate_column_indexes",
+            "20260705_016_media_asset_content_uniqueness",
         ]
 
 
