@@ -595,3 +595,50 @@ async def test_onebot_websocket_keeps_connection_after_unexpected_single_message
     messages = await QueryService.list_messages(db_session, robot_id="123456", room_id="998877")
     assert websocket.accepted is True
     assert [message.raw_message for message in messages] == ["second message survives"]
+
+
+def test_websocket_token_comparison_is_constant_time():
+    # A plain == returns as soon as two bytes differ, which leaks the shared
+    # token one character at a time to anyone who can time the handshake.
+    from pathlib import Path
+
+    source = Path("app/ws.py").read_text(encoding="utf-8")
+    authorize = source[source.index("def _is_authorized("):]
+    authorize = authorize[: authorize.index("\ndef ")]
+
+    assert "secrets.compare_digest" in authorize
+    assert "== configured_token" not in authorize
+
+
+def test_websocket_loop_survives_a_frame_that_is_not_json():
+    # One unparsable frame used to end the connection, taking every message
+    # that would have followed it.
+    from pathlib import Path
+
+    source = Path("app/ws.py").read_text(encoding="utf-8")
+
+    assert "except json.JSONDecodeError:" in source
+    assert 'record_onebot_message(status="invalid_json")' in source
+
+
+def test_rate_limit_buckets_do_not_grow_without_bound():
+    import time
+
+    from app.api import _RATE_LIMIT_BUCKETS, _RATE_LIMIT_BUCKET_LIMIT, _enforce_high_risk_rate_limit
+    from app.config import Settings
+
+    _RATE_LIMIT_BUCKETS.clear()
+    expired = time.monotonic() - 3600
+    for index in range(_RATE_LIMIT_BUCKET_LIMIT + 10):
+        _RATE_LIMIT_BUCKETS[(f"198.51.100.{index}", "backup.run")] = [expired]
+
+    class _Request:
+        headers: dict[str, str] = {}
+        client = type("C", (), {"host": "203.0.113.1"})()
+
+    _enforce_high_risk_rate_limit(_Request(), "backup.run", Settings(high_risk_rate_limit_per_minute=10))
+
+    # Expired buckets are dropped; the caller that just arrived is kept.
+    assert len(_RATE_LIMIT_BUCKETS) == 1
+    assert ("203.0.113.1", "backup.run") in _RATE_LIMIT_BUCKETS
+    _RATE_LIMIT_BUCKETS.clear()

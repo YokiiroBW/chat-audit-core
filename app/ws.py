@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import secrets
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -49,7 +51,13 @@ def _is_authorized(websocket: WebSocket, configured_token: str) -> bool:
 
     query_token = websocket.query_params.get("access_token")
     bearer_token = _extract_bearer_token(websocket.headers.get("authorization"))
-    return query_token == configured_token or bearer_token == configured_token
+    # Constant time: a plain == returns as soon as two bytes differ, which leaks
+    # the shared token one character at a time to anyone who can measure the
+    # handshake.
+    return any(
+        candidate is not None and secrets.compare_digest(candidate, configured_token)
+        for candidate in (query_token, bearer_token)
+    )
 
 
 def _extract_robot_id(event: dict[str, Any]) -> str | None:
@@ -276,7 +284,14 @@ async def onebot11_reverse_ws(
             )
         )
         while True:
-            event = await websocket.receive_json()
+            try:
+                event = await websocket.receive_json()
+            except json.JSONDecodeError:
+                # One unparsable frame is not a reason to drop the connection
+                # and lose every message that would have followed it.
+                metrics_registry.record_onebot_message(status="invalid_json")
+                logger.warning("Discarding a OneBot frame that is not valid JSON")
+                continue
 
             robot_id = _extract_robot_id(event)
             if robot_id:

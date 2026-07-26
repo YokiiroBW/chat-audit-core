@@ -98,6 +98,8 @@ from app.services.user_profile_service import UserProfileService
 
 
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str], list[float]] = {}
+# Above this many tracked buckets, drop the ones whose window has fully expired.
+_RATE_LIMIT_BUCKET_LIMIT = 1024
 _VALID_ADMIN_ROLES = VALID_ADMIN_ROLES
 _EXTERNAL_MEDIA_TYPES = {"image", "voice", "video", "file"}
 logger = logging.getLogger(__name__)
@@ -313,6 +315,12 @@ def _enforce_high_risk_rate_limit(request: Request, action: str, settings: Setti
         )
     bucket.append(now)
     _RATE_LIMIT_BUCKETS[key] = bucket
+    # Every distinct caller and action leaves an entry behind for good
+    # otherwise, so the dictionary only ever grew.
+    if len(_RATE_LIMIT_BUCKETS) > _RATE_LIMIT_BUCKET_LIMIT:
+        for stale_key, timestamps in list(_RATE_LIMIT_BUCKETS.items()):
+            if stale_key != key and all(now - timestamp >= 60 for timestamp in timestamps):
+                del _RATE_LIMIT_BUCKETS[stale_key]
 
 
 def _normalize_external_media_type(value: Any) -> str:
