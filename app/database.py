@@ -22,6 +22,11 @@ class LightweightMigration:
     rollback: MigrationApply | None = None
 
 
+def _sql_literal(value: str) -> str:
+    """Quote an identifier value for inline SQL, doubling embedded quotes."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 async def _noop_migration(_conn) -> None:
     return None
 
@@ -102,6 +107,66 @@ async def _drop_duplicate_column_indexes(conn) -> None:
     await conn.exec_driver_sql("DROP INDEX IF EXISTS idx_messages_is_outgoing")
 
 
+# Every column that names a media asset. A duplicate row cannot simply be
+# deleted: whatever pointed at it has to be moved to the row that survives, or
+# the message loses its media.
+_MEDIA_ASSET_REFERENCES = (
+    ("message_media_references", "asset_file_hash"),
+    ("message_media_references", "thumbnail_file_hash"),
+    ("room_profiles", "avatar_file_hash"),
+    ("user_profiles", "avatar_file_hash"),
+    ("profile_change_records", "old_avatar_file_hash"),
+    ("profile_change_records", "new_avatar_file_hash"),
+)
+
+
+def merge_duplicate_media_assets_sync(execute) -> None:
+    """Collapse assets sharing a content_sha256, then make the column unique.
+
+    Rows predating content_sha256 carry NULL, which no database counts as a
+    duplicate, so real collisions are rare -- but the unique index cannot be
+    created while any exist. The surviving row is the oldest one, chosen by
+    created_at then file_hash so the outcome does not depend on row order.
+
+    Written against a plain ``execute`` callable so the lightweight registry and
+    the alembic revision run the same code. They must not drift: this one
+    rewrites and deletes rows.
+    """
+    duplicates = execute(
+        "SELECT content_sha256 FROM media_assets "
+        "WHERE content_sha256 IS NOT NULL "
+        "GROUP BY content_sha256 HAVING COUNT(*) > 1"
+    ).fetchall()
+    for (content_sha256,) in duplicates:
+        rows = execute(
+            "SELECT file_hash FROM media_assets WHERE content_sha256 = "
+            f"{_sql_literal(content_sha256)} ORDER BY created_at ASC, file_hash ASC"
+        ).fetchall()
+        keeper = rows[0][0]
+        for (loser,) in rows[1:]:
+            for table_name, column_name in _MEDIA_ASSET_REFERENCES:
+                execute(
+                    f"UPDATE {table_name} SET {column_name} = {_sql_literal(keeper)} "
+                    f"WHERE {column_name} = {_sql_literal(loser)}"
+                )
+            execute(f"DELETE FROM media_assets WHERE file_hash = {_sql_literal(loser)}")
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_media_assets_content_sha256 ON media_assets (content_sha256)")
+    # NOT NULL with a default on the model, so a NULL here is a row that predates
+    # the column. Left as NULL the avatar is neither cached nor pending, and
+    # nothing ever picks it up again.
+    for table_name in ("room_profiles", "user_profiles"):
+        execute(f"UPDATE {table_name} SET avatar_status = 'unknown' WHERE avatar_status IS NULL")
+
+
+async def _merge_duplicate_media_assets(conn) -> None:
+    await conn.run_sync(lambda sync_conn: merge_duplicate_media_assets_sync(sync_conn.exec_driver_sql))
+
+
+async def _rollback_merge_duplicate_media_assets(conn) -> None:
+    # Merged rows cannot be brought back; only the constraint is reversible.
+    await conn.exec_driver_sql("DROP INDEX IF EXISTS ix_media_assets_content_sha256")
+
+
 async def _add_performance_indexes(conn) -> None:
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_room_timestamp ON messages (room_id, timestamp)")
     await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_platform_room_timestamp ON messages (platform, room_id, timestamp)")
@@ -177,6 +242,7 @@ LIGHTWEIGHT_MIGRATION_REGISTRY = (
     LightweightMigration("20260705_013_admin_credential_expiry", "Add admin session and token expiry", _add_admin_credential_expiry, _rollback_admin_credential_expiry),
     LightweightMigration("20260705_014_media_asset_local_path_index", "Index media assets by local path", _add_media_asset_local_path_index, _rollback_media_asset_local_path_index),
     LightweightMigration("20260705_015_drop_duplicate_column_indexes", "Drop duplicate single-column indexes", _drop_duplicate_column_indexes, None),
+    LightweightMigration("20260705_016_media_asset_content_uniqueness", "Merge duplicate media assets and backfill avatar status", _merge_duplicate_media_assets, _rollback_merge_duplicate_media_assets),
 )
 
 LIGHTWEIGHT_MIGRATIONS = {migration.version: migration.description for migration in LIGHTWEIGHT_MIGRATION_REGISTRY}

@@ -88,3 +88,73 @@ def test_a_migrated_database_matches_one_built_from_the_models():
     assert migrated["tables"] == fresh["tables"]
     assert migrated["columns"] == fresh["columns"]
     assert migrated["indexes"] == fresh["indexes"]
+
+
+def test_duplicate_media_assets_are_merged_not_dropped():
+    # Deleting a duplicate row on its own would leave every message that pointed
+    # at it without media. References have to move to the surviving row first.
+    import asyncio
+    import sqlite3
+    import tempfile
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.database import _merge_duplicate_media_assets
+    from app.models import Base
+
+    async def run(path: Path) -> None:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+                # Drop the unique index so duplicates can be planted, the way an
+                # archive written before content_sha256 existed would look.
+                await connection.exec_driver_sql("DROP INDEX IF EXISTS ix_media_assets_content_sha256")
+                for file_hash, created_at in (("keeper-hash", "2026-01-01"), ("loser-hash", "2026-06-01")):
+                    await connection.exec_driver_sql(
+                        "INSERT INTO media_assets (file_hash, content_sha256, file_type, file_size, local_path, created_at)"
+                        f" VALUES ('{file_hash}', 'shared-sha', 'image', 10, '/media/{file_hash}.jpg', '{created_at}')"
+                    )
+                await connection.exec_driver_sql(
+                    "INSERT INTO message_media_references"
+                    " (msg_hash, ordinal, media_type, source_state, archive_state, asset_file_hash, first_seen_at, last_checked_at)"
+                    " VALUES ('m1', 0, 'image', 'downloaded', 'complete', 'loser-hash', '2026-01-01', '2026-01-01')"
+                )
+                # Rebuild user_profiles the way it looked before avatar_status
+                # became NOT NULL; the current schema will not accept the NULL a
+                # legacy archive actually holds.
+                await connection.exec_driver_sql("DROP TABLE user_profiles")
+                await connection.exec_driver_sql(
+                    "CREATE TABLE user_profiles ("
+                    " user_id VARCHAR(64) PRIMARY KEY, platform VARCHAR(20) NOT NULL,"
+                    " display_name VARCHAR(128), avatar_path VARCHAR(255), avatar_file_hash VARCHAR(64),"
+                    " avatar_source_url TEXT, avatar_status VARCHAR(20), updated_at DATETIME NOT NULL)"
+                )
+                await connection.exec_driver_sql(
+                    "INSERT INTO user_profiles (user_id, platform, avatar_file_hash, avatar_status, updated_at)"
+                    " VALUES ('u1', 'qq', 'loser-hash', NULL, '2026-01-01')"
+                )
+                await _merge_duplicate_media_assets(connection)
+        finally:
+            await engine.dispose()
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "legacy.sqlite3"
+        asyncio.run(run(path))
+        connection = sqlite3.connect(path)
+        try:
+            assets = [row[0] for row in connection.execute("SELECT file_hash FROM media_assets")]
+            reference = connection.execute("SELECT asset_file_hash FROM message_media_references").fetchone()[0]
+            profile = connection.execute("SELECT avatar_file_hash, avatar_status FROM user_profiles").fetchone()
+            indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        finally:
+            connection.close()
+
+    # The oldest row survives and the newer duplicate is gone.
+    assert assets == ["keeper-hash"]
+    # Both references followed it rather than dangling.
+    assert reference == "keeper-hash"
+    assert profile[0] == "keeper-hash"
+    # A NULL avatar_status is neither cached nor pending, so nothing picks it up.
+    assert profile[1] == "unknown"
+    assert "ix_media_assets_content_sha256" in indexes
