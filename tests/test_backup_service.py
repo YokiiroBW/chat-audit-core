@@ -89,6 +89,44 @@ async def test_backup_service_exports_filtered_messages_and_manifest(db_session)
 
 
 @pytest.mark.asyncio
+async def test_backup_export_chunks_large_robot_message_lookups(db_session, monkeypatch):
+    original_execute = db_session.execute
+    association_chunk_sizes: list[int] = []
+
+    async def tracking_execute(statement, *args, **kwargs):
+        compiled = statement.compile()
+        if "FROM robot_messages" in str(statement):
+            for value in compiled.params.values():
+                if isinstance(value, list):
+                    association_chunk_sizes.append(len(value))
+        return await original_execute(statement, *args, **kwargs)
+
+    for index in range(5):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-batched",
+            "qq",
+            {
+                "room_id": "room-batched",
+                "message_type": "group",
+                "sender_id": f"user-{index}",
+                "nickname": f"User {index}",
+                "raw_message": f"batched message {index}",
+                "timestamp": 1_000 + index,
+            },
+        )
+
+    monkeypatch.setattr(BackupService, "_IN_QUERY_CHUNK_SIZE", 2)
+    monkeypatch.setattr(db_session, "execute", tracking_execute)
+
+    package = await BackupService.export_package(db_session, robot_id="robot-batched")
+
+    assert len(package["messages"]) == 5
+    assert len(package["robot_messages"]) == 5
+    assert association_chunk_sizes == [2, 2, 1]
+
+
+@pytest.mark.asyncio
 async def test_backup_service_exports_private_room_user_profile_and_avatar(db_session, tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
