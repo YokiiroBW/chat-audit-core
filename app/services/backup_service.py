@@ -10,7 +10,7 @@ import logging
 import re
 import secrets
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 
 class BackupService:
+    _IN_QUERY_CHUNK_SIZE = 1000
+
+    @classmethod
+    def _iter_query_chunks(cls, values: list[str]) -> Iterable[list[str]]:
+        for offset in range(0, len(values), cls._IN_QUERY_CHUNK_SIZE):
+            yield values[offset : offset + cls._IN_QUERY_CHUNK_SIZE]
+
     _REQUIRED_FIELDS = {
         "messages": ("msg_hash", "platform", "room_id", "message_type", "sender_id", "raw_message", "local_message", "timestamp"),
         "robot_messages": ("robot_id", "msg_hash"),
@@ -477,13 +484,16 @@ class BackupService:
 
         robot_messages: list[dict[str, str]] = []
         if msg_hashes:
-            assoc_stmt = select(RobotMessage).where(RobotMessage.msg_hash.in_(msg_hashes))
-            if robot_id is not None:
-                assoc_stmt = assoc_stmt.where(RobotMessage.robot_id == robot_id)
-            assoc_result = await db.execute(assoc_stmt.order_by(RobotMessage.robot_id.asc(), RobotMessage.msg_hash.asc()))
+            robot_message_models: list[RobotMessage] = []
+            for msg_hash_chunk in BackupService._iter_query_chunks(msg_hashes):
+                assoc_stmt = select(RobotMessage).where(RobotMessage.msg_hash.in_(msg_hash_chunk))
+                if robot_id is not None:
+                    assoc_stmt = assoc_stmt.where(RobotMessage.robot_id == robot_id)
+                assoc_result = await db.execute(assoc_stmt)
+                robot_message_models.extend(assoc_result.scalars().all())
             robot_messages = [
                 {"robot_id": assoc.robot_id, "msg_hash": assoc.msg_hash}
-                for assoc in assoc_result.scalars().all()
+                for assoc in sorted(robot_message_models, key=lambda assoc: (assoc.robot_id, assoc.msg_hash))
             ]
 
         message_source_records: list[dict[str, Any]] = []
@@ -492,12 +502,11 @@ class BackupService:
         import_batches: list[dict[str, Any]] = []
         referenced_media_hashes: set[str] = set()
         if msg_hashes:
-            source_record_result = await db.execute(
-                select(MessageSourceRecord)
-                .where(MessageSourceRecord.msg_hash.in_(msg_hashes))
-                .order_by(MessageSourceRecord.msg_hash.asc(), MessageSourceRecord.source_id.asc(), MessageSourceRecord.id.asc())
-            )
-            source_record_models = list(source_record_result.scalars().all())
+            source_record_models: list[MessageSourceRecord] = []
+            for msg_hash_chunk in BackupService._iter_query_chunks(msg_hashes):
+                source_record_result = await db.execute(select(MessageSourceRecord).where(MessageSourceRecord.msg_hash.in_(msg_hash_chunk)))
+                source_record_models.extend(source_record_result.scalars().all())
+            source_record_models.sort(key=lambda record: (record.msg_hash, record.source_id, record.id))
             message_source_records = [BackupService._message_source_record_to_dict(record) for record in source_record_models]
             source_ids = sorted({record.source_id for record in source_record_models})
             batch_ids = sorted({record.batch_id for record in source_record_models if record.batch_id})
@@ -508,12 +517,11 @@ class BackupService:
                 batch_result = await db.execute(select(ImportBatch).where(ImportBatch.id.in_(batch_ids)).order_by(ImportBatch.started_at.asc(), ImportBatch.id.asc()))
                 import_batches = [BackupService._import_batch_to_dict(batch) for batch in batch_result.scalars().all()]
 
-            reference_result = await db.execute(
-                select(MessageMediaReference)
-                .where(MessageMediaReference.msg_hash.in_(msg_hashes))
-                .order_by(MessageMediaReference.msg_hash.asc(), MessageMediaReference.ordinal.asc())
-            )
-            reference_models = list(reference_result.scalars().all())
+            reference_models: list[MessageMediaReference] = []
+            for msg_hash_chunk in BackupService._iter_query_chunks(msg_hashes):
+                reference_result = await db.execute(select(MessageMediaReference).where(MessageMediaReference.msg_hash.in_(msg_hash_chunk)))
+                reference_models.extend(reference_result.scalars().all())
+            reference_models.sort(key=lambda reference: (reference.msg_hash, reference.ordinal))
             message_media_references = [BackupService._message_media_reference_to_dict(reference) for reference in reference_models]
             referenced_media_hashes = {
                 file_hash
