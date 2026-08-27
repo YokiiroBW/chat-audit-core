@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QQ社交资产审计平台</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
-  <link rel="stylesheet" href="/assets/app.min.css?v=20260722-1" />
+  <link rel="stylesheet" href="/assets/app.min.css?v=20260827-1" />
 </head>
 <body>
-  <div class="app">
+  <div id="appRoot" class="app">
     <aside class="rail">
       <div>
         <div class="brand">AUDIT V4</div>
@@ -65,6 +65,7 @@
               <input id="primaryColorInput" class="palette-swatch" type="color" aria-label="主色调" title="主色调" />
               <input id="secondaryColorInput" class="palette-swatch" type="color" aria-label="复色调" title="复色调" />
               <input id="contrastColorInput" class="palette-swatch" type="color" aria-label="映衬色" title="映衬色" />
+              <button id="resetPaletteButton" class="btn link" type="button">恢复默认</button>
             </div>
           </div>
           <div id="topLogCard" class="top-log-card">
@@ -107,7 +108,7 @@
                 <option value="missing">源文件丢失</option>
                 <option value="failed">解析失败</option>
               </select>
-              <input id="searchInput" placeholder="搜索当前机器人视角消息..." />
+              <input id="searchInput" type="search" aria-label="搜索当前机器人视角消息" placeholder="搜索当前机器人视角消息..." />
               <button id="searchButton" class="btn primary">搜索</button>
             </div>
             <div class="toolbar-secondary">
@@ -118,10 +119,10 @@
             </div>
           </div>
 
-      <div id="settingsPanel" class="settings">
+      <div id="settingsPanel" class="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-hidden="true" tabindex="-1">
         <div class="settings-page-head">
           <div>
-            <strong>设置页面</strong>
+            <strong id="settingsTitle">设置页面</strong>
             <div id="authActor" class="hint truncate">未登录</div>
           </div>
           <div class="button-row">
@@ -139,7 +140,7 @@
               </div>
               <button id="refreshAuthButton" class="btn link">刷新</button>
             </div>
-            <div id="authStatusReport" class="report"></div>
+            <div id="authStatusReport" class="report" role="status" aria-live="polite"></div>
           </section>
 
           <section class="settings-section-card">
@@ -176,7 +177,7 @@
           </section>
 
           <div id="adapterEditorBackdrop" class="adapter-editor-backdrop" hidden></div>
-          <section id="adapterEditor" class="settings-section-card adapter-editor" hidden>
+          <section id="adapterEditor" class="settings-section-card adapter-editor" role="dialog" aria-modal="true" aria-labelledby="adapterEditorTitle" tabindex="-1" hidden>
             <div class="adapter-editor-head">
               <h2 id="adapterEditorTitle">编辑适配器</h2>
               <button id="clearAdapterButton" class="btn">取消</button>
@@ -196,41 +197,41 @@
                 <div class="adapter-form-rows">
                   <div class="adapter-form-row">
                     <div>
-                      <strong>适配器标识</strong>
+                      <label for="adapterId"><strong>适配器标识</strong></label>
                       <span>用于区分不同连接实例，建议填写 BOT 的 self_id 或端口备注；编辑已有适配器时不可修改。</span>
                     </div>
-                    <input id="adapterId" placeholder="适配器标识 / self_id" />
+                    <input id="adapterId" aria-describedby="adapterFormError" placeholder="适配器标识 / self_id" />
                   </div>
                   <div class="adapter-form-row">
                     <div>
-                      <strong>启用</strong>
+                      <strong id="adapterEnabledLabel">启用</strong>
                       <span>未启用的适配器不会作为在线抓取入口。</span>
                     </div>
                     <label class="switch-control">
-                      <input id="adapterEnabledSwitch" type="checkbox" />
+                      <input id="adapterEnabledSwitch" type="checkbox" aria-labelledby="adapterEnabledLabel" />
                       <span class="switch-track" aria-hidden="true"></span>
                     </label>
                   </div>
                   <div class="adapter-form-row">
                     <div>
-                      <strong>反向 WebSocket 主机</strong>
+                      <label for="adapterWsHost"><strong>反向 WebSocket 主机</strong></label>
                       <span>适配器接收反向连接时使用的监听主机。</span>
                     </div>
-                    <input id="adapterWsHost" placeholder="0.0.0.0" />
+                    <input id="adapterWsHost" aria-describedby="adapterFormError" placeholder="0.0.0.0" />
                   </div>
                   <div class="adapter-form-row">
                     <div>
-                      <strong>反向 WebSocket 端口</strong>
+                      <label for="adapterWsPort"><strong>反向 WebSocket 端口</strong></label>
                       <span>对应 NapCat / OneBot 反向 WebSocket 端口。</span>
                     </div>
-                    <input id="adapterWsPort" inputmode="numeric" placeholder="26109" />
+                    <input id="adapterWsPort" inputmode="numeric" aria-describedby="adapterFormError" placeholder="26109" />
                   </div>
                   <div class="adapter-form-row">
                     <div>
-                      <strong>反向 WebSocket Token</strong>
+                      <label for="adapterWsToken"><strong>反向 WebSocket Token</strong></label>
                       <span>未设置则不启用 Token 验证。</span>
                     </div>
-                    <input id="adapterWsToken" placeholder="token" />
+                    <input id="adapterWsToken" type="password" autocomplete="off" aria-describedby="adapterFormError" placeholder="token" />
                   </div>
                 </div>
               </div>
@@ -241,7 +242,8 @@
                 <h3>黑白名单与抓取配置</h3>
                 <p>配置此适配器下不同会话的抓取范围和抓取项目；高级参数仍会存入适配器 config_json。</p>
                 <div class="adapter-config-box">
-                  <textarea id="adapterConfig" placeholder='高级 JSON，例如 {"token":"..."}'></textarea>
+                  <label class="sr-only" for="adapterConfig">适配器高级 JSON 配置</label>
+                  <textarea id="adapterConfig" aria-describedby="adapterFormError" placeholder='高级 JSON，例如 {"token":"..."}'></textarea>
                   <div class="adapter-config-table">
                     <div class="adapter-config-table-row">
                       <strong>黑白名单（目标类型:会话 ID）</strong>
@@ -258,6 +260,7 @@
                 <div class="adapter-editor-actions">
                   <button id="saveAdapterButton" class="btn primary">添加适配器</button>
                 </div>
+                <div id="adapterFormError" class="form-error" role="alert" aria-live="assertive" hidden></div>
               </div>
             </div>
             <select id="adapterStatus" class="sr-only" aria-hidden="true" tabindex="-1">
@@ -345,14 +348,14 @@
               <button id="createAdminTokenButton" class="btn link">创建令牌</button>
             </div>
             <div class="settings-mini-grid">
-              <input id="adminTokenName" placeholder="令牌名称" />
-              <select id="adminTokenRole">
+              <label class="label">令牌名称<input id="adminTokenName" aria-describedby="adminTokenCreateReport" placeholder="令牌名称" /></label>
+              <label class="label">令牌角色<select id="adminTokenRole" aria-describedby="adminTokenCreateReport">
                 <option value="viewer">viewer</option>
                 <option value="operator">operator</option>
                 <option value="admin">admin</option>
-              </select>
+              </select></label>
             </div>
-            <div id="adminTokenCreateReport" class="report" hidden></div>
+            <div id="adminTokenCreateReport" class="report" role="alert" aria-live="assertive" hidden></div>
             <div id="adminTokenList" class="adapter-list"></div>
           </section>
 
@@ -365,16 +368,16 @@
               <button id="createAdminUserButton" class="btn link">创建用户</button>
             </div>
             <div class="settings-mini-grid">
-              <input id="adminUsername" placeholder="username" />
-              <input id="adminPassword" type="password" placeholder="password" />
-              <input id="adminDisplayName" placeholder="display name" />
-              <select id="adminUserRole">
+              <label class="label">用户名<input id="adminUsername" autocomplete="username" aria-describedby="adminUserCreateReport" placeholder="username" /></label>
+              <label class="label">初始密码<input id="adminPassword" type="password" autocomplete="new-password" aria-describedby="adminUserCreateReport" placeholder="password" /></label>
+              <label class="label">显示名称<input id="adminDisplayName" aria-describedby="adminUserCreateReport" placeholder="display name" /></label>
+              <label class="label">用户角色<select id="adminUserRole" aria-describedby="adminUserCreateReport">
                 <option value="viewer">viewer</option>
                 <option value="operator">operator</option>
                 <option value="admin">admin</option>
-              </select>
+              </select></label>
             </div>
-            <div id="adminUserCreateReport" class="report" hidden></div>
+            <div id="adminUserCreateReport" class="report" role="alert" aria-live="assertive" hidden></div>
             <div id="adminUserList" class="adapter-list"></div>
           </section>
 
@@ -419,15 +422,15 @@
     </div>
   </div>
 
-  <div id="importModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="importModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="importModalTitle" aria-hidden="true">
     <div class="modal">
       <div class="modal-header">
-        <strong>导入 JSON</strong>
+        <strong id="importModalTitle">导入 JSON</strong>
         <button class="btn" data-close-modal="importModal">关闭</button>
       </div>
       <div class="modal-body">
-        <textarea id="importPackageText" class="import-package-textarea" placeholder="粘贴 /api/export 导出的 JSON 包"></textarea>
-        <div id="importValidationReport" class="report" hidden></div>
+        <label class="label">备份包 JSON<textarea id="importPackageText" class="import-package-textarea" data-initial-focus aria-describedby="importValidationReport" placeholder="粘贴 /api/export 导出的 JSON 包"></textarea></label>
+        <div id="importValidationReport" class="report" role="alert" aria-live="assertive" hidden></div>
       </div>
       <div class="modal-footer">
         <button class="btn" data-close-modal="importModal">取消</button>
@@ -437,15 +440,16 @@
     </div>
   </div>
 
-  <div id="exportModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="exportModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle" aria-hidden="true">
     <div class="modal">
       <div class="modal-header">
-        <strong>高级过滤导出</strong>
+        <strong id="exportModalTitle">高级过滤导出</strong>
         <button class="btn" data-close-modal="exportModal">关闭</button>
       </div>
       <div class="modal-body">
-        <label class="label">机器人视角 robot_id<input id="exportRobotId" placeholder="robot_id" /></label>
+        <label class="label">机器人视角 robot_id<input id="exportRobotId" data-initial-focus placeholder="robot_id" /></label>
         <label class="label">会话 room_id（可留空导出当前机器人全部会话）<input id="exportRoomId" placeholder="room_id" /></label>
+        <label class="label">会话类型 message_type<select id="exportMessageType"><option value="">全部 / 自动识别</option><option value="group">群聊</option><option value="private">私聊</option></select></label>
         <div class="grid-two">
           <label class="label">开始时间戳 start_timestamp<input id="exportStartTimestamp" type="number" placeholder="可选" /></label>
           <label class="label">结束时间戳 end_timestamp<input id="exportEndTimestamp" type="number" placeholder="可选" /></label>
@@ -459,14 +463,14 @@
     </div>
   </div>
 
-  <div id="offlineAuditModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="offlineAuditModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="offlineAuditModalTitle" aria-hidden="true">
     <div class="modal">
       <div class="modal-header">
-        <strong>离线验收</strong>
+        <strong id="offlineAuditModalTitle">离线验收</strong>
         <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
       </div>
       <div class="modal-body">
-        <div id="offlineAuditReport" class="report"></div>
+        <div id="offlineAuditReport" class="report" role="status" aria-live="polite"></div>
       </div>
       <div class="modal-footer">
         <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
@@ -476,10 +480,10 @@
     </div>
   </div>
 
-  <div id="messageDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="messageDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="messageDetailModalTitle" aria-hidden="true">
     <div class="modal message-detail-modal">
       <div class="modal-header">
-        <strong>消息与媒体详情</strong>
+        <strong id="messageDetailModalTitle">消息与媒体详情</strong>
         <button class="btn" data-close-modal="messageDetailModal">关闭</button>
       </div>
       <div class="modal-body">
@@ -491,9 +495,19 @@
     </div>
   </div>
 
-  <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop" role="dialog" aria-modal="true" aria-labelledby="imagePreviewTitle" aria-hidden="true">
     <div class="image-preview">
+      <strong id="imagePreviewTitle" class="sr-only">图片预览</strong>
       <button class="btn image-preview-close" data-close-modal="imagePreviewModal">关闭</button>
+      <div class="image-preview-controls" aria-label="图片预览控制">
+        <button id="imageZoomOutButton" class="btn" type="button" aria-label="缩小图片">−</button>
+        <button id="imageResetButton" class="btn" type="button">重置</button>
+        <button id="imageZoomInButton" class="btn" type="button" aria-label="放大图片">＋</button>
+        <button id="imagePanLeftButton" class="btn" type="button" aria-label="向左移动图片">←</button>
+        <button id="imagePanUpButton" class="btn" type="button" aria-label="向上移动图片">↑</button>
+        <button id="imagePanDownButton" class="btn" type="button" aria-label="向下移动图片">↓</button>
+        <button id="imagePanRightButton" class="btn" type="button" aria-label="向右移动图片">→</button>
+      </div>
       <div id="imagePreviewStage" class="image-preview-stage">
         <img id="imagePreviewImg" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="" draggable="false" />
       </div>
@@ -501,7 +515,7 @@
     </div>
   </div>
 
-  <div id="forwardPreviewModal" class="modal-backdrop forward-preview-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div id="forwardPreviewModal" class="modal-backdrop forward-preview-backdrop" role="dialog" aria-modal="true" aria-labelledby="forwardPreviewTitle" aria-hidden="true">
     <div class="forward-preview-card">
       <div class="forward-preview-head">
         <div>
@@ -514,13 +528,43 @@
     </div>
   </div>
 
+  <div id="authModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="authModalTitle" aria-hidden="true">
+    <form id="authForm" class="modal" novalidate>
+      <div class="modal-header"><strong id="authModalTitle">管理登录</strong><button class="btn" type="button" data-close-modal="authModal">关闭</button></div>
+      <div class="modal-body">
+        <label class="label">用户名<input id="loginUsername" data-initial-focus autocomplete="username" aria-describedby="authFormError" /></label>
+        <label class="label">密码<input id="loginPassword" type="password" autocomplete="current-password" aria-describedby="authFormError" /></label>
+        <div class="form-divider" role="separator">或者使用 API Token</div>
+        <label class="label">API Token<input id="loginApiToken" type="password" autocomplete="off" aria-describedby="authFormError" /></label>
+        <div id="authFormError" class="form-error" role="alert" aria-live="assertive" hidden></div>
+      </div>
+      <div class="modal-footer"><button class="btn" type="button" data-close-modal="authModal">取消</button><button id="loginWithTokenButton" class="btn" type="button">使用 Token</button><button id="loginWithPasswordButton" class="btn primary" type="submit">登录</button></div>
+    </form>
+  </div>
+
+  <div id="passwordResetModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="passwordResetTitle" aria-hidden="true">
+    <form id="passwordResetForm" class="modal" novalidate>
+      <div class="modal-header"><strong id="passwordResetTitle">重置用户密码</strong><button class="btn" type="button" data-close-modal="passwordResetModal">关闭</button></div>
+      <div class="modal-body"><label class="label">新密码<input id="passwordResetInput" type="password" autocomplete="new-password" data-initial-focus aria-describedby="passwordResetError" /></label><div id="passwordResetError" class="form-error" role="alert" aria-live="assertive" hidden></div></div>
+      <div class="modal-footer"><button class="btn" type="button" data-close-modal="passwordResetModal">取消</button><button id="submitPasswordResetButton" class="btn primary" type="submit">确认重置</button></div>
+    </form>
+  </div>
+
+  <div id="confirmModal" class="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalDescription" aria-hidden="true">
+    <div class="modal confirmation-modal">
+      <div class="modal-header"><strong id="confirmModalTitle">确认操作</strong></div>
+      <div class="modal-body"><p id="confirmModalDescription"></p></div>
+      <div class="modal-footer"><button id="cancelConfirmButton" class="btn" type="button">取消</button><button id="acceptConfirmButton" class="btn danger" type="button">确认</button></div>
+    </div>
+  </div>
+
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js?v=20260722-1', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});
+        navigator.serviceWorker.register('/sw.js?v=20260827-1', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});
       });
     }
   </script>
-  <script src="/assets/app.min.js?v=20260722-1" defer></script>
+  <script src="/assets/app.min.js?v=20260827-1" defer></script>
 </body>
 </html>

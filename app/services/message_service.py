@@ -27,7 +27,17 @@ class MessageService:
         return hashlib.md5(content).hexdigest()
 
     @staticmethod
-    def message_hash(*, platform: str, room_id: str, sender_id: str, event_identity: str) -> str:
+    def message_hash(
+        *,
+        platform: str,
+        room_id: str,
+        sender_id: str,
+        event_identity: str,
+        message_type: str,
+    ) -> str:
+        # Preserve the established hash for compatibility with existing rows.
+        # A type-qualified fallback is used only when that legacy identity is
+        # already occupied by the other kind of conversation.
         raw_string = f"{platform}_{room_id}_{sender_id}_{event_identity}"
         return MessageService.generate_md5(raw_string.encode("utf-8"))
 
@@ -58,15 +68,21 @@ class MessageService:
             room_id=room_id,
             sender_id=sender_id,
             event_identity=event_identity,
+            message_type=message_type or "unknown",
         )
         result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
         message = result.scalar_one_or_none()
+        if message is not None and message_type is not None and message.message_type != message_type:
+            msg_hash = MessageService.generate_md5(f"{msg_hash}_{message_type}".encode("utf-8"))
+            result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
+            message = result.scalar_one_or_none()
         if message is None:
             result = await db.execute(
                 select(Message).where(
                     Message.platform == platform,
                     Message.room_id == room_id,
                     Message.sender_id == sender_id,
+                    *([Message.message_type == message_type] if message_type is not None else []),
                     Message.external_message_id == event_identity,
                 ).with_for_update()
             )
@@ -79,6 +95,7 @@ class MessageService:
                     Message.platform == platform,
                     Message.room_id == room_id,
                     Message.sender_id == sender_id,
+                    *([Message.message_type == message_type] if message_type is not None else []),
                     or_(
                         MessageSourceRecord.source_external_message_id == event_identity,
                         MessageSourceRecord.platform_message_id == event_identity,
@@ -273,12 +290,15 @@ class MessageService:
                     raw_message=raw_message,
                     local_message=local_message,
                     timestamp=msg_data["timestamp"],
+                    source_sequence=msg_data.get("source_sequence"),
                     is_outgoing=msg_data.get("is_outgoing"),
                 )
             )
         else:
             if msg_data.get("is_outgoing") is not None:
                 existing_msg.is_outgoing = msg_data.get("is_outgoing")
+            if msg_data.get("source_sequence") is not None:
+                existing_msg.source_sequence = msg_data.get("source_sequence")
             if msg_data.get("nickname") and (not existing_msg.nickname or msg_data.get("is_outgoing")):
                 existing_msg.nickname = msg_data.get("nickname")
             if MessageService._local_message_score(local_message) > MessageService._local_message_score(existing_msg.local_message):
@@ -466,8 +486,6 @@ class MessageService:
             .where(MessageMediaReference.msg_hash == msg_hash)
         )
         reference_by_ordinal = {ordinal: reference_id for ordinal, reference_id in reference_result.all()}
-        if not reference_by_ordinal:
-            return 0
         part_result = await db.execute(
             select(MessagePart)
             .where(MessagePart.msg_hash == msg_hash)
@@ -476,11 +494,11 @@ class MessageService:
         linked = 0
         media_ordinal = 0
         for part in part_result.scalars().all():
-            if str(part.part_type or "").lower() not in MEDIA_PART_TYPES:
-                continue
-            reference_id = reference_by_ordinal.get(media_ordinal)
-            media_ordinal += 1
-            if reference_id is not None and part.media_reference_id != reference_id:
+            is_media_part = str(part.part_type or "").lower() in MEDIA_PART_TYPES
+            reference_id = reference_by_ordinal.get(media_ordinal) if is_media_part else None
+            if is_media_part:
+                media_ordinal += 1
+            if part.media_reference_id != reference_id:
                 part.media_reference_id = reference_id
                 linked += 1
         return linked
@@ -495,16 +513,25 @@ class MessageService:
     ) -> None:
         if not isinstance(segments, list):
             return
+        existing_result = await db.execute(
+            select(MessagePart)
+            .where(MessagePart.msg_hash == msg_hash)
+            .order_by(MessagePart.ordinal.asc())
+            .with_for_update()
+        )
+        existing_by_ordinal = {
+            part.ordinal: part
+            for part in existing_result.scalars().all()
+        }
+        retained_ordinals: set[int] = set()
         for ordinal, segment in enumerate(segments):
             if not isinstance(segment, dict):
                 continue
+            retained_ordinals.add(ordinal)
             normalized = MessageService.normalize_message_segment(segment)
             part_type = normalized["type"]
             data = normalized["data"]
-            result = await db.execute(
-                select(MessagePart).where(MessagePart.msg_hash == msg_hash, MessagePart.ordinal == ordinal).with_for_update()
-            )
-            part = result.scalar_one_or_none()
+            part = existing_by_ordinal.get(ordinal)
             payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
             text_content = str(data.get("text")) if data.get("text") is not None else None
             if part is None:
@@ -519,6 +546,13 @@ class MessageService:
                 part.payload_json = payload
                 part.source_format = source_format
                 part.render_status = "parsed"
+                # References are positional across media parts. Any authoritative
+                # rewrite can change that order, so relink every retained part.
+                part.media_reference_id = None
+
+        for ordinal, part in existing_by_ordinal.items():
+            if ordinal not in retained_ordinals:
+                await db.delete(part)
 
     @staticmethod
     async def list_messages(db: AsyncSession) -> list[Message]:

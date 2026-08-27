@@ -35,7 +35,7 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "Chat Audit Collector" in favicon_response.text
     assert "linearGradient" in favicon_response.text
     assert "/assets/favicon.svg" in sw_response.text
-    assert "chat-audit-static-v15" in sw_response.text
+    assert "chat-audit-static-v16" in sw_response.text
     assert "AUDIT V4" in html
     assert "unpkg.com" not in page_bundle
     assert "cdn.tailwindcss.com" not in page_bundle
@@ -265,3 +265,28 @@ async def test_web_console_index_serves_three_column_dashboard():
     assert "media_files" in page_bundle
     assert "新增/更新/不变" in page_bundle
     assert "媒体文件" in page_bundle
+    # 凭据、覆盖层、破坏性操作和图片预览必须提供可访问的原生控件，不能退回
+    # prompt/confirm 或只有鼠标拖拽才能完成的交互。
+    assert "window.prompt" not in page_bundle
+    assert "window.confirm" not in page_bundle
+    assert 'id="authModal"' in html
+    assert 'id="loginPassword" type="password" autocomplete="current-password"' in html
+    assert 'id="loginApiToken" type="password" autocomplete="off"' in html
+    assert 'id="passwordResetInput" type="password" autocomplete="new-password"' in html
+    assert 'id="confirmModal"' in html and 'role="alertdialog"' in html
+    assert 'id="settingsPanel"' in html and 'aria-hidden="true"' in html
+    assert "requestConfirmation" in page_bundle
+    assert "activeFocusOverlay" in page_bundle
+    assert "data-initial-focus" in page_bundle and "initialTarget" in page_bundle
+    assert ".inert =" in page_bundle
+    assert "imageZoomInButton" in page_bundle
+    assert "imagePanLeftButton" in page_bundle
+    assert "bestForeground" in page_bundle
+    assert "contrastRatio(background, '#000000')" in page_bundle
+    assert "--accent-foreground" in page_bundle
+    assert "resetPalette" in page_bundle
+    # room_id 不是完整会话身份；路由、读取和导出都必须携带类型。
+    assert "params.set('type', state.currentRoom.message_type)" in page_bundle
+    assert "matchingRooms.length === 1" in page_bundle
+    assert "message_type=${encodeURIComponent(room.message_type)}" in page_bundle
+    assert "['message_type', messageType]" in page_bundle

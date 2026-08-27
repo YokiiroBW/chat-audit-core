@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.conversation_identity import AmbiguousConversationError
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
 from app.metrics import metrics_registry
 from app.models import AdminUser, Message, RobotMessage, SchemaMigration
@@ -1173,6 +1174,7 @@ async def _hydrate_missing_room_profiles(db: AsyncSession, robot_id: str, rooms:
 async def list_messages(
     robot_id: str = Query(..., min_length=1),
     room_id: str = Query(..., min_length=1),
+    message_type: str | None = Query(default=None, pattern="^(group|private)$"),
     before_timestamp: int | None = Query(default=None),
     before_source_sequence: int | None = Query(default=None),
     before_msg_hash: str | None = Query(default=None, min_length=1),
@@ -1182,22 +1184,27 @@ async def list_messages(
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> list[MessageResponse]:
-    messages = await QueryService.list_messages(
-        db,
-        robot_id=robot_id,
-        room_id=room_id,
-        before_timestamp=before_timestamp,
-        before_source_sequence=before_source_sequence,
-        before_msg_hash=before_msg_hash,
-        around_message_id=around_message_id,
-        media_state=media_state,
-        limit=limit,
-    )
+    try:
+        messages = await QueryService.list_messages(
+            db,
+            robot_id=robot_id,
+            room_id=room_id,
+            message_type=message_type,
+            before_timestamp=before_timestamp,
+            before_source_sequence=before_source_sequence,
+            before_msg_hash=before_msg_hash,
+            around_message_id=around_message_id,
+            media_state=media_state,
+            limit=limit,
+        )
+    except AmbiguousConversationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if await _hydrate_missing_message_sender_profiles(db, messages=messages, settings=settings):
         messages = await QueryService.list_messages(
             db,
             robot_id=robot_id,
             room_id=room_id,
+            message_type=message_type,
             before_timestamp=before_timestamp,
             before_source_sequence=before_source_sequence,
             before_msg_hash=before_msg_hash,
@@ -1505,6 +1512,7 @@ async def search_messages(
     robot_id: str = Query(..., min_length=1),
     keyword: str | None = Query(default=None),
     room_id: str | None = Query(default=None),
+    message_type: str | None = Query(default=None, pattern="^(group|private)$"),
     sender_id: str | None = Query(default=None),
     start_timestamp: int | None = Query(default=None),
     end_timestamp: int | None = Query(default=None),
@@ -1512,17 +1520,21 @@ async def search_messages(
     limit: int = Query(default=50, ge=1, le=200),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[MessageResponse]:
-    messages = await QueryService.search_messages(
-        db,
-        robot_id=robot_id,
-        keyword=keyword,
-        room_id=room_id,
-        sender_id=sender_id,
-        start_timestamp=start_timestamp,
-        end_timestamp=end_timestamp,
-        media_state=media_state,
-        limit=limit,
-    )
+    try:
+        messages = await QueryService.search_messages(
+            db,
+            robot_id=robot_id,
+            keyword=keyword,
+            room_id=room_id,
+            message_type=message_type,
+            sender_id=sender_id,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            media_state=media_state,
+            limit=limit,
+        )
+    except AmbiguousConversationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return [MessageResponse.model_validate(message) for message in messages]
 
 
@@ -1743,7 +1755,7 @@ def _rewrite_forward_segment_with_local_path(local_message: str, forward_id: str
         200: {
             "description": "Backup package as JSON or gzip",
             "content": {
-                "application/json": {"example": {"manifest": {"schema": "chat-audit-core.backup.v2"}, "messages": []}},
+                "application/json": {"example": {"manifest": {"schema": "chat-audit-core.backup.v3"}, "messages": []}},
                 "application/gzip": {"schema": {"type": "string", "format": "binary"}},
             },
         }
@@ -1752,6 +1764,7 @@ def _rewrite_forward_segment_with_local_path(local_message: str, forward_id: str
 async def export_data(
     robot_id: str | None = Query(default=None, min_length=1),
     room_id: str | None = Query(default=None, min_length=1),
+    message_type: str | None = Query(default=None, pattern="^(group|private)$"),
     start_timestamp: int | None = Query(default=None),
     end_timestamp: int | None = Query(default=None),
     compressed: bool = Query(default=False),
@@ -1759,10 +1772,34 @@ async def export_data(
     settings: Settings = Depends(get_settings),
 ):
     if compressed:
-        payload = await BackupService.export_package_compressed(
+        try:
+            payload = await BackupService.export_package_compressed(
+                db,
+                robot_id=robot_id,
+                room_id=room_id,
+                message_type=message_type,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                storage_root=settings.storage_root,
+                public_storage_prefix=settings.public_storage_prefix,
+                max_media_bytes=settings.media_max_bytes,
+                system_id=settings.system_instance_id,
+                signing_key=settings.app_secret_key,
+            )
+        except AmbiguousConversationError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        filename = f"chat-audit-export-{int(time.time())}.json.gz"
+        return Response(
+            content=payload,
+            media_type="application/gzip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    try:
+        return await BackupService.export_package(
             db,
             robot_id=robot_id,
             room_id=room_id,
+            message_type=message_type,
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
             storage_root=settings.storage_root,
@@ -1771,24 +1808,8 @@ async def export_data(
             system_id=settings.system_instance_id,
             signing_key=settings.app_secret_key,
         )
-        filename = f"chat-audit-export-{int(time.time())}.json.gz"
-        return Response(
-            content=payload,
-            media_type="application/gzip",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    return await BackupService.export_package(
-        db,
-        robot_id=robot_id,
-        room_id=room_id,
-        start_timestamp=start_timestamp,
-        end_timestamp=end_timestamp,
-        storage_root=settings.storage_root,
-        public_storage_prefix=settings.public_storage_prefix,
-        max_media_bytes=settings.media_max_bytes,
-        system_id=settings.system_instance_id,
-        signing_key=settings.app_secret_key,
-    )
+    except AmbiguousConversationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 async def _read_import_package_request(request: Request) -> dict[str, Any]:

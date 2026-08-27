@@ -32,6 +32,54 @@ CSRF_EXEMPT_PATHS = {"/api/auth/login"}
 logger = logging.getLogger(__name__)
 
 
+class RequestBodyLimitMiddleware:
+    """Enforce the request limit on ASGI body frames, not only on headers."""
+
+    def __init__(self, app, max_body_bytes: int):
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.lower(): value
+            for key, value in scope.get("headers", [])
+        }
+        content_length = headers.get(b"content-length", b"").decode("ascii", errors="ignore")
+        if content_length.isdigit() and int(content_length) > self.max_body_bytes:
+            await JSONResponse({"detail": "Request body too large"}, status_code=413)(scope, receive, send)
+            return
+
+        received = 0
+        buffered_messages: list[dict] = []
+        while True:
+            message = await receive()
+            buffered_messages.append(message)
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_body_bytes:
+                    await JSONResponse({"detail": "Request body too large"}, status_code=413)(scope, receive, send)
+                    return
+                if message.get("more_body", False):
+                    continue
+            break
+
+        next_message = 0
+
+        async def replay_receive():
+            nonlocal next_message
+            if next_message < len(buffered_messages):
+                message = buffered_messages[next_message]
+                next_message += 1
+                return message
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
 def _is_browser_context(request: Request) -> bool:
     return any(
         request.headers.get(header)
@@ -208,13 +256,6 @@ def create_app(
         return response
 
     @app.middleware("http")
-    async def request_size_limit_middleware(request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length and content_length.isdigit() and int(content_length) > active_settings.api_max_request_body_bytes:
-            return JSONResponse({"detail": "Request body too large"}, status_code=413)
-        return await call_next(request)
-
-    @app.middleware("http")
     async def csrf_middleware(request: Request, call_next):
         if not active_settings.csrf_enabled:
             return await call_next(request)
@@ -233,6 +274,13 @@ def create_app(
         if needs_cookie:
             _set_csrf_cookie(response, active_settings, _new_csrf_token())
         return response
+
+    # Registered after the decorator middleware so it becomes the outermost
+    # user middleware and can stop body parsing before a route buffers it.
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        max_body_bytes=active_settings.api_max_request_body_bytes,
+    )
 
     async def app_db_session() -> AsyncIterator[AsyncSession]:
         async with active_sessionmaker() as session:

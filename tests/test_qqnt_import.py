@@ -663,7 +663,7 @@ async def test_collector_import_api_is_idempotent_and_audited(db_session, tmp_pa
     assert all("[CQ:video" not in (log.detail_json or "") for log in logs)
 
 
-async def test_backup_v2_roundtrip_preserves_not_downloaded_reference_without_fake_asset(db_session):
+async def test_backup_v3_roundtrip_preserves_not_downloaded_reference_without_fake_asset(db_session):
     source, _ = await ImportService.upsert_source(
         db_session,
         ImportSourceCreateRequest(account_id="123456789", device_id="main-pc"),
@@ -679,7 +679,7 @@ async def test_backup_v2_roundtrip_preserves_not_downloaded_reference_without_fa
     )
     package = await BackupService.export_package(db_session, robot_id="123456789")
 
-    assert package["manifest"]["schema"] == "chat-audit-core.backup.v2"
+    assert package["manifest"]["schema"] == "chat-audit-core.backup.v3"
     assert len(package["message_media_references"]) == 1
     assert package["message_media_references"][0]["asset_file_hash"] is None
     assert package["media_assets"] == []

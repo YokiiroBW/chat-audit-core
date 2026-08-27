@@ -4,10 +4,22 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 import pytest
+from sqlalchemy import select
 
-from app.database import get_db_session
+from app.database import create_all_tables, create_async_engine_and_sessionmaker, get_db_session
 from app.main import app
-from app.models import MediaAsset, UserProfile
+from app.models import (
+    IdentityAlias,
+    ImportSource,
+    MediaAsset,
+    Message,
+    MessageMediaReference,
+    MessagePart,
+    MessageSourceRecord,
+    ProfileChangeRecord,
+    RoomProfile,
+    UserProfile,
+)
 from app.services.backup_service import BackupService
 from app.services.message_service import MessageService
 
@@ -19,6 +31,204 @@ def test_extract_local_media_paths_keeps_adjacent_paths_separate():
     paths = BackupService._extract_local_media_paths(first + second + "后续文字")
 
     assert paths == {first, second}
+
+
+@pytest.mark.asyncio
+async def test_backup_robot_filter_includes_imported_only_messages(db_session):
+    source = ImportSource(
+        id="backup-imported-only-source",
+        source_type="qqnt_local_db",
+        platform="qq",
+        account_id="backup-imported-only-robot",
+        device_id="backup-imported-only-device",
+        status="active",
+    )
+    message = Message(
+        msg_hash="backup-imported-only-message",
+        platform="qq",
+        room_id="backup-imported-only-room",
+        message_type="private",
+        external_message_id="backup-imported-only-external",
+        sender_id="backup-imported-only-user",
+        raw_message="imported only",
+        local_message="imported only",
+        timestamp=1783000200,
+    )
+    source_record = MessageSourceRecord(
+        msg_hash=message.msg_hash,
+        source_id=source.id,
+        source_table="messages",
+        source_primary_key="backup-imported-only-primary-key",
+    )
+    db_session.add_all([source, message, source_record])
+    await db_session.commit()
+
+    package = await BackupService.export_package(
+        db_session,
+        robot_id="backup-imported-only-robot",
+    )
+
+    assert [item["msg_hash"] for item in package["messages"]] == [message.msg_hash]
+    assert package["robot_messages"] == []
+    assert [item["id"] for item in package["import_sources"]] == [source.id]
+
+
+@pytest.mark.asyncio
+async def test_backup_v3_roundtrip_restores_current_audit_model_to_fresh_database(tmp_path):
+    source_engine, source_sessions = create_async_engine_and_sessionmaker(
+        f"sqlite+aiosqlite:///{(tmp_path / 'source.sqlite3').as_posix()}"
+    )
+    target_engine, target_sessions = create_async_engine_and_sessionmaker(
+        f"sqlite+aiosqlite:///{(tmp_path / 'target.sqlite3').as_posix()}"
+    )
+    await create_all_tables(source_engine)
+    await create_all_tables(target_engine)
+    source_storage = tmp_path / "source-storage"
+    target_storage = tmp_path / "target-storage"
+    media_content = b"v3 roundtrip media"
+
+    try:
+        async with source_sessions() as source_db:
+            local_path = await MessageService.save_media_asset(
+                source_db,
+                media_content,
+                "image",
+                "png",
+                storage_root=source_storage,
+                public_prefix="/static/storage",
+            )
+            asset = (
+                await source_db.execute(select(MediaAsset).where(MediaAsset.local_path == local_path))
+            ).scalar_one()
+            msg_hash = await MessageService.process_incoming_message(
+                source_db,
+                "robot-v3",
+                "qq",
+                {
+                    "message_id": "v3-message-id",
+                    "room_id": "v3-room",
+                    "message_type": "group",
+                    "sender_id": "v3-user",
+                    "nickname": "V3 User",
+                    "raw_message": "[CQ:image,file=v3.png]",
+                    "local_message": local_path,
+                    "timestamp": 1783000300,
+                    "source_sequence": 33,
+                    "is_outgoing": True,
+                },
+            )
+            source = ImportSource(
+                id="v3-source",
+                source_type="qqnt_local_db",
+                platform="qq",
+                account_id="robot-v3",
+                device_id="device-v3",
+                status="active",
+            )
+            source_db.add(source)
+            reference = MessageMediaReference(
+                msg_hash=msg_hash,
+                ordinal=0,
+                media_type="image",
+                source_state="downloaded",
+                archive_state="complete",
+                asset_file_hash=asset.file_hash,
+                content_sha256=asset.content_sha256,
+            )
+            source_db.add(reference)
+            await source_db.flush()
+            source_db.add_all(
+                [
+                    MessagePart(
+                        msg_hash=msg_hash,
+                        ordinal=0,
+                        part_type="image",
+                        media_reference_id=reference.id,
+                        payload_json='{"alt":"roundtrip"}',
+                        source_format="onebot11",
+                        render_status="parsed",
+                    ),
+                    IdentityAlias(
+                        platform="qq",
+                        identity_type="conversation",
+                        canonical_id="v3-room",
+                        alias_id="legacy-v3-room",
+                        alias_type="qqnt_peer_id",
+                        source_id=source.id,
+                        confidence="verified",
+                        metadata_json='{"origin":"fixture"}',
+                    ),
+                    ProfileChangeRecord(
+                        identity_type="conversation",
+                        identity_id="v3-room",
+                        old_display_name="Old V3 Room",
+                        new_display_name="V3 Room",
+                        new_avatar_file_hash=asset.content_sha256,
+                        source_id=source.id,
+                    ),
+                    RoomProfile(
+                        room_id="v3-room",
+                        platform="qq",
+                        display_name="V3 Room",
+                        avatar_path=local_path,
+                        avatar_file_hash=asset.content_sha256,
+                        avatar_source_url="https://example.invalid/avatar.png",
+                        avatar_status="cached",
+                    ),
+                ]
+            )
+            await source_db.commit()
+            package = await BackupService.export_package(
+                source_db,
+                robot_id="robot-v3",
+                storage_root=source_storage,
+                public_storage_prefix="/static/storage",
+            )
+
+        async with target_sessions() as target_db:
+            result = await BackupService.import_package(
+                target_db,
+                package,
+                storage_root=target_storage,
+                public_storage_prefix="/static/storage",
+            )
+            restored_message = await target_db.get(Message, msg_hash)
+            restored_asset = await target_db.get(MediaAsset, asset.file_hash)
+            restored_part = (await target_db.execute(select(MessagePart))).scalar_one()
+            restored_reference = await target_db.get(MessageMediaReference, restored_part.media_reference_id)
+            restored_alias = (await target_db.execute(select(IdentityAlias))).scalar_one()
+            restored_change = (await target_db.execute(select(ProfileChangeRecord))).scalar_one()
+            restored_profile = await target_db.get(RoomProfile, "v3-room")
+            repeated_path = await MessageService.save_media_asset(
+                target_db,
+                media_content,
+                "image",
+                "png",
+                storage_root=target_storage,
+                public_prefix="/static/storage",
+            )
+
+        assert package["manifest"]["schema"] == "chat-audit-core.backup.v3"
+        assert result["message_parts"] == 1
+        assert result["identity_aliases"] == 1
+        assert result["profile_change_records"] == 1
+        assert restored_message.is_outgoing is True
+        assert restored_message.source_sequence == 33
+        assert restored_asset.content_sha256 == asset.content_sha256
+        assert restored_reference.ordinal == 0
+        assert restored_reference.content_sha256 == asset.content_sha256
+        assert json.loads(restored_part.payload_json) == {"alt": "roundtrip"}
+        assert restored_alias.canonical_id == "v3-room"
+        assert restored_alias.source_id == "v3-source"
+        assert restored_change.new_avatar_file_hash == asset.content_sha256
+        assert restored_profile.avatar_file_hash == asset.content_sha256
+        assert restored_profile.avatar_source_url == "https://example.invalid/avatar.png"
+        assert restored_profile.avatar_status == "cached"
+        assert repeated_path == local_path
+        assert (target_storage / Path(local_path).name).read_bytes() == media_content
+    finally:
+        await source_engine.dispose()
+        await target_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -68,24 +278,28 @@ async def test_backup_service_exports_filtered_messages_and_manifest(db_session)
         end_timestamp=150,
     )
 
-    assert package["manifest"]["schema"] == "chat-audit-core.backup.v2"
+    assert package["manifest"]["schema"] == "chat-audit-core.backup.v3"
     assert package["manifest"]["filters"] == {
         "robot_id": "robot-a",
         "room_id": "room-1",
+        "message_type": "group",
         "start_timestamp": 50,
         "end_timestamp": 150,
     }
     assert len(package["messages"]) == 1
     assert package["messages"][0]["raw_message"] == "export me"
     assert package["robot_messages"] == [{"robot_id": "robot-a", "msg_hash": package["messages"][0]["msg_hash"]}]
-    assert package["media_assets"] == [
-        {
-            "file_hash": "media-a",
-            "file_type": "image",
-            "file_size": 10,
-            "local_path": "/static/storage/media-a.jpg",
-        }
-    ]
+    assert len(package["media_assets"]) == 1
+    assert {
+        key: package["media_assets"][0][key]
+        for key in ("file_hash", "content_sha256", "file_type", "file_size", "local_path")
+    } == {
+        "file_hash": "media-a",
+        "content_sha256": None,
+        "file_type": "image",
+        "file_size": 10,
+        "local_path": "/static/storage/media-a.jpg",
+    }
 
 
 @pytest.mark.asyncio
@@ -172,14 +386,27 @@ async def test_backup_service_exports_private_room_user_profile_and_avatar(db_se
     )
 
     assert package["room_profiles"] == []
-    assert package["user_profiles"] == [
-        {
-            "user_id": "private-user",
-            "platform": "qq",
-            "display_name": "Private User",
-            "avatar_path": "/static/storage/private-avatar.svg",
-        }
-    ]
+    assert len(package["user_profiles"]) == 1
+    assert {
+        key: package["user_profiles"][0][key]
+        for key in (
+            "user_id",
+            "platform",
+            "display_name",
+            "avatar_path",
+            "avatar_file_hash",
+            "avatar_source_url",
+            "avatar_status",
+        )
+    } == {
+        "user_id": "private-user",
+        "platform": "qq",
+        "display_name": "Private User",
+        "avatar_path": "/static/storage/private-avatar.svg",
+        "avatar_file_hash": None,
+        "avatar_source_url": None,
+        "avatar_status": "unknown",
+    }
     assert package["media_assets"][0]["local_path"] == "/static/storage/private-avatar.svg"
     assert package["media_files"][0]["content_base64"]
 
@@ -371,7 +598,7 @@ async def test_backup_service_writes_auto_backup_file_and_prunes_old_files(db_se
     assert backup_path.suffix == ".json"
     assert __import__("re").fullmatch(r"auto-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.json", backup_path.name)
     package = __import__("json").loads(backup_path.read_text(encoding="utf-8"))
-    assert package["manifest"]["schema"] == "chat-audit-core.backup.v2"
+    assert package["manifest"]["schema"] == "chat-audit-core.backup.v3"
     assert package["manifest"]["backup_type"] == "auto"
     assert package["messages"][0]["raw_message"] == "auto backup payload"
     remaining = sorted(path.name for path in tmp_path.glob("auto-backup-*.json"))
@@ -570,7 +797,7 @@ async def test_import_validate_api_reports_valid_package_without_writing(db_sess
     assert response.status_code == 200
     report = response.json()
     assert report["valid"] is True
-    assert report["schema"] == "chat-audit-core.backup.v2"
+    assert report["schema"] == "chat-audit-core.backup.v3"
     assert report["checksum_valid"] is True
     assert report["errors"] == []
     assert report["counts"] == {
@@ -584,6 +811,9 @@ async def test_import_validate_api_reports_valid_package_without_writing(db_sess
         "import_batches": 0,
         "message_source_records": 0,
         "message_media_references": 0,
+        "message_parts": 0,
+        "identity_aliases": 0,
+        "profile_change_records": 0,
     }
 
 

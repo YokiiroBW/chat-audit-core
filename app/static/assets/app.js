@@ -88,7 +88,12 @@
       liveRefreshTick: 0,
       mediaStateFilter: 'all',
       detailMessage: null,
-      modalTrigger: null,
+      modalTriggers: new Map(),
+      settingsTrigger: null,
+      adapterTrigger: null,
+      authModalResolver: null,
+      passwordResetUserId: null,
+      confirmationResolver: null,
     };
 
     const el = (id) => document.getElementById(id);
@@ -128,19 +133,10 @@
       state.authGeneration += 1;
     };
 
-    const promptForAdminApiToken = async () => {
-      const token = window.prompt('Enter an admin API token');
-      if (!token || !token.trim()) return false;
-      try {
-        await establishBrowserSession(token.trim());
-        await refreshAuthIdentity();
-        return true;
-      } catch (error) {
-        state.authError = error.message || String(error);
-        renderSettings();
-        return false;
-      }
-    };
+    const promptForAdminApiToken = () => new Promise((resolve) => {
+      state.authModalResolver = resolve;
+      openAuthDialog({ tokenOnly: true });
+    });
 
     // One sign-in at a time. The initial load fires several requests at once and
     // the live refresh fires more every few seconds, so without a shared gate an
@@ -381,6 +377,30 @@
       return null;
     };
 
+    const clearFieldError = (reportId, fieldIds = []) => {
+      const report = el(reportId);
+      if (report) {
+        report.hidden = true;
+        report.textContent = '';
+      }
+      fieldIds.forEach((fieldId) => el(fieldId)?.removeAttribute('aria-invalid'));
+    };
+
+    const showFieldError = (reportId, fieldId, message) => {
+      const report = el(reportId);
+      const field = el(fieldId);
+      if (report) {
+        report.textContent = message;
+        report.hidden = false;
+      }
+      if (field) {
+        field.setAttribute('aria-invalid', 'true');
+        field.focus();
+      }
+      pushUiLog(message, 'warning');
+      return null;
+    };
+
     const normalizedIdentifier = (value, label, { required = true, max = 64, pattern = SAFE_IDENTIFIER_PATTERN } = {}) => {
       const normalized = text(value).trim();
       if (!normalized) return required ? validationError(`${label} is required`) : '';
@@ -447,6 +467,7 @@
       const params = new URLSearchParams();
       if (state.currentRobot) params.set('robot', state.currentRobot.id);
       if (state.currentRoom) params.set('room', state.currentRoom.room_id);
+      if (state.currentRoom && state.currentRoom.message_type) params.set('type', state.currentRoom.message_type);
       const nextHash = params.toString() ? `#${params.toString()}` : '';
       const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
       const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -461,14 +482,21 @@
       const account = state.accountList.find((item) => item.id === robotId);
       if (!account) return false;
       const roomId = routeValue('room');
+      const messageType = routeValue('type');
       state.restoringRoute = true;
       try {
         if (!state.currentRobot || state.currentRobot.id !== account.id) {
           await switchAccount(account, { updateRoute: false });
         }
         if (roomId) {
-          const room = state.roomList.find((item) => item.room_id === roomId);
-          if (room && (!state.currentRoom || state.currentRoom.room_id !== room.room_id)) {
+          const matchingRooms = state.roomList.filter((item) => item.room_id === roomId);
+          const room = messageType
+            ? matchingRooms.find((item) => item.message_type === messageType)
+            : (matchingRooms.length === 1 ? matchingRooms[0] : null);
+          if (!messageType && matchingRooms.length > 1) {
+            pushUiLog('路由中的 room 缺少会话类型，已拒绝选择歧义会话', 'warning');
+          }
+          if (room && (!state.currentRoom || state.currentRoom.room_id !== room.room_id || state.currentRoom.message_type !== room.message_type)) {
             await selectRoom(room, { updateRoute: false });
           }
         }
@@ -542,17 +570,46 @@
       renderActivityLogs();
     };
 
+    const relativeLuminance = (hexColor) => {
+      const channels = String(hexColor || '').replace('#', '').match(/.{2}/g);
+      if (!channels || channels.length !== 3) return 0;
+      const linear = channels.map((value) => {
+        const channel = Number.parseInt(value, 16) / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return (0.2126 * linear[0]) + (0.7152 * linear[1]) + (0.0722 * linear[2]);
+    };
+
+    const contrastRatio = (first, second) => {
+      const light = Math.max(relativeLuminance(first), relativeLuminance(second));
+      const dark = Math.min(relativeLuminance(first), relativeLuminance(second));
+      return (light + 0.05) / (dark + 0.05);
+    };
+
+    const bestForeground = (background) => (
+      contrastRatio(background, '#ffffff') >= contrastRatio(background, '#000000') ? '#ffffff' : '#000000'
+    );
+
     const applyPalette = () => {
       const root = document.documentElement;
-      root.style.setProperty('--primary', state.palette.primary);
-      root.style.setProperty('--secondary', state.palette.secondary);
-      root.style.setProperty('--contrast', state.palette.contrast);
+      const paletteTargets = [root, document.body];
+      paletteTargets.forEach((target) => {
+        target.style.setProperty('--primary', state.palette.primary);
+        target.style.setProperty('--secondary', state.palette.secondary);
+        target.style.setProperty('--contrast', state.palette.contrast);
+        target.style.setProperty('--accent-foreground', bestForeground(state.palette.contrast));
+      });
       const primaryInput = el('primaryColorInput');
       const secondaryInput = el('secondaryColorInput');
       const contrastInput = el('contrastColorInput');
       if (primaryInput) primaryInput.value = state.palette.primary;
       if (secondaryInput) secondaryInput.value = state.palette.secondary;
       if (contrastInput) contrastInput.value = state.palette.contrast;
+    };
+
+    const resetPalette = () => {
+      state.palette = { ...DEFAULT_PALETTE };
+      savePalette();
     };
 
     const savePalette = () => {
@@ -674,6 +731,7 @@
       state.adapterList.forEach((acc) => {
         const card = document.createElement('article');
         card.className = 'adapter-robot-card';
+        card.dataset.adapterId = acc.id;
 
         const main = document.createElement('div');
         const title = document.createElement('h3');
@@ -690,7 +748,7 @@
 
         const actions = document.createElement('div');
         actions.className = 'adapter-card-actions';
-        const remove = button('删除', 'adapter-pill delete', () => deleteAdapter(acc.id));
+        const remove = button('删除', 'adapter-pill delete', (event) => deleteAdapter(acc.id, event.currentTarget));
         const edit = button('编辑', 'adapter-pill edit', () => editAdapter(acc));
         remove.disabled = !canRole('admin');
         edit.disabled = !canRole('operator');
@@ -704,6 +762,7 @@
         switchLabel.title = '启用 / 停用适配器';
         const enabled = document.createElement('input');
         enabled.type = 'checkbox';
+        enabled.setAttribute('aria-label', `${adapterDisplayName(acc)} 启用状态`);
         enabled.checked = acc.status === 'green';
         enabled.disabled = !canRole('operator');
         enabled.addEventListener('change', () => toggleAdapterEnabled(acc, enabled.checked));
@@ -758,7 +817,7 @@
       }
       state.roomList.forEach((room) => {
         const row = document.createElement('button');
-        row.className = `room-item${state.currentRoom && state.currentRoom.room_id === room.room_id ? ' active' : ''}`;
+        row.className = `room-item${state.currentRoom && state.currentRoom.room_id === room.room_id && state.currentRoom.message_type === room.message_type ? ' active' : ''}`;
         row.type = 'button';
         row.addEventListener('click', () => selectRoom(room));
 
@@ -766,7 +825,7 @@
         thumb.className = 'room-thumb';
         const avatar = document.createElement('div');
         avatar.className = 'room-avatar';
-        renderAvatar(avatar, room.room_id, 'group', room.avatar_path);
+        renderAvatar(avatar, room.room_id, room.message_type || 'group', room.avatar_path);
         thumb.appendChild(avatar);
 
         const body = document.createElement('div');
@@ -806,7 +865,7 @@
         const meta = document.createElement('div');
         meta.className = 'result-meta';
         meta.innerHTML = `<span></span><span></span>`;
-        meta.children[0].textContent = `${result.room_id} · ${result.nickname || result.sender_id}`;
+        meta.children[0].textContent = `${result.message_type === 'private' ? '私聊' : '群聊'} · ${result.room_id} · ${result.nickname || result.sender_id}`;
         meta.children[1].textContent = formatTs(result.timestamp);
         const body = document.createElement('div');
         body.className = 'truncate';
@@ -877,7 +936,9 @@
     };
 
     const renderSettings = () => {
-      el('settingsPanel').classList.toggle('open', state.settingsMode);
+      const settingsPanel = el('settingsPanel');
+      settingsPanel.classList.toggle('open', state.settingsMode);
+      settingsPanel.setAttribute('aria-hidden', String(!state.settingsMode));
       el('settingsToggle').classList.toggle('active', state.settingsMode);
       const adapterEditorOpen = Boolean(state.adapterEditorOpen || state.editingAdapterId);
       el('adapterEditorBackdrop').hidden = !adapterEditorOpen;
@@ -896,6 +957,7 @@
       renderAdminSessions();
       renderAdapters();
       applyRoleUi();
+      syncOverlayIsolation();
     };
 
     const mountAdapterEditorPortal = () => {
@@ -985,6 +1047,7 @@
         grid.className = 'capture-policy-grid';
         const mode = document.createElement('select');
         mode.dataset.field = 'list_mode';
+        mode.setAttribute('aria-label', `${targetDisplayName(target)} 名单模式`);
         [
           ['none', '默认'],
           ['blacklist', '黑名单'],
@@ -1018,7 +1081,7 @@
         const actions = document.createElement('div');
         actions.className = 'button-row';
         const save = button('保存', 'btn primary', () => saveCapturePolicy(target, row));
-        const reset = button('恢复默认', 'btn', () => resetCapturePolicy(target));
+        const reset = button('恢复默认', 'btn', (event) => resetCapturePolicy(target, event.currentTarget));
         save.disabled = !canRole('operator');
         reset.disabled = !target.policy || !canRole('operator');
         actions.append(save, reset);
@@ -1167,7 +1230,7 @@
         const label = document.createElement('span');
         label.className = 'truncate';
         label.textContent = `${token.name} · ${token.role} · ${token.status} · ${token.token_prefix}`;
-        const revoke = button('吊销', 'btn link danger', () => revokeAdminToken(token.id));
+        const revoke = button('吊销', 'btn link danger', (event) => revokeAdminToken(token.id, event.currentTarget));
         revoke.disabled = token.status === 'revoked' || !canRole('admin');
         row.append(label, revoke);
         container.appendChild(row);
@@ -1202,11 +1265,12 @@
       state.adminUserList.forEach((user) => {
         const row = document.createElement('div');
         row.className = 'adapter-item';
+        row.dataset.userId = user.id;
         const label = document.createElement('span');
         label.className = 'truncate';
         label.textContent = `${user.username} · ${user.role} · ${user.status}`;
-        const reset = button('重置密码', 'btn link', () => resetAdminUserPassword(user.id));
-        const revoke = button('禁用', 'btn link danger', () => revokeAdminUser(user.id));
+        const reset = button('重置密码', 'btn link reset-password', () => openPasswordResetDialog(user));
+        const revoke = button('禁用', 'btn link danger', (event) => revokeAdminUser(user.id, event.currentTarget));
         reset.disabled = user.status === 'revoked' || !canRole('admin');
         revoke.disabled = user.status === 'revoked' || !canRole('admin');
         row.append(label, reset, revoke);
@@ -1237,7 +1301,7 @@
         const label = document.createElement('span');
         label.className = 'truncate';
         label.textContent = `${session.username} · ${session.role} · ${session.status} · ${session.token_prefix}`;
-        const revoke = button('强制下线', 'btn link danger', () => revokeAdminSession(session.id));
+        const revoke = button('强制下线', 'btn link danger', (event) => revokeAdminSession(session.id, event.currentTarget));
         revoke.disabled = session.status === 'revoked' || !canRole('admin');
         row.append(label, revoke);
         container.appendChild(row);
@@ -2654,17 +2718,17 @@
       const port = el('adapterWsPort').value.trim();
       const token = el('adapterWsToken').value.trim();
       if (host && (host.length > 255 || !/^[A-Za-z0-9_.:-]+$/.test(host))) {
-        return validationError('adapter host is invalid');
+        return showFieldError('adapterFormError', 'adapterWsHost', '反向 WebSocket 主机格式无效');
       }
       if (port) {
         const parsedPort = normalizedInteger(port, 'adapter port', { min: 1, max: 65535 });
-        if (parsedPort === null) return null;
+        if (parsedPort === null) return showFieldError('adapterFormError', 'adapterWsPort', '端口必须为 1–65535 的整数');
         config.reverse_ws_port = parsedPort;
       } else {
         delete config.reverse_ws_port;
       }
       if (token && (token.length > 1024 || /[\r\n]/.test(token))) {
-        return validationError('adapter token is invalid');
+        return showFieldError('adapterFormError', 'adapterWsToken', 'Token 不能包含换行且不得超过 1024 个字符');
       }
       if (host) config.reverse_ws_host = host;
       else delete config.reverse_ws_host;
@@ -2679,6 +2743,9 @@
     };
 
     const resetAdapterForm = () => {
+      const trigger = state.adapterTrigger;
+      const adapterId = state.editingAdapterId;
+      state.adapterTrigger = null;
       state.editingAdapterId = null;
       state.adapterEditorOpen = false;
       el('adapterId').value = '';
@@ -2687,12 +2754,19 @@
       el('adapterConfig').value = '';
       el('adapterEnabledSwitch').checked = false;
       fillAdapterQuickConfig('');
+      clearFieldError('adapterFormError', ['adapterId', 'adapterWsHost', 'adapterWsPort', 'adapterWsToken', 'adapterConfig']);
       renderSettings();
+      const returnTarget = trigger && document.contains(trigger)
+        ? trigger
+        : Array.from(el('adapterList').querySelectorAll('[data-adapter-id]'))
+          .find((node) => node.dataset.adapterId === adapterId)?.querySelector('.adapter-pill.edit');
+      if (returnTarget) requestAnimationFrame(() => returnTarget.focus());
     };
 
     const openNewAdapter = () => {
       state.editingAdapterId = null;
       state.adapterEditorOpen = true;
+      state.adapterTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       el('adapterId').value = '';
       el('adapterPlatform').value = 'qq';
       el('adapterStatus').value = 'gray';
@@ -2701,11 +2775,13 @@
       fillAdapterQuickConfig('');
       renderSettings();
       resetAdapterEditorScroll();
+      requestAnimationFrame(() => el('adapterId').focus());
     };
 
     const editAdapter = (adapter) => {
       state.editingAdapterId = adapter.id;
       state.adapterEditorOpen = true;
+      state.adapterTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       el('adapterId').value = adapter.id;
       el('adapterPlatform').value = adapter.platform;
       el('adapterStatus').value = adapter.status;
@@ -2714,18 +2790,20 @@
       fillAdapterQuickConfig(adapter.config_json || '');
       renderSettings();
       resetAdapterEditorScroll();
+      requestAnimationFrame(() => el('adapterPlatform').focus());
     };
 
     const saveAdapter = async () => {
+      clearFieldError('adapterFormError', ['adapterId', 'adapterWsHost', 'adapterWsPort', 'adapterWsToken', 'adapterConfig']);
       setAdapterStatusFromEnabled();
       const adapterId = normalizedIdentifier(el('adapterId').value, 'adapter id');
-      if (adapterId === null) return;
+      if (adapterId === null) return showFieldError('adapterFormError', 'adapterId', '请输入仅含字母、数字及 ._:@- 的适配器标识');
       const platform = normalizedIdentifier(el('adapterPlatform').value, 'adapter platform', { max: 20 });
-      if (platform === null) return;
+      if (platform === null) return showFieldError('adapterFormError', 'adapterPlatform', '请选择有效的适配器类型');
       const status = normalizedChoice(el('adapterStatus').value, SAFE_ADAPTER_STATUSES, 'adapter status');
       if (status === null) return;
       const config = parseJsonObjectInput(el('adapterConfig').value, 'adapter config');
-      if (config === null) return;
+      if (config === null) return showFieldError('adapterFormError', 'adapterConfig', '高级配置必须是有效的 JSON 对象且大小不超过 64 KiB');
       const mergedConfig = syncAdapterConfigFromQuickFields(config);
       if (mergedConfig === null) return;
       const payload = {
@@ -2752,10 +2830,14 @@
       await loadAdapters();
     };
 
-    const deleteAdapter = async (adapterId) => {
-      await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
-      if (state.editingAdapterId === adapterId) resetAdapterForm();
-      await loadAdapters();
+    const deleteAdapter = async (adapterId, trigger) => {
+      if (!(await requestConfirmation('删除适配器', `确定删除适配器 ${adapterId}？此操作会停止该连接配置。`, '删除'))) return;
+      await withPendingButton(trigger, async () => {
+        await apiSend(`/api/adapters/${encodeURIComponent(adapterId)}`, 'DELETE');
+        if (state.editingAdapterId === adapterId) resetAdapterForm();
+        await loadAdapters();
+        requestAnimationFrame(() => el('newAdapterButton').focus());
+      });
     };
 
     async function runManualBackup() {
@@ -2785,7 +2867,8 @@
       }
     }
 
-    async function resetBackupSettings() {
+    async function resetBackupSettings(event) {
+      if (!(await requestConfirmation('恢复备份配置', '确定放弃当前数据库备份设置并恢复 .env 默认值？', '恢复'))) return;
       state.backupSettingsSaving = true;
       renderSettings();
       try {
@@ -2881,19 +2964,41 @@
       await refreshCapturePolicies();
     }
 
-    async function resetCapturePolicy(target) {
-      await apiSend(
-        `/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-policies/${encodeURIComponent(target.target_type)}/${encodeURIComponent(target.target_id)}`,
-        'DELETE',
-      );
-      await refreshCapturePolicies();
+    async function resetCapturePolicy(target, trigger) {
+      if (!(await requestConfirmation('恢复抓取策略', `确定将 ${targetDisplayName(target)} 恢复为默认抓取策略？`, '恢复默认'))) return;
+      await withPendingButton(trigger, async () => {
+        await apiSend(
+          `/api/bots/${encodeURIComponent(state.currentRobot.id)}/capture-policies/${encodeURIComponent(target.target_type)}/${encodeURIComponent(target.target_id)}`,
+          'DELETE',
+        );
+        await refreshCapturePolicies();
+        requestAnimationFrame(() => el('refreshCapturePoliciesButton').focus());
+      });
     }
 
-    async function loginWithPassword() {
-      const username = window.prompt('username');
-      if (!username) return;
-      const password = window.prompt('password');
-      if (!password) return;
+    const openAuthDialog = ({ tokenOnly = false } = {}) => {
+      clearFieldError('authFormError', ['loginUsername', 'loginPassword', 'loginApiToken']);
+      el('loginUsername').value = '';
+      el('loginPassword').value = '';
+      el('loginApiToken').value = '';
+      openModal('authModal');
+      requestAnimationFrame(() => el(tokenOnly ? 'loginApiToken' : 'loginUsername').focus());
+    };
+
+    const finishAuthDialog = (authenticated) => {
+      const resolver = state.authModalResolver;
+      state.authModalResolver = null;
+      closeModal('authModal');
+      if (resolver) resolver(authenticated);
+    };
+
+    async function loginWithPassword(event) {
+      event?.preventDefault();
+      clearFieldError('authFormError', ['loginUsername', 'loginPassword', 'loginApiToken']);
+      const username = text(el('loginUsername').value).trim();
+      const password = el('loginPassword').value;
+      if (!username) return showFieldError('authFormError', 'loginUsername', '请输入用户名');
+      if (!password) return showFieldError('authFormError', 'loginPassword', '请输入密码');
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: csrfHeaders('POST', { 'Content-Type': 'application/json' }),
@@ -2901,6 +3006,7 @@
       });
       if (!response.ok) {
         state.authError = await responseErrorMessage(response, '/api/auth/login');
+        showFieldError('authFormError', 'loginPassword', state.authError);
         renderSettings();
         return;
       }
@@ -2909,6 +3015,23 @@
       state.authGeneration += 1;
       await refreshAuthIdentity();
       await loadAdapters();
+      finishAuthDialog(true);
+    }
+
+    async function loginWithApiToken() {
+      clearFieldError('authFormError', ['loginUsername', 'loginPassword', 'loginApiToken']);
+      const token = el('loginApiToken').value.trim();
+      if (!token) return showFieldError('authFormError', 'loginApiToken', '请输入 API Token');
+      try {
+        await establishBrowserSession(token);
+        await refreshAuthIdentity();
+        await loadAdapters();
+        finishAuthDialog(true);
+      } catch (error) {
+        state.authError = error.message || String(error);
+        showFieldError('authFormError', 'loginApiToken', state.authError);
+        renderSettings();
+      }
     }
 
     async function logoutAuth() {
@@ -2925,11 +3048,12 @@
     }
 
     async function createAdminToken() {
+      clearFieldError('adminTokenCreateReport', ['adminTokenName', 'adminTokenRole']);
       const name = text(el('adminTokenName').value).trim();
-      if (!name) return validationError('token name is required');
-      if (name.length > 128 || /[\r\n]/.test(name)) return validationError('token name is invalid');
+      if (!name) return showFieldError('adminTokenCreateReport', 'adminTokenName', '请输入令牌名称');
+      if (name.length > 128 || /[\r\n]/.test(name)) return showFieldError('adminTokenCreateReport', 'adminTokenName', '令牌名称不能包含换行且不得超过 128 个字符');
       const role = normalizedChoice(el('adminTokenRole').value, SAFE_ROLES, 'token role');
-      if (role === null) return;
+      if (role === null) return showFieldError('adminTokenCreateReport', 'adminTokenRole', '请选择有效的令牌角色');
       state.adminTokenCreateResult = await apiSend('/api/admin/tokens', 'POST', { name, role });
       el('adminTokenName').value = '';
       await refreshAdminTokens();
@@ -2937,14 +3061,15 @@
     }
 
     async function createAdminUser() {
+      clearFieldError('adminUserCreateReport', ['adminUsername', 'adminPassword', 'adminDisplayName', 'adminUserRole']);
       const username = normalizedIdentifier(el('adminUsername').value, 'username', { max: 64, pattern: SAFE_USERNAME_PATTERN });
-      if (username === null) return;
+      if (username === null) return showFieldError('adminUserCreateReport', 'adminUsername', '请输入有效用户名（字母、数字及 ._@-）');
       const password = text(el('adminPassword').value);
-      if (password.length < 8 || password.length > 256) return validationError('password must be 8-256 characters');
+      if (password.length < 8 || password.length > 256) return showFieldError('adminUserCreateReport', 'adminPassword', '密码长度必须为 8–256 个字符');
       const displayName = text(el('adminDisplayName').value).trim();
-      if (displayName.length > 128 || /[\r\n]/.test(displayName)) return validationError('display name is invalid');
+      if (displayName.length > 128 || /[\r\n]/.test(displayName)) return showFieldError('adminUserCreateReport', 'adminDisplayName', '显示名称不能包含换行且不得超过 128 个字符');
       const role = normalizedChoice(el('adminUserRole').value, SAFE_ROLES, 'user role');
-      if (role === null) return;
+      if (role === null) return showFieldError('adminUserCreateReport', 'adminUserRole', '请选择有效的用户角色');
       const payload = {
         username,
         password,
@@ -2965,20 +3090,33 @@
       renderSettings();
     }
 
-    async function revokeAdminUser(userId) {
-      await apiSend(`/api/admin/users/${encodeURIComponent(userId)}`, 'DELETE');
-      state.adminUserCreateResult = null;
-      await refreshAdminUsers();
-      await refreshAdminSessions();
-      renderSettings();
+    async function revokeAdminUser(userId, trigger) {
+      if (!(await requestConfirmation('禁用用户', '确定禁用该用户并撤销其活动会话？', '禁用'))) return;
+      await withPendingButton(trigger, async () => {
+        await apiSend(`/api/admin/users/${encodeURIComponent(userId)}`, 'DELETE');
+        state.adminUserCreateResult = null;
+        await refreshAdminUsers();
+        await refreshAdminSessions();
+        renderSettings();
+        requestAnimationFrame(() => el('createAdminUserButton').focus());
+      });
     }
 
-    async function resetAdminUserPassword(userId) {
-      const password = window.prompt('请输入新密码（至少 8 位）');
-      if (!password) return;
+    const openPasswordResetDialog = (user) => {
+      state.passwordResetUserId = user.id;
+      el('passwordResetTitle').textContent = `重置 ${user.username} 的密码`;
+      el('passwordResetInput').value = '';
+      clearFieldError('passwordResetError', ['passwordResetInput']);
+      openModal('passwordResetModal');
+    };
+
+    async function resetAdminUserPassword(event) {
+      event?.preventDefault();
+      const userId = state.passwordResetUserId;
+      const password = el('passwordResetInput').value;
+      if (!userId) return;
       if (password.length < 8 || password.length > 256) {
-        validationError('password must be 8-256 characters');
-        return;
+        return showFieldError('passwordResetError', 'passwordResetInput', '密码长度必须为 8–256 个字符');
       }
       await apiSend(`/api/admin/users/${encodeURIComponent(userId)}/password`, 'POST', { password });
       state.adminUserCreateResult = null;
@@ -2986,24 +3124,33 @@
       await refreshAdminSessions();
       await refreshAuthIdentity();
       renderSettings();
+      closeModal('passwordResetModal');
     }
 
-    async function revokeAdminSession(sessionId) {
-      await apiSend(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, 'DELETE');
-      await refreshAdminSessions();
-      await refreshAuthIdentity();
-      renderSettings();
+    async function revokeAdminSession(sessionId, trigger) {
+      if (!(await requestConfirmation('强制下线', '确定撤销该登录会话？', '强制下线'))) return;
+      await withPendingButton(trigger, async () => {
+        await apiSend(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, 'DELETE');
+        await refreshAdminSessions();
+        await refreshAuthIdentity();
+        renderSettings();
+        requestAnimationFrame(() => el('refreshAdminSessionsButton').focus());
+      });
     }
 
-    async function revokeAdminToken(tokenId) {
-      await apiSend(`/api/admin/tokens/${encodeURIComponent(tokenId)}`, 'DELETE');
-      state.adminTokenCreateResult = null;
-      await refreshAdminTokens();
-      renderSettings();
+    async function revokeAdminToken(tokenId, trigger) {
+      if (!(await requestConfirmation('吊销令牌', '确定吊销该管理令牌？使用它的客户端将立即失去访问权限。', '吊销'))) return;
+      await withPendingButton(trigger, async () => {
+        await apiSend(`/api/admin/tokens/${encodeURIComponent(tokenId)}`, 'DELETE');
+        state.adminTokenCreateResult = null;
+        await refreshAdminTokens();
+        renderSettings();
+        requestAnimationFrame(() => el('createAdminTokenButton').focus());
+      });
     }
 
     async function selectRoom(room, { updateRoute = true } = {}) {
-      if (!room || (state.currentRoom && state.currentRoom.room_id === room.room_id)) return;
+      if (!room || (state.currentRoom && state.currentRoom.room_id === room.room_id && state.currentRoom.message_type === room.message_type)) return;
       if (state.roomRequestController) state.roomRequestController.abort();
       const loadToken = ++state.roomLoadToken;
       const controller = new AbortController();
@@ -3028,9 +3175,9 @@
     }
 
     async function selectSearchResult(result) {
-      let room = state.roomList.find((item) => item.room_id === result.room_id);
+      let room = state.roomList.find((item) => item.room_id === result.room_id && item.message_type === result.message_type);
       if (!room) {
-        room = { room_id: result.room_id, last_timestamp: result.timestamp };
+        room = { room_id: result.room_id, message_type: result.message_type, last_timestamp: result.timestamp };
         state.roomList = [room, ...state.roomList];
       }
       state.selectionMode = false;
@@ -3063,6 +3210,7 @@
       if (!state.currentRobot || !room) return [];
       const normalizedLimit = Math.max(1, Math.min(200, Number(limit) || 50));
       let url = `/api/messages?robot_id=${encodeURIComponent(state.currentRobot.id)}&room_id=${encodeURIComponent(room.room_id)}&limit=${normalizedLimit}`;
+      if (room.message_type) url += `&message_type=${encodeURIComponent(room.message_type)}`;
       if (beforeTimestamp !== null && beforeTimestamp !== undefined) url += `&before_timestamp=${encodeURIComponent(beforeTimestamp)}`;
       if (beforeCursor && Number.isFinite(Number(beforeCursor.source_sequence)) && beforeCursor.msg_hash) {
         url += `&before_source_sequence=${encodeURIComponent(beforeCursor.source_sequence)}&before_msg_hash=${encodeURIComponent(beforeCursor.msg_hash)}`;
@@ -3126,7 +3274,7 @@
       .join('|');
 
     const roomSnapshot = (rooms) => rooms
-      .map((room) => [room.room_id, room.last_timestamp, room.display_name, room.avatar_path].join(':'))
+      .map((room) => [room.room_id, room.message_type, room.last_timestamp, room.display_name, room.avatar_path].join(':'))
       .join('|');
 
     async function refreshLiveMessages() {
@@ -3134,6 +3282,7 @@
       state.liveRefreshBusy = true;
       const robotId = state.currentRobot.id;
       const activeRoomId = state.currentRoom ? state.currentRoom.room_id : '';
+      const activeRoomType = state.currentRoom ? state.currentRoom.message_type : '';
       const activeRoomLoadToken = state.roomLoadToken;
       try {
         const rooms = await apiGet(`/api/rooms?robot_id=${encodeURIComponent(robotId)}`);
@@ -3142,18 +3291,18 @@
         const roomsChanged = roomSnapshot(rooms) !== roomSnapshot(state.roomList);
         state.roomList = rooms;
         if (activeRoomId) {
-          const refreshedRoom = rooms.find((room) => room.room_id === activeRoomId);
+          const refreshedRoom = rooms.find((room) => room.room_id === activeRoomId && room.message_type === activeRoomType);
           if (refreshedRoom) state.currentRoom = refreshedRoom;
         }
         if (roomsChanged) renderRooms();
 
-        if (state.currentRoom && state.currentRoom.room_id === activeRoomId) {
+        if (state.currentRoom && state.currentRoom.room_id === activeRoomId && state.currentRoom.message_type === activeRoomType) {
           const chat = el('chatWindow');
           const wasNearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 96;
           const before = messageSnapshot(state.messageList);
           const refreshLimit = Math.min(200, Math.max(50, state.messageList.length));
           const latest = await loadMessages(null, '', refreshLimit, state.currentRoom);
-          if (!state.currentRobot || state.currentRobot.id !== robotId || state.roomLoadToken !== activeRoomLoadToken || state.loadingRoom || !state.currentRoom || state.currentRoom.room_id !== activeRoomId) return;
+          if (!state.currentRobot || state.currentRobot.id !== robotId || state.roomLoadToken !== activeRoomLoadToken || state.loadingRoom || !state.currentRoom || state.currentRoom.room_id !== activeRoomId || state.currentRoom.message_type !== activeRoomType) return;
           state.messageList = state.mediaStateFilter === 'all'
             ? mergeMessages([...state.messageList, ...latest])
             : mergeMessages(latest);
@@ -3214,10 +3363,11 @@
         return;
       }
       const roomId = state.currentRoom.room_id;
+      const roomType = state.currentRoom.message_type;
       const roomLoadToken = state.roomLoadToken;
       const around = await loadMessages(null, replyId, 50, state.currentRoom);
-      if (roomLoadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== roomId) return;
-      if (around.length > 0) {
+      if (roomLoadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== roomId || state.currentRoom.message_type !== roomType) return;
+      if (around.length > 0 && around.some((message) => messageMatchesExternalId(message, replyId))) {
         state.messageList = mergeMessages([...state.messageList, ...around]);
         state.replyJumpMissingId = '';
         renderChat();
@@ -3233,7 +3383,7 @@
       pushUiLog(`刷新会话：${roomDisplayName(room)}`);
       try {
         const messages = await loadMessages(null, '', 50, room, signal);
-        if (loadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== room.room_id) return;
+        if (loadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== room.room_id || state.currentRoom.message_type !== room.message_type) return;
         state.messageList = messages;
         state.roomLoadError = '';
       } catch (error) {
@@ -3241,11 +3391,11 @@
         // 重试按钮）并不捕获，抛出只会变成未处理的 Promise 拒绝。
         // 中止是切换会话的正常路径，不是加载失败，不应显示给用户。
         const aborted = Boolean(error && (error.name === 'AbortError' || (signal && signal.aborted)));
-        if (!aborted && loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id) {
+        if (!aborted && loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id && state.currentRoom.message_type === room.message_type) {
           state.roomLoadError = (error && error.message) || String(error);
         }
       } finally {
-        if (loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id) {
+        if (loadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === room.room_id && state.currentRoom.message_type === room.message_type) {
           state.loadingRoom = false;
           renderAll();
           requestAnimationFrame(scrollChatToBottom);
@@ -3262,6 +3412,7 @@
       const chat = el('chatWindow');
       if (!chat || chat.scrollTop !== 0 || state.loadingHistory || state.loadingRoom || state.messageList.length === 0) return;
       const roomId = state.currentRoom ? state.currentRoom.room_id : '';
+      const roomType = state.currentRoom ? state.currentRoom.message_type : '';
       const roomLoadToken = state.roomLoadToken;
       const historyToken = ++state.historyLoadToken;
       const oldScrollHeight = chat.scrollHeight;
@@ -3275,14 +3426,14 @@
       let restoreScrollTop = oldScrollTop;
       try {
         const older = await loadMessages(cursorTimestamp, '', 50, state.currentRoom, null, cursor);
-        if (historyToken !== state.historyLoadToken || roomLoadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== roomId) return;
+        if (historyToken !== state.historyLoadToken || roomLoadToken !== state.roomLoadToken || !state.currentRoom || state.currentRoom.room_id !== roomId || state.currentRoom.message_type !== roomType) return;
         if (older.length > 0) {
           state.messageList = [...older, ...state.messageList];
           renderChat();
           restoreScrollTop = chat.scrollHeight - oldScrollHeight + oldScrollTop;
         }
       } finally {
-        if (historyToken === state.historyLoadToken && roomLoadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === roomId) {
+        if (historyToken === state.historyLoadToken && roomLoadToken === state.roomLoadToken && state.currentRoom && state.currentRoom.room_id === roomId && state.currentRoom.message_type === roomType) {
           state.loadingHistory = false;
           renderChat();
           requestAnimationFrame(() => {
@@ -3295,6 +3446,7 @@
     const openExportDialog = () => {
       el('exportRobotId').value = state.currentRobot ? state.currentRobot.id : '';
       el('exportRoomId').value = state.currentRoom ? state.currentRoom.room_id : '';
+      el('exportMessageType').value = state.currentRoom ? (state.currentRoom.message_type || '') : '';
       el('exportStartTimestamp').value = '';
       el('exportEndTimestamp').value = '';
       pushUiLog('打开高级过滤导出');
@@ -3306,6 +3458,7 @@
       if (robotId === null) return;
       const roomId = normalizedIdentifier(el('exportRoomId').value, 'export room_id', { required: false });
       if (roomId === null) return;
+      const messageType = el('exportMessageType').value;
       const startTimestamp = normalizedTimestamp(el('exportStartTimestamp').value, 'start timestamp');
       if (startTimestamp === null) return;
       const endTimestamp = normalizedTimestamp(el('exportEndTimestamp').value, 'end timestamp');
@@ -3314,6 +3467,7 @@
       [
         ['robot_id', robotId],
         ['room_id', roomId],
+        ['message_type', messageType],
         ['start_timestamp', startTimestamp],
         ['end_timestamp', endTimestamp],
       ].forEach(([key, value]) => {
@@ -3551,17 +3705,79 @@
       openModal('messageDetailModal');
     };
 
+    const withPendingButton = async (trigger, action) => {
+      if (trigger?.disabled) return;
+      if (trigger) trigger.disabled = true;
+      try {
+        return await action();
+      } finally {
+        if (trigger && document.contains(trigger)) trigger.disabled = false;
+      }
+    };
+
+    const requestConfirmation = (title, description, confirmLabel = '确认') => new Promise((resolve) => {
+      if (state.confirmationResolver) state.confirmationResolver(false);
+      state.confirmationResolver = resolve;
+      el('confirmModalTitle').textContent = title;
+      el('confirmModalDescription').textContent = description;
+      el('acceptConfirmButton').textContent = confirmLabel;
+      openModal('confirmModal');
+      requestAnimationFrame(() => el('cancelConfirmButton').focus());
+    });
+
+    const resolveConfirmation = (accepted) => {
+      const resolver = state.confirmationResolver;
+      state.confirmationResolver = null;
+      closeModal('confirmModal');
+      if (resolver) resolver(accepted);
+    };
+
+    const syncOverlayIsolation = () => {
+      const modalOpen = Boolean(document.querySelector('.modal-backdrop.open'));
+      const adapterOpen = Boolean(state.adapterEditorOpen || state.editingAdapterId);
+      el('appRoot').inert = modalOpen || adapterOpen;
+      el('settingsPanel').inert = !state.settingsMode || modalOpen || adapterOpen;
+      document.querySelectorAll('.rail, .topbar, .main, .side-head, #searchPanel, #roomList').forEach((node) => {
+        node.inert = Boolean(state.settingsMode && !modalOpen && !adapterOpen);
+      });
+    };
+
+    const activeFocusOverlay = () => {
+      const openModals = document.querySelectorAll('.modal-backdrop.open');
+      if (openModals.length) return openModals[openModals.length - 1];
+      if (!el('adapterEditor').hidden) return el('adapterEditor');
+      if (state.settingsMode) return el('settingsPanel');
+      return null;
+    };
+
     const openModal = (id) => {
       const modal = el(id);
-      state.modalTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      state.modalTriggers.set(id, document.activeElement instanceof HTMLElement ? document.activeElement : null);
       modal.classList.add('open');
       modal.setAttribute('aria-hidden', 'false');
-      requestAnimationFrame(() => modal.querySelector('[autofocus], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus());
+      syncOverlayIsolation();
+      requestAnimationFrame(() => {
+        const initialTarget = modal.querySelector('[data-initial-focus], [autofocus]')
+          || modal.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        initialTarget?.focus();
+      });
     };
     const closeModal = (id) => {
       const modal = el(id);
+      const passwordResetUserId = id === 'passwordResetModal' ? state.passwordResetUserId : null;
       modal.classList.remove('open');
       modal.setAttribute('aria-hidden', 'true');
+      if (id === 'authModal' && state.authModalResolver) {
+        const resolver = state.authModalResolver;
+        state.authModalResolver = null;
+        resolver(false);
+      }
+      if (id === 'passwordResetModal') state.passwordResetUserId = null;
+      if (id === 'confirmModal' && state.confirmationResolver) {
+        const resolver = state.confirmationResolver;
+        state.confirmationResolver = null;
+        resolver(false);
+      }
       if (id === 'imagePreviewModal') {
         el('imagePreviewImg').removeAttribute('src');
         el('imagePreviewCaption').textContent = '';
@@ -3571,9 +3787,14 @@
         el('forwardPreviewCaption').textContent = '';
         clearNode(el('forwardPreviewBody'));
       }
-      const trigger = state.modalTrigger;
-      state.modalTrigger = null;
-      if (trigger && document.contains(trigger)) trigger.focus();
+      const trigger = state.modalTriggers.get(id);
+      state.modalTriggers.delete(id);
+      syncOverlayIsolation();
+      const returnTarget = trigger && document.contains(trigger)
+        ? trigger
+        : Array.from(el('adminUserList').querySelectorAll('[data-user-id]'))
+          .find((node) => node.dataset.userId === passwordResetUserId)?.querySelector('.reset-password');
+      if (returnTarget) returnTarget.focus();
     };
 
     const closeFloatingPanels = () => {
@@ -3583,6 +3804,8 @@
     };
 
     const toggleSettingsPage = () => {
+      const opening = !state.settingsMode;
+      if (opening) state.settingsTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       state.settingsMode = !state.settingsMode;
       if (!state.settingsMode) {
         state.adapterEditorOpen = false;
@@ -3590,6 +3813,8 @@
       }
       closeFloatingPanels();
       renderSettings();
+      if (opening) requestAnimationFrame(() => el('closeSettingsButton').focus());
+      else if (state.settingsTrigger && document.contains(state.settingsTrigger)) state.settingsTrigger.focus();
       pushUiLog(state.settingsMode ? '打开设置页面' : '关闭设置页面');
     };
 
@@ -3598,6 +3823,9 @@
       state.adapterEditorOpen = false;
       state.editingAdapterId = null;
       renderSettings();
+      const trigger = state.settingsTrigger;
+      state.settingsTrigger = null;
+      if (trigger && document.contains(trigger)) trigger.focus();
       pushUiLog('关闭设置页面');
     };
 
@@ -3669,6 +3897,21 @@
       applyImagePreviewTransform();
     };
 
+    const adjustImagePreviewScale = (factor) => {
+      state.imagePreview.scale = Math.max(1, Math.min(8, state.imagePreview.scale * factor));
+      if (state.imagePreview.scale === 1) {
+        state.imagePreview.x = 0;
+        state.imagePreview.y = 0;
+      }
+      applyImagePreviewTransform();
+    };
+
+    const panImagePreview = (x, y) => {
+      state.imagePreview.x += x;
+      state.imagePreview.y += y;
+      applyImagePreviewTransform();
+    };
+
     const startImagePreviewDrag = (event) => {
       if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
@@ -3736,7 +3979,7 @@
     const bindEvents = () => {
       mountAdapterEditorPortal();
       [
-        ['loginButton', loginWithPassword],
+        ['loginButton', () => openAuthDialog()],
         ['logoutButton', logoutAuth],
         ['refreshAuthButton', refreshAuthIdentity],
         ['refreshCapturePoliciesButton', refreshCapturePolicies],
@@ -3764,12 +4007,26 @@
         ['renderSelectedImageButton', renderSelectedMessagesImage],
         ['cancelSelectionButton', exitSelectionMode],
         ['paletteToggleButton', togglePalettePanel],
+        ['resetPaletteButton', resetPalette],
         ['openLogButton', openLogDialog],
         ['downloadExportButton', downloadExportPackage],
         ['openImportButton', openImportDialog],
         ['validateImportButton', validateImportPackage],
         ['submitImportButton', submitImportPackage],
+        ['loginWithTokenButton', loginWithApiToken],
+        ['cancelConfirmButton', () => resolveConfirmation(false)],
+        ['acceptConfirmButton', () => resolveConfirmation(true)],
+        ['imageZoomOutButton', () => adjustImagePreviewScale(1 / 1.2)],
+        ['imageResetButton', resetImagePreviewTransform],
+        ['imageZoomInButton', () => adjustImagePreviewScale(1.2)],
+        ['imagePanLeftButton', () => panImagePreview(-48, 0)],
+        ['imagePanUpButton', () => panImagePreview(0, -48)],
+        ['imagePanDownButton', () => panImagePreview(0, 48)],
+        ['imagePanRightButton', () => panImagePreview(48, 0)],
       ].forEach(([id, handler]) => on(id, 'click', handler));
+
+      on('authForm', 'submit', loginWithPassword);
+      on('passwordResetForm', 'submit', resetAdminUserPassword);
 
       on('adapterEnabledSwitch', 'change', setAdapterStatusFromEnabled);
       ['adapterWsHost', 'adapterWsPort', 'adapterWsToken'].forEach((id) => {
@@ -3815,13 +4072,15 @@
       });
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Tab') {
-          const modal = document.querySelector('.modal-backdrop.open');
+          const modal = activeFocusOverlay();
           if (modal) {
-            const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+            const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+              .filter((node) => !node.hidden && node.getClientRects().length > 0);
             if (focusable.length) {
               const first = focusable[0];
               const last = focusable[focusable.length - 1];
-              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+              if (!modal.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
+              else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
               else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
             }
           }
@@ -3832,7 +4091,11 @@
             exitSelectionMode();
             return;
           }
-          document.querySelectorAll('.modal-backdrop.open').forEach((node) => closeModal(node.id));
+          const openModals = document.querySelectorAll('.modal-backdrop.open');
+          if (openModals.length) {
+            closeModal(openModals[openModals.length - 1].id);
+            return;
+          }
           closeFloatingPanels();
           if (state.adapterEditorOpen || state.editingAdapterId) {
             resetAdapterForm();

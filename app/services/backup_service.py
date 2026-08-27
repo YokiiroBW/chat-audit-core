@@ -12,7 +12,7 @@ import secrets
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.import_contract import (
@@ -23,13 +23,18 @@ from app.import_contract import (
     SQL_INTEGER_MIN,
 )
 from app.atomic_io import atomic_write_bytes, atomic_write_text
+from app.conversation_identity import resolve_conversation_message_type
+from app.message_scope import apply_robot_message_scope
 from app.models import (
+    IdentityAlias,
     ImportBatch,
     ImportSource,
     MediaAsset,
     Message,
     MessageMediaReference,
+    MessagePart,
     MessageSourceRecord,
+    ProfileChangeRecord,
     RobotMessage,
     RoomProfile,
     UserProfile,
@@ -38,9 +43,11 @@ from app.schemas import MessageMediaReferenceRequest
 from app.services.import_service import ImportService
 from app.time_utils import format_utc_z, parse_utc_datetime, to_utc_naive, utc_now
 
-BACKUP_SCHEMA = "chat-audit-core.backup.v2"
-LEGACY_BACKUP_SCHEMAS = frozenset({"chat-audit-core.backup.v1"})
+BACKUP_SCHEMA = "chat-audit-core.backup.v3"
+BACKUP_SCHEMA_V2 = "chat-audit-core.backup.v2"
+LEGACY_BACKUP_SCHEMAS = frozenset({"chat-audit-core.backup.v1", BACKUP_SCHEMA_V2})
 SUPPORTED_BACKUP_SCHEMAS = frozenset({BACKUP_SCHEMA, *LEGACY_BACKUP_SCHEMAS})
+BACKUP_DETAIL_SCHEMAS = frozenset({BACKUP_SCHEMA_V2, BACKUP_SCHEMA})
 BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
 logger = logging.getLogger(__name__)
 
@@ -66,6 +73,20 @@ class BackupService:
         "import_batches": ("id", "source_id", "mode", "status", "started_at"),
         "message_source_records": ("msg_hash", "source_id", "source_table", "source_primary_key", "imported_at", "last_seen_at"),
         "message_media_references": ("msg_hash", "ordinal", "media_type", "source_state", "archive_state", "first_seen_at", "last_checked_at"),
+    }
+    _V3_REQUIRED_FIELDS = {
+        "message_parts": ("msg_hash", "ordinal", "part_type", "render_status"),
+        "identity_aliases": (
+            "platform",
+            "identity_type",
+            "canonical_id",
+            "alias_id",
+            "alias_type",
+            "confidence",
+            "first_seen_at",
+            "last_seen_at",
+        ),
+        "profile_change_records": ("identity_type", "identity_id", "observed_at"),
     }
     _REQUIRED_FIELD_TYPES = {
         "messages": {
@@ -111,12 +132,44 @@ class BackupService:
             "first_seen_at": str,
             "last_checked_at": str,
         },
+        "message_parts": {"msg_hash": str, "ordinal": int, "part_type": str, "render_status": str},
+        "identity_aliases": {
+            "platform": str,
+            "identity_type": str,
+            "canonical_id": str,
+            "alias_id": str,
+            "alias_type": str,
+            "confidence": str,
+            "first_seen_at": str,
+            "last_seen_at": str,
+        },
+        "profile_change_records": {"identity_type": str, "identity_id": str, "observed_at": str},
     }
     _OPTIONAL_FIELD_TYPES = {
-        "messages": {"external_message_id": str, "nickname": str, "source_sequence": int},
-        "media_assets": {"file_checksum": dict},
-        "room_profiles": {"display_name": str, "avatar_path": str},
-        "user_profiles": {"display_name": str, "avatar_path": str},
+        "messages": {
+            "external_message_id": str,
+            "nickname": str,
+            "source_sequence": int,
+            "is_outgoing": bool,
+            "created_at": str,
+        },
+        "media_assets": {"file_checksum": dict, "content_sha256": str, "created_at": str},
+        "room_profiles": {
+            "display_name": str,
+            "avatar_path": str,
+            "avatar_file_hash": str,
+            "avatar_source_url": str,
+            "avatar_status": str,
+            "updated_at": str,
+        },
+        "user_profiles": {
+            "display_name": str,
+            "avatar_path": str,
+            "avatar_file_hash": str,
+            "avatar_source_url": str,
+            "avatar_status": str,
+            "updated_at": str,
+        },
         "import_sources": {
             "device_name": str,
             "qq_version": str,
@@ -145,13 +198,33 @@ class BackupService:
             "raw_40900_protobuf": str,
             "metadata": dict,
         },
-        "message_media_references": {"archived_at": str},
+        "message_media_references": {"archived_at": str, "content_sha256": str},
+        "message_parts": {
+            "text_content": str,
+            "media_reference_ordinal": int,
+            "payload": dict,
+            "source_format": str,
+        },
+        "identity_aliases": {"source_id": str, "metadata": dict},
+        "profile_change_records": {
+            "old_display_name": str,
+            "new_display_name": str,
+            "old_avatar_file_hash": str,
+            "new_avatar_file_hash": str,
+            "source_id": str,
+        },
     }
     _DATETIME_FIELDS = {
+        "messages": ("created_at",),
+        "media_assets": ("created_at",),
+        "room_profiles": ("updated_at",),
+        "user_profiles": ("updated_at",),
         "import_sources": ("first_seen_at", "last_seen_at"),
         "import_batches": ("started_at", "completed_at"),
         "message_source_records": ("imported_at", "last_seen_at"),
         "message_media_references": ("first_seen_at", "last_checked_at", "archived_at"),
+        "identity_aliases": ("first_seen_at", "last_seen_at"),
+        "profile_change_records": ("observed_at",),
     }
     _INTEGER_FIELDS = {
         "messages": ("timestamp",),
@@ -175,6 +248,7 @@ class BackupService:
             "width",
             "height",
         ),
+        "message_parts": ("ordinal", "media_reference_ordinal"),
     }
 
     @staticmethod
@@ -283,19 +357,23 @@ class BackupService:
             "external_message_id": message.external_message_id,
             "sender_id": message.sender_id,
             "nickname": message.nickname,
+            "is_outgoing": message.is_outgoing,
             "raw_message": message.raw_message,
             "local_message": message.local_message,
             "timestamp": message.timestamp,
             "source_sequence": message.source_sequence,
+            "created_at": format_utc_z(message.created_at),
         }
 
     @staticmethod
     def _media_asset_to_dict(asset: MediaAsset, storage_root: Path | None = None, public_storage_prefix: str = "/static/storage") -> dict[str, Any]:
         item = {
             "file_hash": asset.file_hash,
+            "content_sha256": asset.content_sha256,
             "file_type": asset.file_type,
             "file_size": asset.file_size,
             "local_path": asset.local_path,
+            "created_at": format_utc_z(asset.created_at),
         }
         if storage_root is not None:
             file_path = BackupService._local_media_file_path(asset.local_path, storage_root, public_storage_prefix)
@@ -389,6 +467,7 @@ class BackupService:
             "source_md5": reference.source_md5,
             "source_sha1": reference.source_sha1,
             "source_uuid": reference.source_uuid,
+            "content_sha256": reference.content_sha256,
             "source_local_path": reference.source_local_path,
             "duration_ms": reference.duration_ms,
             "width": reference.width,
@@ -408,6 +487,10 @@ class BackupService:
             "platform": profile.platform,
             "display_name": profile.display_name,
             "avatar_path": profile.avatar_path,
+            "avatar_file_hash": profile.avatar_file_hash,
+            "avatar_source_url": profile.avatar_source_url,
+            "avatar_status": profile.avatar_status,
+            "updated_at": format_utc_z(profile.updated_at),
         }
 
     @staticmethod
@@ -417,6 +500,51 @@ class BackupService:
             "platform": profile.platform,
             "display_name": profile.display_name,
             "avatar_path": profile.avatar_path,
+            "avatar_file_hash": profile.avatar_file_hash,
+            "avatar_source_url": profile.avatar_source_url,
+            "avatar_status": profile.avatar_status,
+            "updated_at": format_utc_z(profile.updated_at),
+        }
+
+    @staticmethod
+    def _message_part_to_dict(part: MessagePart, reference_ordinal_by_id: dict[int, int]) -> dict[str, Any]:
+        return {
+            "msg_hash": part.msg_hash,
+            "ordinal": part.ordinal,
+            "part_type": part.part_type,
+            "text_content": part.text_content,
+            "media_reference_ordinal": reference_ordinal_by_id.get(part.media_reference_id) if part.media_reference_id else None,
+            "payload": BackupService._json_object(part.payload_json),
+            "source_format": part.source_format,
+            "render_status": part.render_status,
+        }
+
+    @staticmethod
+    def _identity_alias_to_dict(alias: IdentityAlias) -> dict[str, Any]:
+        return {
+            "platform": alias.platform,
+            "identity_type": alias.identity_type,
+            "canonical_id": alias.canonical_id,
+            "alias_id": alias.alias_id,
+            "alias_type": alias.alias_type,
+            "source_id": alias.source_id,
+            "confidence": alias.confidence,
+            "metadata": BackupService._json_object(alias.metadata_json),
+            "first_seen_at": format_utc_z(alias.first_seen_at),
+            "last_seen_at": format_utc_z(alias.last_seen_at),
+        }
+
+    @staticmethod
+    def _profile_change_record_to_dict(record: ProfileChangeRecord) -> dict[str, Any]:
+        return {
+            "identity_type": record.identity_type,
+            "identity_id": record.identity_id,
+            "old_display_name": record.old_display_name,
+            "new_display_name": record.new_display_name,
+            "old_avatar_file_hash": record.old_avatar_file_hash,
+            "new_avatar_file_hash": record.new_avatar_file_hash,
+            "source_id": record.source_id,
+            "observed_at": format_utc_z(record.observed_at),
         }
 
     @staticmethod
@@ -454,6 +582,7 @@ class BackupService:
         db: AsyncSession,
         robot_id: str | None = None,
         room_id: str | None = None,
+        message_type: str | None = None,
         start_timestamp: int | None = None,
         end_timestamp: int | None = None,
         storage_root: Path | None = None,
@@ -462,11 +591,20 @@ class BackupService:
         system_id: str | None = None,
         signing_key: str | None = None,
     ) -> dict[str, Any]:
+        if room_id is not None:
+            message_type = await resolve_conversation_message_type(
+                db,
+                robot_id=robot_id,
+                room_id=room_id,
+                message_type=message_type,
+            )
         stmt = select(Message)
         if robot_id is not None:
-            stmt = stmt.join(RobotMessage, RobotMessage.msg_hash == Message.msg_hash).where(RobotMessage.robot_id == robot_id)
+            stmt = apply_robot_message_scope(stmt, robot_id)
         if room_id is not None:
             stmt = stmt.where(Message.room_id == room_id)
+        if message_type is not None:
+            stmt = stmt.where(Message.message_type == message_type)
         if start_timestamp is not None:
             stmt = stmt.where(Message.timestamp >= start_timestamp)
         if end_timestamp is not None:
@@ -498,8 +636,12 @@ class BackupService:
 
         message_source_records: list[dict[str, Any]] = []
         message_media_references: list[dict[str, Any]] = []
+        message_parts: list[dict[str, Any]] = []
         import_sources: list[dict[str, Any]] = []
         import_batches: list[dict[str, Any]] = []
+        identity_aliases: list[dict[str, Any]] = []
+        profile_change_records: list[dict[str, Any]] = []
+        source_ids: set[str] = set()
         referenced_media_hashes: set[str] = set()
         if msg_hashes:
             source_record_models: list[MessageSourceRecord] = []
@@ -508,11 +650,8 @@ class BackupService:
                 source_record_models.extend(source_record_result.scalars().all())
             source_record_models.sort(key=lambda record: (record.msg_hash, record.source_id, record.id))
             message_source_records = [BackupService._message_source_record_to_dict(record) for record in source_record_models]
-            source_ids = sorted({record.source_id for record in source_record_models})
+            source_ids.update(record.source_id for record in source_record_models)
             batch_ids = sorted({record.batch_id for record in source_record_models if record.batch_id})
-            if source_ids:
-                source_result = await db.execute(select(ImportSource).where(ImportSource.id.in_(source_ids)).order_by(ImportSource.id.asc()))
-                import_sources = [BackupService._import_source_to_dict(source) for source in source_result.scalars().all()]
             if batch_ids:
                 batch_result = await db.execute(select(ImportBatch).where(ImportBatch.id.in_(batch_ids)).order_by(ImportBatch.started_at.asc(), ImportBatch.id.asc()))
                 import_batches = [BackupService._import_batch_to_dict(batch) for batch in batch_result.scalars().all()]
@@ -523,12 +662,81 @@ class BackupService:
                 reference_models.extend(reference_result.scalars().all())
             reference_models.sort(key=lambda reference: (reference.msg_hash, reference.ordinal))
             message_media_references = [BackupService._message_media_reference_to_dict(reference) for reference in reference_models]
+            reference_ordinal_by_id = {reference.id: reference.ordinal for reference in reference_models}
             referenced_media_hashes = {
                 file_hash
                 for reference in reference_models
                 for file_hash in (reference.asset_file_hash, reference.thumbnail_file_hash)
                 if file_hash
             }
+
+            part_models: list[MessagePart] = []
+            for msg_hash_chunk in BackupService._iter_query_chunks(msg_hashes):
+                part_result = await db.execute(select(MessagePart).where(MessagePart.msg_hash.in_(msg_hash_chunk)))
+                part_models.extend(part_result.scalars().all())
+            part_models.sort(key=lambda part: (part.msg_hash, part.ordinal))
+            message_parts = [BackupService._message_part_to_dict(part, reference_ordinal_by_id) for part in part_models]
+
+        identity_conditions = []
+        if room_ids:
+            identity_conditions.append(
+                and_(
+                    IdentityAlias.identity_type.in_(("conversation", "group")),
+                    IdentityAlias.canonical_id.in_(room_ids),
+                )
+            )
+        if user_ids:
+            identity_conditions.append(
+                and_(IdentityAlias.identity_type == "user", IdentityAlias.canonical_id.in_(user_ids))
+            )
+        if identity_conditions:
+            alias_result = await db.execute(
+                select(IdentityAlias)
+                .where(or_(*identity_conditions))
+                .order_by(
+                    IdentityAlias.identity_type.asc(),
+                    IdentityAlias.canonical_id.asc(),
+                    IdentityAlias.alias_type.asc(),
+                    IdentityAlias.alias_id.asc(),
+                )
+            )
+            alias_models = list(alias_result.scalars().all())
+            identity_aliases = [BackupService._identity_alias_to_dict(alias) for alias in alias_models]
+            source_ids.update(alias.source_id for alias in alias_models if alias.source_id)
+
+        change_conditions = []
+        if room_ids:
+            change_conditions.append(
+                and_(
+                    ProfileChangeRecord.identity_type.in_(("conversation", "group")),
+                    ProfileChangeRecord.identity_id.in_(room_ids),
+                )
+            )
+        if user_ids:
+            change_conditions.append(
+                and_(ProfileChangeRecord.identity_type == "user", ProfileChangeRecord.identity_id.in_(user_ids))
+            )
+        if change_conditions:
+            change_result = await db.execute(
+                select(ProfileChangeRecord)
+                .where(or_(*change_conditions))
+                .order_by(ProfileChangeRecord.observed_at.asc(), ProfileChangeRecord.id.asc())
+            )
+            change_models = list(change_result.scalars().all())
+            profile_change_records = [BackupService._profile_change_record_to_dict(record) for record in change_models]
+            source_ids.update(record.source_id for record in change_models if record.source_id)
+            referenced_media_hashes.update(
+                file_hash
+                for record in change_models
+                for file_hash in (record.old_avatar_file_hash, record.new_avatar_file_hash)
+                if file_hash
+            )
+
+        if source_ids:
+            source_result = await db.execute(
+                select(ImportSource).where(ImportSource.id.in_(sorted(source_ids))).order_by(ImportSource.id.asc())
+            )
+            import_sources = [BackupService._import_source_to_dict(source) for source in source_result.scalars().all()]
 
         room_profiles: list[dict[str, Any]] = []
         user_profiles: list[dict[str, Any]] = []
@@ -538,11 +746,13 @@ class BackupService:
             room_profile_models = list(room_profile_result.scalars().all())
             room_profiles = [BackupService._room_profile_to_dict(profile) for profile in room_profile_models]
             profile_media_paths.update(profile.avatar_path for profile in room_profile_models if profile.avatar_path)
+            referenced_media_hashes.update(profile.avatar_file_hash for profile in room_profile_models if profile.avatar_file_hash)
         if user_ids:
             user_profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)).order_by(UserProfile.user_id.asc()))
             user_profile_models = list(user_profile_result.scalars().all())
             user_profiles = [BackupService._user_profile_to_dict(profile) for profile in user_profile_models]
             profile_media_paths.update(profile.avatar_path for profile in user_profile_models if profile.avatar_path)
+            referenced_media_hashes.update(profile.avatar_file_hash for profile in user_profile_models if profile.avatar_file_hash)
 
         media_paths = sorted(
             profile_media_paths
@@ -561,6 +771,7 @@ class BackupService:
                 media_conditions.append(MediaAsset.local_path.in_(media_paths))
             if referenced_media_hashes:
                 media_conditions.append(MediaAsset.file_hash.in_(referenced_media_hashes))
+                media_conditions.append(MediaAsset.content_sha256.in_(referenced_media_hashes))
             media_result = await db.execute(select(MediaAsset).where(or_(*media_conditions)).order_by(MediaAsset.file_hash.asc()))
             assets = list(media_result.scalars().all())
             media_assets = [
@@ -581,6 +792,7 @@ class BackupService:
                 "filters": {
                     "robot_id": robot_id,
                     "room_id": room_id,
+                    "message_type": message_type,
                     "start_timestamp": start_timestamp,
                     "end_timestamp": end_timestamp,
                 },
@@ -595,6 +807,9 @@ class BackupService:
                     "import_batches": len(import_batches),
                     "message_source_records": len(message_source_records),
                     "message_media_references": len(message_media_references),
+                    "message_parts": len(message_parts),
+                    "identity_aliases": len(identity_aliases),
+                    "profile_change_records": len(profile_change_records),
                 },
             },
             "messages": [BackupService._message_to_dict(message) for message in messages],
@@ -607,6 +822,9 @@ class BackupService:
             "import_batches": import_batches,
             "message_source_records": message_source_records,
             "message_media_references": message_media_references,
+            "message_parts": message_parts,
+            "identity_aliases": identity_aliases,
+            "profile_change_records": profile_change_records,
         }
         BackupService.attach_package_checksum(package)
         if system_id and signing_key:
@@ -635,6 +853,7 @@ class BackupService:
         db: AsyncSession,
         robot_id: str | None = None,
         room_id: str | None = None,
+        message_type: str | None = None,
         start_timestamp: int | None = None,
         end_timestamp: int | None = None,
         storage_root: Path | None = None,
@@ -647,6 +866,7 @@ class BackupService:
             db,
             robot_id=robot_id,
             room_id=room_id,
+            message_type=message_type,
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
             storage_root=storage_root,
@@ -837,11 +1057,14 @@ class BackupService:
     @staticmethod
     def _validate_required_package_fields(package: dict[str, Any], errors: list[str], *, schema: str | None = None) -> None:
         required_sections = dict(BackupService._REQUIRED_FIELDS)
-        if schema == BACKUP_SCHEMA:
+        if isinstance(schema, str) and schema in BACKUP_DETAIL_SCHEMAS:
             required_sections.update(BackupService._V2_REQUIRED_FIELDS)
+        if schema == BACKUP_SCHEMA:
+            required_sections.update(BackupService._V3_REQUIRED_FIELDS)
         for section, required_fields in required_sections.items():
-            if schema == BACKUP_SCHEMA and section in BackupService._V2_REQUIRED_FIELDS and section not in package:
-                errors.append(f"{section} section is required for {BACKUP_SCHEMA}")
+            is_versioned_section = section in BackupService._V2_REQUIRED_FIELDS or section in BackupService._V3_REQUIRED_FIELDS
+            if is_versioned_section and section not in package:
+                errors.append(f"{section} section is required for {schema}")
                 continue
             items = package.get(section, [])
             if not isinstance(items, list):
@@ -968,6 +1191,81 @@ class BackupService:
                             errors.append(f"message_media_references[{index}].{field} references an empty media asset")
 
     @staticmethod
+    def _validate_v3_references(package: dict[str, Any], errors: list[str]) -> None:
+        message_hashes = {
+            item.get("msg_hash")
+            for item in BackupService._section_list(package, "messages")
+            if isinstance(item, dict) and isinstance(item.get("msg_hash"), str)
+        }
+        media_reference_keys = {
+            (item.get("msg_hash"), item.get("ordinal"))
+            for item in BackupService._section_list(package, "message_media_references")
+            if isinstance(item, dict)
+        }
+        source_ids = {
+            item.get("id")
+            for item in BackupService._section_list(package, "import_sources")
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        asset_hashes = {
+            value
+            for item in BackupService._section_list(package, "media_assets")
+            if isinstance(item, dict)
+            for value in (item.get("file_hash"), item.get("content_sha256"))
+            if isinstance(value, str)
+        }
+
+        part_keys: set[tuple[Any, Any]] = set()
+        for index, part in enumerate(BackupService._section_list(package, "message_parts")):
+            if not isinstance(part, dict):
+                continue
+            key = (part.get("msg_hash"), part.get("ordinal"))
+            if key in part_keys:
+                errors.append(f"message_parts[{index}] duplicates a message/ordinal pair")
+            part_keys.add(key)
+            if part.get("msg_hash") not in message_hashes:
+                errors.append(f"message_parts[{index}] references an unknown message")
+            reference_ordinal = part.get("media_reference_ordinal")
+            if reference_ordinal is not None and (part.get("msg_hash"), reference_ordinal) not in media_reference_keys:
+                errors.append(f"message_parts[{index}] references an unknown message media reference")
+
+        alias_keys: set[tuple[Any, ...]] = set()
+        for index, alias in enumerate(BackupService._section_list(package, "identity_aliases")):
+            if not isinstance(alias, dict):
+                continue
+            key = (
+                alias.get("platform"),
+                alias.get("identity_type"),
+                alias.get("alias_id"),
+                alias.get("source_id"),
+            )
+            if key in alias_keys:
+                errors.append(f"identity_aliases[{index}] duplicates an alias/source pair")
+            alias_keys.add(key)
+            source_id = alias.get("source_id")
+            if source_id is not None and source_id not in source_ids:
+                errors.append(f"identity_aliases[{index}] references an unknown import source")
+
+        for section in ("room_profiles", "user_profiles"):
+            for index, profile in enumerate(BackupService._section_list(package, section)):
+                if not isinstance(profile, dict):
+                    continue
+                avatar_file_hash = profile.get("avatar_file_hash")
+                if avatar_file_hash is not None and avatar_file_hash not in asset_hashes:
+                    errors.append(f"{section}[{index}].avatar_file_hash references an unknown media asset")
+
+        for index, record in enumerate(BackupService._section_list(package, "profile_change_records")):
+            if not isinstance(record, dict):
+                continue
+            source_id = record.get("source_id")
+            if source_id is not None and source_id not in source_ids:
+                errors.append(f"profile_change_records[{index}] references an unknown import source")
+            for field in ("old_avatar_file_hash", "new_avatar_file_hash"):
+                file_hash = record.get(field)
+                if file_hash is not None and file_hash not in asset_hashes:
+                    errors.append(f"profile_change_records[{index}].{field} references an unknown media asset")
+
+    @staticmethod
     def _validate_core_references(package: dict[str, Any], errors: list[str]) -> None:
         message_hashes = {
             item.get("msg_hash")
@@ -1090,8 +1388,11 @@ class BackupService:
 
         BackupService._validate_required_package_fields(package, errors, schema=schema)
         BackupService._validate_core_references(package, errors)
-        if schema == BACKUP_SCHEMA:
+        is_detail_schema = isinstance(schema, str) and schema in BACKUP_DETAIL_SCHEMAS
+        if is_detail_schema:
             BackupService._validate_v2_references(package, errors)
+        if schema == BACKUP_SCHEMA:
+            BackupService._validate_v3_references(package, errors)
 
         checksum = manifest.get("checksum")
         if checksum is not None:
@@ -1139,10 +1440,13 @@ class BackupService:
             "media_files": len(BackupService._section_list(package, "media_files")),
             "room_profiles": len(BackupService._section_list(package, "room_profiles")),
             "user_profiles": len(BackupService._section_list(package, "user_profiles")),
-            "import_sources": len(BackupService._section_list(package, "import_sources")) if schema == BACKUP_SCHEMA else 0,
-            "import_batches": len(BackupService._section_list(package, "import_batches")) if schema == BACKUP_SCHEMA else 0,
-            "message_source_records": len(BackupService._section_list(package, "message_source_records")) if schema == BACKUP_SCHEMA else 0,
-            "message_media_references": len(BackupService._section_list(package, "message_media_references")) if schema == BACKUP_SCHEMA else 0,
+            "import_sources": len(BackupService._section_list(package, "import_sources")) if is_detail_schema else 0,
+            "import_batches": len(BackupService._section_list(package, "import_batches")) if is_detail_schema else 0,
+            "message_source_records": len(BackupService._section_list(package, "message_source_records")) if is_detail_schema else 0,
+            "message_media_references": len(BackupService._section_list(package, "message_media_references")) if is_detail_schema else 0,
+            "message_parts": len(BackupService._section_list(package, "message_parts")) if schema == BACKUP_SCHEMA else 0,
+            "identity_aliases": len(BackupService._section_list(package, "identity_aliases")) if schema == BACKUP_SCHEMA else 0,
+            "profile_change_records": len(BackupService._section_list(package, "profile_change_records")) if schema == BACKUP_SCHEMA else 0,
         }
         media_files = BackupService._validate_media_files(package, storage_root, public_storage_prefix, errors)
 
@@ -1159,17 +1463,19 @@ class BackupService:
 
     @staticmethod
     def _message_matches_existing(existing: Message, item: dict[str, Any]) -> bool:
-        return all(
+        matches = all(
             getattr(existing, key) == item.get(key)
             for key in ("platform", "room_id", "message_type", "external_message_id", "sender_id", "nickname", "raw_message", "local_message", "timestamp", "source_sequence")
         )
+        return matches and ("is_outgoing" not in item or existing.is_outgoing == item.get("is_outgoing"))
 
     @staticmethod
     def _media_asset_matches_existing(existing: MediaAsset, item: dict[str, Any]) -> bool:
-        return all(
+        matches = all(
             getattr(existing, key) == item.get(key)
             for key in ("file_type", "file_size", "local_path")
         )
+        return matches and ("content_sha256" not in item or existing.content_sha256 == item.get("content_sha256"))
 
     @staticmethod
     async def preview_import_package(
@@ -1198,6 +1504,9 @@ class BackupService:
         import_batch_diff = {"new": 0, "update": 0, "unchanged": 0}
         source_record_diff = {"new": 0, "update": 0, "unchanged": 0}
         media_reference_diff = {"new": 0, "update": 0, "unchanged": 0}
+        message_part_diff = {"new": 0, "update": 0, "unchanged": 0}
+        identity_alias_diff = {"new": 0, "update": 0, "unchanged": 0}
+        profile_change_diff = {"new": 0, "existing": 0}
 
         for item in package.get("messages", []) or []:
             result = await db.execute(select(Message).where(Message.msg_hash == item.get("msg_hash")))
@@ -1231,7 +1540,7 @@ class BackupService:
             else:
                 media_asset_diff["update"] += 1
 
-        for item in (package.get("import_sources", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("import_sources", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             identity_result = await db.execute(
                 select(ImportSource.id).where(
                     ImportSource.source_type == item.get("source_type"),
@@ -1253,7 +1562,7 @@ class BackupService:
             else:
                 import_source_diff["update"] += 1
 
-        for item in (package.get("import_batches", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("import_batches", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             existing = await db.get(ImportBatch, item.get("id"))
             if existing is None:
                 import_batch_diff["new"] += 1
@@ -1262,7 +1571,7 @@ class BackupService:
             else:
                 import_batch_diff["update"] += 1
 
-        for item in (package.get("message_source_records", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("message_source_records", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             result = await db.execute(
                 select(MessageSourceRecord).where(
                     MessageSourceRecord.source_id == item.get("source_id"),
@@ -1278,7 +1587,7 @@ class BackupService:
             else:
                 source_record_diff["update"] += 1
 
-        for item in (package.get("message_media_references", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("message_media_references", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             result = await db.execute(
                 select(MessageMediaReference).where(
                     MessageMediaReference.msg_hash == item.get("msg_hash"),
@@ -1298,6 +1607,87 @@ class BackupService:
             else:
                 media_reference_diff["update"] += 1
 
+        for item in (package.get("message_parts", []) or []) if schema == BACKUP_SCHEMA else []:
+            result = await db.execute(
+                select(MessagePart).where(
+                    MessagePart.msg_hash == item.get("msg_hash"),
+                    MessagePart.ordinal == item.get("ordinal"),
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                message_part_diff["new"] += 1
+                continue
+            reference_ordinal = None
+            if existing.media_reference_id is not None:
+                reference = await db.get(MessageMediaReference, existing.media_reference_id)
+                reference_ordinal = reference.ordinal if reference is not None else None
+            if (
+                existing.part_type,
+                existing.text_content,
+                reference_ordinal,
+                BackupService._json_object(existing.payload_json),
+                existing.source_format,
+                existing.render_status,
+            ) == (
+                item.get("part_type"),
+                item.get("text_content"),
+                item.get("media_reference_ordinal"),
+                item.get("payload") or {},
+                item.get("source_format"),
+                item.get("render_status"),
+            ):
+                message_part_diff["unchanged"] += 1
+            else:
+                message_part_diff["update"] += 1
+
+        for item in (package.get("identity_aliases", []) or []) if schema == BACKUP_SCHEMA else []:
+            source_id = item.get("source_id")
+            source_clause = IdentityAlias.source_id == source_id if source_id is not None else IdentityAlias.source_id.is_(None)
+            result = await db.execute(
+                select(IdentityAlias).where(
+                    IdentityAlias.platform == item.get("platform"),
+                    IdentityAlias.identity_type == item.get("identity_type"),
+                    IdentityAlias.alias_id == item.get("alias_id"),
+                    source_clause,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                identity_alias_diff["new"] += 1
+            elif (
+                existing.canonical_id,
+                existing.alias_type,
+                existing.confidence,
+                BackupService._json_object(existing.metadata_json),
+            ) == (
+                item.get("canonical_id"),
+                item.get("alias_type"),
+                item.get("confidence"),
+                item.get("metadata") or {},
+            ):
+                identity_alias_diff["unchanged"] += 1
+            else:
+                identity_alias_diff["update"] += 1
+
+        for item in (package.get("profile_change_records", []) or []) if schema == BACKUP_SCHEMA else []:
+            result = await db.execute(
+                select(ProfileChangeRecord.id).where(
+                    ProfileChangeRecord.identity_type == item.get("identity_type"),
+                    ProfileChangeRecord.identity_id == item.get("identity_id"),
+                    ProfileChangeRecord.old_display_name == item.get("old_display_name"),
+                    ProfileChangeRecord.new_display_name == item.get("new_display_name"),
+                    ProfileChangeRecord.old_avatar_file_hash == item.get("old_avatar_file_hash"),
+                    ProfileChangeRecord.new_avatar_file_hash == item.get("new_avatar_file_hash"),
+                    ProfileChangeRecord.source_id == item.get("source_id"),
+                    ProfileChangeRecord.observed_at == parse_utc_datetime(item.get("observed_at")),
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                profile_change_diff["new"] += 1
+            else:
+                profile_change_diff["existing"] += 1
+
         report["diff"] = {
             "messages": message_diff,
             "robot_messages": robot_message_diff,
@@ -1306,6 +1696,9 @@ class BackupService:
             "import_batches": import_batch_diff,
             "message_source_records": source_record_diff,
             "message_media_references": media_reference_diff,
+            "message_parts": message_part_diff,
+            "identity_aliases": identity_alias_diff,
+            "profile_change_records": profile_change_diff,
         }
         return report
 
@@ -1348,7 +1741,7 @@ class BackupService:
             raise ValueError("; ".join(report["errors"]))
 
         import_source_count = 0
-        for item in (package.get("import_sources", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("import_sources", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             source = await db.get(ImportSource, item["id"])
             identity_result = await db.execute(
                 select(ImportSource.id).where(
@@ -1378,7 +1771,7 @@ class BackupService:
         await db.flush()
 
         import_batch_count = 0
-        for item in (package.get("import_batches", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("import_batches", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             batch = await db.get(ImportBatch, item["id"])
             if batch is None:
                 batch = ImportBatch(id=item["id"])
@@ -1421,6 +1814,8 @@ class BackupService:
                         local_message=item["local_message"],
                         timestamp=item["timestamp"],
                         source_sequence=item.get("source_sequence"),
+                        is_outgoing=item.get("is_outgoing"),
+                        created_at=parse_utc_datetime(item["created_at"]) if item.get("created_at") else utc_now(),
                     )
                 )
             else:
@@ -1435,6 +1830,10 @@ class BackupService:
                 message.timestamp = item["timestamp"]
                 if item.get("source_sequence") is not None:
                     message.source_sequence = item["source_sequence"]
+                if "is_outgoing" in item:
+                    message.is_outgoing = item.get("is_outgoing")
+                if item.get("created_at"):
+                    message.created_at = parse_utc_datetime(item["created_at"])
             message_count += 1
 
         robot_message_count = 0
@@ -1461,18 +1860,24 @@ class BackupService:
                         file_type=item["file_type"],
                         file_size=item["file_size"],
                         local_path=item["local_path"],
+                        content_sha256=item.get("content_sha256"),
+                        created_at=parse_utc_datetime(item["created_at"]) if item.get("created_at") else utc_now(),
                     )
                 )
             else:
                 asset.file_type = item["file_type"]
                 asset.file_size = item["file_size"]
                 asset.local_path = item["local_path"]
+                if "content_sha256" in item:
+                    asset.content_sha256 = item.get("content_sha256")
+                if item.get("created_at"):
+                    asset.created_at = parse_utc_datetime(item["created_at"])
             media_asset_count += 1
 
         await db.flush()
 
         message_source_record_count = 0
-        for item in (package.get("message_source_records", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("message_source_records", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             result = await db.execute(
                 select(MessageSourceRecord).where(
                     MessageSourceRecord.source_id == item["source_id"],
@@ -1509,7 +1914,7 @@ class BackupService:
             message_source_record_count += 1
 
         message_media_reference_count = 0
-        for item in (package.get("message_media_references", []) or []) if schema == BACKUP_SCHEMA else []:
+        for item in (package.get("message_media_references", []) or []) if schema in BACKUP_DETAIL_SCHEMAS else []:
             reference_request = MessageMediaReferenceRequest.model_validate(item)
             await ImportService._upsert_media_reference(
                 db,
@@ -1530,6 +1935,101 @@ class BackupService:
             if item.get("archived_at") and reference.archived_at is None:
                 reference.archived_at = parse_utc_datetime(item["archived_at"])
             message_media_reference_count += 1
+        await db.flush()
+
+        message_part_count = 0
+        for item in (package.get("message_parts", []) or []) if schema == BACKUP_SCHEMA else []:
+            result = await db.execute(
+                select(MessagePart).where(
+                    MessagePart.msg_hash == item["msg_hash"],
+                    MessagePart.ordinal == item["ordinal"],
+                )
+            )
+            part = result.scalar_one_or_none()
+            if part is None:
+                part = MessagePart(msg_hash=item["msg_hash"], ordinal=item["ordinal"])
+                db.add(part)
+            part.part_type = item["part_type"]
+            part.text_content = item.get("text_content")
+            part.payload_json = json.dumps(item.get("payload") or {}, ensure_ascii=False, sort_keys=True)
+            part.source_format = item.get("source_format")
+            part.render_status = item["render_status"]
+            reference_ordinal = item.get("media_reference_ordinal")
+            if reference_ordinal is None:
+                part.media_reference_id = None
+            else:
+                reference_result = await db.execute(
+                    select(MessageMediaReference.id).where(
+                        MessageMediaReference.msg_hash == item["msg_hash"],
+                        MessageMediaReference.ordinal == reference_ordinal,
+                    )
+                )
+                part.media_reference_id = reference_result.scalar_one()
+            message_part_count += 1
+
+        identity_alias_count = 0
+        for item in (package.get("identity_aliases", []) or []) if schema == BACKUP_SCHEMA else []:
+            source_id = item.get("source_id")
+            source_clause = IdentityAlias.source_id == source_id if source_id is not None else IdentityAlias.source_id.is_(None)
+            result = await db.execute(
+                select(IdentityAlias).where(
+                    IdentityAlias.platform == item["platform"],
+                    IdentityAlias.identity_type == item["identity_type"],
+                    IdentityAlias.alias_id == item["alias_id"],
+                    source_clause,
+                )
+            )
+            alias = result.scalar_one_or_none()
+            incoming_first_seen = parse_utc_datetime(item["first_seen_at"])
+            incoming_last_seen = parse_utc_datetime(item["last_seen_at"])
+            if alias is None:
+                alias = IdentityAlias(
+                    platform=item["platform"],
+                    identity_type=item["identity_type"],
+                    alias_id=item["alias_id"],
+                    source_id=source_id,
+                    first_seen_at=incoming_first_seen,
+                    last_seen_at=incoming_last_seen,
+                )
+                db.add(alias)
+            else:
+                alias.first_seen_at = min(alias.first_seen_at, incoming_first_seen)
+                alias.last_seen_at = max(alias.last_seen_at, incoming_last_seen)
+            alias.canonical_id = item["canonical_id"]
+            alias.alias_type = item["alias_type"]
+            alias.confidence = item["confidence"]
+            alias.metadata_json = json.dumps(item.get("metadata") or {}, ensure_ascii=False, sort_keys=True)
+            identity_alias_count += 1
+
+        profile_change_record_count = 0
+        for item in (package.get("profile_change_records", []) or []) if schema == BACKUP_SCHEMA else []:
+            observed_at = parse_utc_datetime(item["observed_at"])
+            result = await db.execute(
+                select(ProfileChangeRecord.id).where(
+                    ProfileChangeRecord.identity_type == item["identity_type"],
+                    ProfileChangeRecord.identity_id == item["identity_id"],
+                    ProfileChangeRecord.old_display_name == item.get("old_display_name"),
+                    ProfileChangeRecord.new_display_name == item.get("new_display_name"),
+                    ProfileChangeRecord.old_avatar_file_hash == item.get("old_avatar_file_hash"),
+                    ProfileChangeRecord.new_avatar_file_hash == item.get("new_avatar_file_hash"),
+                    ProfileChangeRecord.source_id == item.get("source_id"),
+                    ProfileChangeRecord.observed_at == observed_at,
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                db.add(
+                    ProfileChangeRecord(
+                        identity_type=item["identity_type"],
+                        identity_id=item["identity_id"],
+                        old_display_name=item.get("old_display_name"),
+                        new_display_name=item.get("new_display_name"),
+                        old_avatar_file_hash=item.get("old_avatar_file_hash"),
+                        new_avatar_file_hash=item.get("new_avatar_file_hash"),
+                        source_id=item.get("source_id"),
+                        observed_at=observed_at,
+                    )
+                )
+            profile_change_record_count += 1
 
         for item in package.get("room_profiles", []) or []:
             profile = await db.get(RoomProfile, item["room_id"])
@@ -1540,12 +2040,24 @@ class BackupService:
                         platform=item["platform"],
                         display_name=item.get("display_name"),
                         avatar_path=item.get("avatar_path"),
+                        avatar_file_hash=item.get("avatar_file_hash"),
+                        avatar_source_url=item.get("avatar_source_url"),
+                        avatar_status=item.get("avatar_status") or "unknown",
+                        updated_at=parse_utc_datetime(item["updated_at"]) if item.get("updated_at") else utc_now(),
                     )
                 )
             else:
                 profile.platform = item["platform"]
                 profile.display_name = item.get("display_name")
                 profile.avatar_path = item.get("avatar_path")
+                if "avatar_file_hash" in item:
+                    profile.avatar_file_hash = item.get("avatar_file_hash")
+                if "avatar_source_url" in item:
+                    profile.avatar_source_url = item.get("avatar_source_url")
+                if item.get("avatar_status"):
+                    profile.avatar_status = item["avatar_status"]
+                if item.get("updated_at"):
+                    profile.updated_at = parse_utc_datetime(item["updated_at"])
 
         for item in package.get("user_profiles", []) or []:
             profile = await db.get(UserProfile, item["user_id"])
@@ -1556,12 +2068,24 @@ class BackupService:
                         platform=item["platform"],
                         display_name=item.get("display_name"),
                         avatar_path=item.get("avatar_path"),
+                        avatar_file_hash=item.get("avatar_file_hash"),
+                        avatar_source_url=item.get("avatar_source_url"),
+                        avatar_status=item.get("avatar_status") or "unknown",
+                        updated_at=parse_utc_datetime(item["updated_at"]) if item.get("updated_at") else utc_now(),
                     )
                 )
             else:
                 profile.platform = item["platform"]
                 profile.display_name = item.get("display_name")
                 profile.avatar_path = item.get("avatar_path")
+                if "avatar_file_hash" in item:
+                    profile.avatar_file_hash = item.get("avatar_file_hash")
+                if "avatar_source_url" in item:
+                    profile.avatar_source_url = item.get("avatar_source_url")
+                if item.get("avatar_status"):
+                    profile.avatar_status = item["avatar_status"]
+                if item.get("updated_at"):
+                    profile.updated_at = parse_utc_datetime(item["updated_at"])
 
         BackupService._restore_embedded_media_files(package, storage_root, public_storage_prefix)
         await db.commit()
@@ -1570,13 +2094,21 @@ class BackupService:
             "robot_messages": robot_message_count,
             "media_assets": media_asset_count,
         }
-        if schema == BACKUP_SCHEMA:
+        if schema in BACKUP_DETAIL_SCHEMAS:
             result.update(
                 {
                     "import_sources": import_source_count,
                     "import_batches": import_batch_count,
                     "message_source_records": message_source_record_count,
                     "message_media_references": message_media_reference_count,
+                }
+            )
+        if schema == BACKUP_SCHEMA:
+            result.update(
+                {
+                    "message_parts": message_part_count,
+                    "identity_aliases": identity_alias_count,
+                    "profile_change_records": profile_change_record_count,
                 }
             )
         return result

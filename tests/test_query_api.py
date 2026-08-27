@@ -86,6 +86,138 @@ async def test_query_api_respects_robot_view_isolation(db_session):
 
 
 @pytest.mark.asyncio
+async def test_room_id_collision_requires_and_respects_message_type_across_flows(db_session):
+    for message_type, target_body, reply_id in (
+        ("group", "group target body", "group-reply"),
+        ("private", "private target body", "private-reply"),
+    ):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": "shared-target-id",
+                "room_id": "shared-room-id",
+                "message_type": message_type,
+                "sender_id": "shared-sender",
+                "nickname": f"{message_type.title()} Target",
+                "raw_message": target_body,
+                "timestamp": 1783000000,
+            },
+        )
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": reply_id,
+                "room_id": "shared-room-id",
+                "message_type": message_type,
+                "sender_id": "shared-sender",
+                "nickname": f"{message_type.title()} Replier",
+                "raw_message": "[CQ:reply,id=shared-target-id] follow up",
+                "timestamp": 1783000001,
+            },
+        )
+    db_session.add_all(
+        [
+            RoomProfile(room_id="shared-room-id", platform="qq", display_name="Group Profile"),
+            UserProfile(user_id="shared-room-id", platform="qq", display_name="Private Profile"),
+        ]
+    )
+    await db_session.commit()
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            rooms = await client.get("/api/rooms", params={"robot_id": "robot-a"})
+            ambiguous_messages = await client.get(
+                "/api/messages", params={"robot_id": "robot-a", "room_id": "shared-room-id"}
+            )
+            group_messages = await client.get(
+                "/api/messages",
+                params={"robot_id": "robot-a", "room_id": "shared-room-id", "message_type": "group"},
+            )
+            private_messages = await client.get(
+                "/api/messages",
+                params={"robot_id": "robot-a", "room_id": "shared-room-id", "message_type": "private"},
+            )
+            ambiguous_search = await client.get(
+                "/api/search",
+                params={"robot_id": "robot-a", "room_id": "shared-room-id", "keyword": "target"},
+            )
+            group_search = await client.get(
+                "/api/search",
+                params={
+                    "robot_id": "robot-a",
+                    "room_id": "shared-room-id",
+                    "message_type": "group",
+                    "keyword": "target",
+                },
+            )
+            ambiguous_export = await client.get(
+                "/api/export", params={"robot_id": "robot-a", "room_id": "shared-room-id"}
+            )
+            private_export = await client.get(
+                "/api/export",
+                params={"robot_id": "robot-a", "room_id": "shared-room-id", "message_type": "private"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert rooms.status_code == 200
+    room_items = {(item["room_id"], item["message_type"]): item for item in rooms.json()}
+    assert room_items[("shared-room-id", "group")]["display_name"] == "Group Profile"
+    assert room_items[("shared-room-id", "private")]["display_name"] == "Private Profile"
+    assert ambiguous_messages.status_code == 409
+    assert ambiguous_search.status_code == 409
+    assert ambiguous_export.status_code == 409
+    assert {item["message_type"] for item in group_messages.json()} == {"group"}
+    assert {item["message_type"] for item in private_messages.json()} == {"private"}
+    group_reply = next(item for item in group_messages.json() if item["external_message_id"] == "group-reply")
+    private_reply = next(item for item in private_messages.json() if item["external_message_id"] == "private-reply")
+    assert group_reply["reply_preview_text"] == "Group Target: group target body"
+    assert private_reply["reply_preview_text"] == "Private Target: private target body"
+    assert {item["message_type"] for item in group_search.json()} == {"group"}
+    assert {item["message_type"] for item in private_export.json()["messages"]} == {"private"}
+
+
+@pytest.mark.asyncio
+async def test_around_message_cursor_includes_target_among_many_same_second_messages(db_session):
+    target_id = "same-second-target"
+    for index in range(230):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-a",
+            "qq",
+            {
+                "message_id": target_id if index == 5 else f"same-second-{index}",
+                "room_id": "group-around-dense",
+                "message_type": "group",
+                "sender_id": "dense-sender",
+                "nickname": "Dense Sender",
+                "raw_message": f"dense message {index}",
+                "timestamp": 1783000200,
+                "source_sequence": index,
+            },
+        )
+
+    messages = await QueryService.list_messages(
+        db_session,
+        robot_id="robot-a",
+        room_id="group-around-dense",
+        message_type="group",
+        around_message_id=target_id,
+        limit=50,
+    )
+
+    assert target_id in {message.external_message_id for message in messages}
+
+
+@pytest.mark.asyncio
 async def test_messages_api_uses_before_timestamp_cursor(db_session):
     for offset in range(3):
         await MessageService.process_incoming_message(

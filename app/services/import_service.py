@@ -405,16 +405,22 @@ class ImportService:
             room_id=canonical_room_id,
             sender_id=canonical_sender_id,
             event_identity=str(event_identity),
+            message_type=message_data.message_type,
         )
 
         message_result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
         message = message_result.scalar_one_or_none()
+        if message is not None and message.message_type != message_data.message_type:
+            msg_hash = MessageService.generate_md5(f"{msg_hash}_{message_data.message_type}".encode("utf-8"))
+            message_result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
+            message = message_result.scalar_one_or_none()
         if message is None and message_data.message_id:
             existing_result = await db.execute(
                 select(Message).where(
                     Message.platform == message_data.platform,
                     Message.room_id == canonical_room_id,
                     Message.sender_id == canonical_sender_id,
+                    Message.message_type == message_data.message_type,
                     Message.external_message_id == message_data.message_id,
                 ).with_for_update()
             )

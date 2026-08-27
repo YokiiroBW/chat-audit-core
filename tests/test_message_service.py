@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import func, select
 
-from app.models import ImportSource, Message, MessageSourceRecord
+from app.models import ImportSource, MediaAsset, Message, MessageMediaReference, MessagePart, MessageSourceRecord
 from app.services.message_service import MessageService
 
 
@@ -244,3 +244,118 @@ async def test_two_realtime_events_with_identical_text_stay_separate(db_session)
 
     assert first != second
     assert await db_session.scalar(select(func.count(Message.msg_hash))) == 2
+
+
+@pytest.mark.asyncio
+async def test_authoritative_message_parts_remove_trailing_rows_and_stale_media_links(db_session):
+    message = Message(
+        msg_hash="parts-authoritative",
+        platform="qq",
+        room_id="group-parts",
+        message_type="group",
+        sender_id="user-parts",
+        raw_message="parts",
+        local_message="parts",
+        timestamp=1783000000,
+    )
+    asset = MediaAsset(
+        file_hash="parts-asset",
+        content_sha256="a" * 64,
+        file_type="image",
+        file_size=1,
+        local_path="/static/storage/parts.jpg",
+    )
+    reference = MessageMediaReference(
+        msg_hash=message.msg_hash,
+        ordinal=0,
+        media_type="image",
+        source_state="downloaded",
+        archive_state="complete",
+        asset_file_hash=asset.file_hash,
+    )
+    db_session.add_all([message, asset, reference])
+    await db_session.flush()
+
+    await MessageService._upsert_message_parts(
+        db_session,
+        msg_hash=message.msg_hash,
+        segments=[
+            {"type": "image", "data": {"file": "parts.jpg"}},
+            {"type": "text", "data": {"text": "obsolete"}},
+        ],
+        source_format="test",
+    )
+    await MessageService.link_message_parts_to_media(db_session, message.msg_hash)
+    await db_session.flush()
+
+    initial_parts = list((await db_session.execute(
+        select(MessagePart).where(MessagePart.msg_hash == message.msg_hash).order_by(MessagePart.ordinal)
+    )).scalars())
+    assert len(initial_parts) == 2
+    assert initial_parts[0].media_reference_id == reference.id
+
+    await MessageService._upsert_message_parts(
+        db_session,
+        msg_hash=message.msg_hash,
+        segments=[{"type": "text", "data": {"text": "corrected"}}],
+        source_format="test",
+    )
+    await MessageService.link_message_parts_to_media(db_session, message.msg_hash)
+    await db_session.flush()
+
+    corrected_parts = list((await db_session.execute(
+        select(MessagePart).where(MessagePart.msg_hash == message.msg_hash).order_by(MessagePart.ordinal)
+    )).scalars())
+    assert len(corrected_parts) == 1
+    assert corrected_parts[0].part_type == "text"
+    assert corrected_parts[0].text_content == "corrected"
+    assert corrected_parts[0].media_reference_id is None
+
+    await MessageService._upsert_message_parts(
+        db_session,
+        msg_hash=message.msg_hash,
+        segments=[],
+        source_format="test",
+    )
+    await db_session.flush()
+    assert await db_session.scalar(
+        select(func.count(MessagePart.id)).where(MessagePart.msg_hash == message.msg_hash)
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_none_message_parts_preserve_existing_rows(db_session):
+    message = Message(
+        msg_hash="parts-preserve",
+        platform="qq",
+        room_id="group-parts",
+        message_type="group",
+        sender_id="user-parts",
+        raw_message="parts",
+        local_message="parts",
+        timestamp=1783000001,
+    )
+    db_session.add_all([
+        message,
+        MessagePart(
+            msg_hash=message.msg_hash,
+            ordinal=0,
+            part_type="text",
+            text_content="keep",
+            payload_json='{"text":"keep"}',
+            source_format="test",
+            render_status="parsed",
+        ),
+    ])
+    await db_session.commit()
+
+    await MessageService._upsert_message_parts(
+        db_session,
+        msg_hash=message.msg_hash,
+        segments=None,
+        source_format="test",
+    )
+
+    assert await db_session.scalar(
+        select(func.count(MessagePart.id)).where(MessagePart.msg_hash == message.msg_hash)
+    ) == 1

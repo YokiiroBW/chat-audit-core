@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
+from app.conversation_identity import resolve_conversation_message_type
 from app.message_scope import (
     apply_robot_message_scope,
     robot_message_join,
@@ -277,20 +278,28 @@ class QueryService:
             select(
                 Message.room_id.label("room_id"),
                 func.max(Message.timestamp).label("last_timestamp"),
-                func.max(Message.message_type).label("message_type"),
+                Message.message_type.label("message_type"),
                 func.max(func.coalesce(RoomProfile.display_name, UserProfile.display_name, private_sender_display_name)).label("display_name"),
                 func.max(func.coalesce(RoomProfile.avatar_path, UserProfile.avatar_path)).label("avatar_path"),
             )
             .outerjoin(RobotMessage, robot_message_join(robot_id))
-            .outerjoin(RoomProfile, RoomProfile.room_id == Message.room_id)
-            .outerjoin(UserProfile, UserProfile.user_id == Message.room_id)
+            .outerjoin(
+                RoomProfile,
+                and_(Message.message_type == "group", RoomProfile.room_id == Message.room_id),
+            )
+            .outerjoin(
+                UserProfile,
+                and_(Message.message_type == "private", UserProfile.user_id == Message.room_id),
+            )
             .where(robot_message_scope(robot_id))
-            .group_by(Message.room_id)
-            .order_by(desc("last_timestamp"), Message.room_id.asc())
+            .group_by(Message.room_id, Message.message_type)
+            .order_by(desc("last_timestamp"), Message.room_id.asc(), Message.message_type.asc())
         )
         rows = result.all()
-        room_ids = [row.room_id for row in rows]
-        qq_candidates: dict[str, list[str]] = {room_id: [] for room_id in room_ids}
+        room_ids = sorted({row.room_id for row in rows})
+        qq_candidates: dict[tuple[str, str], list[str]] = {
+            (row.room_id, row.message_type): [] for row in rows
+        }
         if room_ids:
             ranked_sources = (
                 select(
@@ -298,7 +307,7 @@ class QueryService:
                     Message.message_type.label("message_type"),
                     MessageSourceRecord.raw_columns_json.label("raw_columns_json"),
                     func.row_number().over(
-                        partition_by=Message.room_id,
+                        partition_by=(Message.room_id, Message.message_type),
                         order_by=(Message.timestamp.desc(), func.coalesce(Message.source_sequence, -1).desc(), Message.msg_hash.desc()),
                     ).label("room_rank"),
                 )
@@ -314,7 +323,7 @@ class QueryService:
             for room_id, message_type, raw_columns_json in source_result.all():
                 qq_number = _qq_number_from_raw(raw_columns_json, robot_id, message_type=message_type)
                 if qq_number:
-                    qq_candidates[room_id].append(qq_number)
+                    qq_candidates[(room_id, message_type)].append(qq_number)
 
         profile_ids = {
             qq_number
@@ -332,7 +341,7 @@ class QueryService:
 
         room_items = []
         for row in rows:
-            candidates = qq_candidates.get(row.room_id, [])
+            candidates = qq_candidates.get((row.room_id, row.message_type), [])
             qq_number = max(set(candidates), key=candidates.count) if candidates else None
             if not qq_number and row.message_type == "private" and str(row.room_id).isdigit():
                 qq_number = str(row.room_id)
@@ -368,6 +377,7 @@ class QueryService:
         db: AsyncSession,
         robot_id: str,
         room_id: str,
+        message_type: str | None = None,
         before_timestamp: int | None = None,
         before_source_sequence: int | None = None,
         before_msg_hash: str | None = None,
@@ -375,6 +385,12 @@ class QueryService:
         media_state: str | None = None,
         limit: int = 50,
     ) -> list[Message]:
+        message_type = await resolve_conversation_message_type(
+            db,
+            robot_id=robot_id,
+            room_id=room_id,
+            message_type=message_type,
+        )
         bot_result = await db.execute(
             select(BotProfile.display_name).where(BotProfile.id == robot_id)
         )
@@ -386,6 +402,7 @@ class QueryService:
                 .where(
                     robot_message_scope(robot_id),
                     Message.room_id == room_id,
+                    *([Message.message_type == message_type] if message_type is not None else []),
                     Message.external_message_id == around_message_id,
                 )
                 .limit(1)
@@ -399,6 +416,7 @@ class QueryService:
                     .where(
                         robot_message_scope(robot_id),
                         Message.room_id == room_id,
+                        *([Message.message_type == message_type] if message_type is not None else []),
                         or_(
                             MessageSourceRecord.source_external_message_id == around_message_id,
                             MessageSourceRecord.platform_message_id == around_message_id,
@@ -409,7 +427,9 @@ class QueryService:
                 target = alias_result.scalars().first()
             if target is None:
                 return []
-            before_timestamp = target.timestamp + 1
+            before_timestamp = target.timestamp
+            before_source_sequence = target.source_sequence if target.source_sequence is not None else -1
+            before_msg_hash = target.msg_hash
 
         stmt = (
             select(
@@ -421,6 +441,8 @@ class QueryService:
             .outerjoin(UserProfile, UserProfile.user_id == Message.sender_id)
             .where(robot_message_scope(robot_id), Message.room_id == room_id)
         )
+        if message_type is not None:
+            stmt = stmt.where(Message.message_type == message_type)
         stmt = QueryService._apply_media_state_filter(stmt, media_state)
         if before_timestamp is not None:
             if before_source_sequence is not None and before_msg_hash:
@@ -432,7 +454,10 @@ class QueryService:
                             Message.timestamp == before_timestamp,
                             or_(
                                 source_sequence < before_source_sequence,
-                                and_(source_sequence == before_source_sequence, Message.msg_hash < before_msg_hash),
+                                and_(
+                                    source_sequence == before_source_sequence,
+                                    Message.msg_hash <= before_msg_hash if around_message_id else Message.msg_hash < before_msg_hash,
+                                ),
                             ),
                         ),
                     )
@@ -605,7 +630,7 @@ class QueryService:
         # the alias fallback can resolve it in another, and collapsing to ids
         # would drop the second room's preview.
         wanted = {
-            (message.room_id, reply_id)
+            (message.room_id, message.message_type, reply_id)
             for message in messages
             if (reply_id := _message_reply_id(message))
         }
@@ -614,20 +639,23 @@ class QueryService:
         result = await db.execute(
             apply_robot_message_scope(select(Message), robot_id)
             .where(
-                Message.external_message_id.in_({reply_id for _, reply_id in wanted}),
-                Message.room_id.in_({room_id for room_id, _ in wanted}),
+                Message.external_message_id.in_({reply_id for _, _, reply_id in wanted}),
+                Message.room_id.in_({room_id for room_id, _, _ in wanted}),
+                Message.message_type.in_({message_type for _, message_type, _ in wanted}),
             )
             # Newest first, so the deterministic winner below is the most recent
             # message carrying a reused id within the same room.
             .order_by(Message.timestamp.desc(), Message.msg_hash.desc())
         )
-        by_room_and_id: dict[tuple[str, str], Message] = {}
+        by_room_and_id: dict[tuple[str, str, str], Message] = {}
         for candidate in result.scalars().all():
             if candidate.external_message_id:
-                by_room_and_id.setdefault((candidate.room_id, candidate.external_message_id), candidate)
+                by_room_and_id.setdefault(
+                    (candidate.room_id, candidate.message_type, candidate.external_message_id), candidate
+                )
         unresolved = wanted - set(by_room_and_id)
         if unresolved:
-            unresolved_ids = {reply_id for _, reply_id in unresolved}
+            unresolved_ids = {reply_id for _, _, reply_id in unresolved}
             alias_result = await db.execute(
                 apply_robot_message_scope(
                     select(MessageSourceRecord, Message).join(Message, Message.msg_hash == MessageSourceRecord.msg_hash),
@@ -638,18 +666,20 @@ class QueryService:
                         MessageSourceRecord.source_external_message_id.in_(unresolved_ids),
                         MessageSourceRecord.platform_message_id.in_(unresolved_ids),
                     ),
-                    Message.room_id.in_({room_id for room_id, _ in unresolved}),
+                    Message.room_id.in_({room_id for room_id, _, _ in unresolved}),
+                    Message.message_type.in_({message_type for _, message_type, _ in unresolved}),
                 )
                 .order_by(Message.timestamp.desc(), Message.msg_hash.desc())
             )
             for record, source_message in alias_result.all():
                 for alias in (record.source_external_message_id, record.platform_message_id):
-                    if (source_message.room_id, alias) in unresolved:
-                        by_room_and_id.setdefault((source_message.room_id, alias), source_message)
+                    key = (source_message.room_id, source_message.message_type, alias)
+                    if key in unresolved:
+                        by_room_and_id.setdefault(key, source_message)
         for message in messages:
             reply_id = _message_reply_id(message)
             message.reply_to_message_id = reply_id
-            source = by_room_and_id.get((message.room_id, reply_id)) if reply_id else None
+            source = by_room_and_id.get((message.room_id, message.message_type, reply_id)) if reply_id else None
             if source is not None:
                 sender = source.nickname or source.sender_id
                 message.reply_preview_text = f"{sender}: {_plain_message_preview(source.local_message or source.raw_message)}"
@@ -660,12 +690,20 @@ class QueryService:
         robot_id: str,
         keyword: str | None = None,
         room_id: str | None = None,
+        message_type: str | None = None,
         sender_id: str | None = None,
         start_timestamp: int | None = None,
         end_timestamp: int | None = None,
         media_state: str | None = None,
         limit: int = 50,
     ) -> list[Message]:
+        if room_id:
+            message_type = await resolve_conversation_message_type(
+                db,
+                robot_id=robot_id,
+                room_id=room_id,
+                message_type=message_type,
+            )
         stmt = (
             select(Message)
             .outerjoin(RobotMessage, robot_message_join(robot_id))
@@ -682,6 +720,8 @@ class QueryService:
             )
         if room_id:
             stmt = stmt.where(Message.room_id == room_id)
+        if message_type:
+            stmt = stmt.where(Message.message_type == message_type)
         if sender_id:
             stmt = stmt.where(Message.sender_id == sender_id)
         if start_timestamp is not None:

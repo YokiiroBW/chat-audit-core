@@ -67,10 +67,13 @@ another item's parse or asset-reference failure.
 
 ## Backup and audit
 
-- New exports use `chat-audit-core.backup.v2`.
-- Imports remain compatible with `chat-audit-core.backup.v1`.
+- New exports use `chat-audit-core.backup.v3`.
+- Imports remain compatible with `chat-audit-core.backup.v1` and
+  `chat-audit-core.backup.v2`.
 - V2 preserves import sources, batches, raw source records, and structured media
-  references.
+  references. V3 additionally preserves message direction and creation time,
+  media content SHA-256, complete avatar-cache metadata, ordered message parts,
+  identity aliases, and profile-change history.
 - `not_downloaded` is an informational state and is not a missing-media error.
 - Offline repair never fabricates missing media content. It may rebuild an
   index only from a real file whose content hash can be calculated.

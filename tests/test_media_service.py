@@ -21,6 +21,21 @@ class StubAsyncClient:
         return httpx.Response(200, content=self.payloads[url], headers=self.headers.get(url, {}))
 
 
+class TrackingAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]):
+        self.chunks = chunks
+        self.emitted = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            self.emitted += 1
+            yield chunk
+
+    async def aclose(self):
+        self.closed = True
+
+
 def test_parse_cq_media_segments_extracts_supported_media():
     raw = (
         "before "
@@ -126,6 +141,36 @@ async def test_rewrite_cq_media_skips_assets_over_size_limit(db_session, tmp_pat
 
     assert rewritten == raw
     assert assets == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_real_httpx_download_stops_streaming_as_soon_as_body_exceeds_limit(db_session, tmp_path):
+    stream = TrackingAsyncByteStream([b"1234", b"5", b"must-not-be-read"])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/jpeg"},
+            stream=stream,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        local_path = await MediaService.download_url_to_local_path(
+            db_session,
+            "https://1.1.1.1/large.jpg",
+            media_type="image",
+            http_client=client,
+            storage_root=tmp_path,
+            public_prefix="/static/storage",
+            max_bytes=4,
+        )
+
+    assert local_path is None
+    assert stream.emitted == 2
+    assert stream.closed is True
+    assert await MessageService.list_media_assets(db_session) == []
     assert list(tmp_path.iterdir()) == []
 
 

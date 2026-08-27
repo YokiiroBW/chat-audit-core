@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 import json
+import pytest
 from sqlalchemy import text
 from sqlalchemy.pool import NullPool, StaticPool
 
@@ -299,6 +301,38 @@ def test_create_app_rejects_request_body_over_configured_limit(tmp_path):
     assert ok_response.status_code != 413
     assert large_response.status_code == 413
     assert large_response.json()["detail"] == "Request body too large"
+
+
+@pytest.mark.asyncio
+async def test_create_app_rejects_chunked_body_without_content_length_before_full_read(tmp_path):
+    database_path = tmp_path / "audit.sqlite3"
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{database_path.as_posix()}",
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+        api_max_request_body_bytes=16,
+    )
+    engine, sessionmaker = create_async_engine_and_sessionmaker(settings.database_url)
+    app = create_app(settings=settings, engine=engine, sessionmaker=sessionmaker)
+    emitted = 0
+
+    async def body_chunks():
+        nonlocal emitted
+        for chunk in (b"12345678", b"abcdefgh", b"overflow", b"must-not-be-read"):
+            emitted += 1
+            yield chunk
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/import/validate",
+            content=body_chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+
+    await engine.dispose()
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Request body too large"
+    assert emitted == 3
 
 
 

@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.metrics import metrics_registry
 
 logger = logging.getLogger(__name__)
+_HTTPX_ASYNC_CLIENT_TYPE = httpx.AsyncClient
 
 
 @dataclass(frozen=True)
@@ -347,6 +348,14 @@ async def _resolve_download_target(url: str, *, resolve_host: bool) -> _Download
 
 
 async def _send_download_request(client: Any, target: _DownloadTarget) -> Any:
+    if isinstance(client, _HTTPX_ASYNC_CLIENT_TYPE):
+        request = client.build_request(
+            "GET",
+            target.url,
+            headers=target.headers or None,
+            extensions=target.extensions or None,
+        )
+        return await client.send(request, follow_redirects=False, stream=True)
     if target.is_pinned:
         return await client.get(
             target.url,
@@ -696,6 +705,7 @@ class MediaService:
         media_max_bytes = max_bytes if max_bytes is not None else settings.media_max_bytes
         owns_client = http_client is None
         client = http_client or httpx.AsyncClient()
+        response: Any | None = None
         download_status = "unknown"
         try:
             target = await _resolve_download_target(url, resolve_host=owns_client or type(client).__module__.startswith("httpx"))
@@ -791,6 +801,10 @@ class MediaService:
             return local_path
         finally:
             metrics_registry.record_media_download(media_type=media_type, status=download_status)
+            if response is not None:
+                close_response = getattr(response, "aclose", None)
+                if callable(close_response):
+                    await close_response()
             if owns_client:
                 await client.aclose()
 

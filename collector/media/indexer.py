@@ -30,7 +30,8 @@ class MediaFileIndex:
                 continue
             for current_root, directories, files in os.walk(root):
                 directories[:] = [name for name in directories if name.lower() not in {"temp", "tmp"}]
-                for file_name in files:
+                directories.sort(key=str.casefold)
+                for file_name in sorted(files, key=str.casefold):
                     if count >= self.max_files:
                         return count
                     path = Path(current_root) / file_name
