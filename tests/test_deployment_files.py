@@ -37,6 +37,9 @@ def test_optional_ffmpeg_dockerfile_installs_ffmpeg_explicitly():
     assert "imageio_ffmpeg.get_ffmpeg_exe()" in dockerfile
     assert "/usr/local/bin/ffmpeg" in dockerfile
     assert "ffmpeg -version" in dockerfile
+    for variable in ("BUILD_COMMIT", "APP_VERSION", "FRONTEND_ASSET_VERSION", "QQNT_ADAPTER_VERSION"):
+        assert f"ARG {variable}" in dockerfile
+        assert f"{variable}=${variable}" in dockerfile
     assert (ROOT / "vendor/wheels/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl").exists()
     assert "alembic.ini" in dockerfile
     assert "migrations" in dockerfile
