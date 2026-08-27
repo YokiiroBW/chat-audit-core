@@ -341,6 +341,56 @@ async def test_backup_export_chunks_large_robot_message_lookups(db_session, monk
 
 
 @pytest.mark.asyncio
+async def test_backup_export_chunks_every_data_driven_in_lookup(db_session, monkeypatch):
+    original_execute = db_session.execute
+    in_query_sizes: list[int] = []
+    media_query_sizes: list[int] = []
+
+    async def tracking_execute(statement, *args, **kwargs):
+        compiled = statement.compile()
+        chunk_sizes = [len(value) for value in compiled.params.values() if isinstance(value, list)]
+        in_query_sizes.extend(chunk_sizes)
+        if "FROM media_assets" in str(statement):
+            media_query_sizes.extend(chunk_sizes)
+        return await original_execute(statement, *args, **kwargs)
+
+    for index in range(5):
+        local_path = f"/static/storage/chunked-{index}.png"
+        db_session.add_all(
+            [
+                Message(
+                    msg_hash=f"chunked-message-{index}",
+                    platform="qq",
+                    room_id="chunked-room",
+                    message_type="group",
+                    sender_id=f"chunked-user-{index}",
+                    raw_message=local_path,
+                    local_message=local_path,
+                    timestamp=2_000 + index,
+                ),
+                MediaAsset(
+                    file_hash=f"chunked-media-{index}",
+                    file_type="image",
+                    file_size=1,
+                    local_path=local_path,
+                ),
+            ]
+        )
+    await db_session.commit()
+
+    monkeypatch.setattr(BackupService, "_IN_QUERY_CHUNK_SIZE", 2)
+    monkeypatch.setattr(db_session, "execute", tracking_execute)
+
+    package = await BackupService.export_package(db_session)
+
+    assert len(package["messages"]) == 5
+    assert len(package["media_assets"]) == 5
+    assert in_query_sizes
+    assert max(in_query_sizes) <= 2
+    assert media_query_sizes == [2, 2, 1]
+
+
+@pytest.mark.asyncio
 async def test_backup_service_exports_private_room_user_profile_and_avatar(db_session, tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()

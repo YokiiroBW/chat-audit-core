@@ -12,7 +12,7 @@ import secrets
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.import_contract import (
@@ -653,8 +653,12 @@ class BackupService:
             source_ids.update(record.source_id for record in source_record_models)
             batch_ids = sorted({record.batch_id for record in source_record_models if record.batch_id})
             if batch_ids:
-                batch_result = await db.execute(select(ImportBatch).where(ImportBatch.id.in_(batch_ids)).order_by(ImportBatch.started_at.asc(), ImportBatch.id.asc()))
-                import_batches = [BackupService._import_batch_to_dict(batch) for batch in batch_result.scalars().all()]
+                batch_models: list[ImportBatch] = []
+                for batch_id_chunk in BackupService._iter_query_chunks(batch_ids):
+                    batch_result = await db.execute(select(ImportBatch).where(ImportBatch.id.in_(batch_id_chunk)))
+                    batch_models.extend(batch_result.scalars().all())
+                batch_models.sort(key=lambda batch: (batch.started_at, batch.id))
+                import_batches = [BackupService._import_batch_to_dict(batch) for batch in batch_models]
 
             reference_models: list[MessageMediaReference] = []
             for msg_hash_chunk in BackupService._iter_query_chunks(msg_hashes):
@@ -677,52 +681,63 @@ class BackupService:
             part_models.sort(key=lambda part: (part.msg_hash, part.ordinal))
             message_parts = [BackupService._message_part_to_dict(part, reference_ordinal_by_id) for part in part_models]
 
-        identity_conditions = []
+        alias_models: list[IdentityAlias] = []
         if room_ids:
-            identity_conditions.append(
-                and_(
-                    IdentityAlias.identity_type.in_(("conversation", "group")),
-                    IdentityAlias.canonical_id.in_(room_ids),
+            for room_id_chunk in BackupService._iter_query_chunks(room_ids):
+                alias_result = await db.execute(
+                    select(IdentityAlias).where(
+                        and_(
+                            IdentityAlias.identity_type.in_(("conversation", "group")),
+                            IdentityAlias.canonical_id.in_(room_id_chunk),
+                        )
+                    )
                 )
-            )
+                alias_models.extend(alias_result.scalars().all())
         if user_ids:
-            identity_conditions.append(
-                and_(IdentityAlias.identity_type == "user", IdentityAlias.canonical_id.in_(user_ids))
-            )
-        if identity_conditions:
-            alias_result = await db.execute(
-                select(IdentityAlias)
-                .where(or_(*identity_conditions))
-                .order_by(
-                    IdentityAlias.identity_type.asc(),
-                    IdentityAlias.canonical_id.asc(),
-                    IdentityAlias.alias_type.asc(),
-                    IdentityAlias.alias_id.asc(),
+            for user_id_chunk in BackupService._iter_query_chunks(user_ids):
+                alias_result = await db.execute(
+                    select(IdentityAlias).where(
+                        and_(IdentityAlias.identity_type == "user", IdentityAlias.canonical_id.in_(user_id_chunk))
+                    )
+                )
+                alias_models.extend(alias_result.scalars().all())
+        if alias_models:
+            alias_models.sort(
+                key=lambda alias: (
+                    alias.identity_type,
+                    alias.canonical_id,
+                    alias.alias_type,
+                    alias.alias_id,
                 )
             )
-            alias_models = list(alias_result.scalars().all())
             identity_aliases = [BackupService._identity_alias_to_dict(alias) for alias in alias_models]
             source_ids.update(alias.source_id for alias in alias_models if alias.source_id)
 
-        change_conditions = []
+        change_models: list[ProfileChangeRecord] = []
         if room_ids:
-            change_conditions.append(
-                and_(
-                    ProfileChangeRecord.identity_type.in_(("conversation", "group")),
-                    ProfileChangeRecord.identity_id.in_(room_ids),
+            for room_id_chunk in BackupService._iter_query_chunks(room_ids):
+                change_result = await db.execute(
+                    select(ProfileChangeRecord).where(
+                        and_(
+                            ProfileChangeRecord.identity_type.in_(("conversation", "group")),
+                            ProfileChangeRecord.identity_id.in_(room_id_chunk),
+                        )
+                    )
                 )
-            )
+                change_models.extend(change_result.scalars().all())
         if user_ids:
-            change_conditions.append(
-                and_(ProfileChangeRecord.identity_type == "user", ProfileChangeRecord.identity_id.in_(user_ids))
-            )
-        if change_conditions:
-            change_result = await db.execute(
-                select(ProfileChangeRecord)
-                .where(or_(*change_conditions))
-                .order_by(ProfileChangeRecord.observed_at.asc(), ProfileChangeRecord.id.asc())
-            )
-            change_models = list(change_result.scalars().all())
+            for user_id_chunk in BackupService._iter_query_chunks(user_ids):
+                change_result = await db.execute(
+                    select(ProfileChangeRecord).where(
+                        and_(
+                            ProfileChangeRecord.identity_type == "user",
+                            ProfileChangeRecord.identity_id.in_(user_id_chunk),
+                        )
+                    )
+                )
+                change_models.extend(change_result.scalars().all())
+        if change_models:
+            change_models.sort(key=lambda record: (record.observed_at, record.id))
             profile_change_records = [BackupService._profile_change_record_to_dict(record) for record in change_models]
             source_ids.update(record.source_id for record in change_models if record.source_id)
             referenced_media_hashes.update(
@@ -733,23 +748,31 @@ class BackupService:
             )
 
         if source_ids:
-            source_result = await db.execute(
-                select(ImportSource).where(ImportSource.id.in_(sorted(source_ids))).order_by(ImportSource.id.asc())
-            )
-            import_sources = [BackupService._import_source_to_dict(source) for source in source_result.scalars().all()]
+            source_models: list[ImportSource] = []
+            for source_id_chunk in BackupService._iter_query_chunks(sorted(source_ids)):
+                source_result = await db.execute(select(ImportSource).where(ImportSource.id.in_(source_id_chunk)))
+                source_models.extend(source_result.scalars().all())
+            source_models.sort(key=lambda source: source.id)
+            import_sources = [BackupService._import_source_to_dict(source) for source in source_models]
 
         room_profiles: list[dict[str, Any]] = []
         user_profiles: list[dict[str, Any]] = []
         profile_media_paths: set[str] = set()
         if room_ids:
-            room_profile_result = await db.execute(select(RoomProfile).where(RoomProfile.room_id.in_(room_ids)).order_by(RoomProfile.room_id.asc()))
-            room_profile_models = list(room_profile_result.scalars().all())
+            room_profile_models: list[RoomProfile] = []
+            for room_id_chunk in BackupService._iter_query_chunks(room_ids):
+                room_profile_result = await db.execute(select(RoomProfile).where(RoomProfile.room_id.in_(room_id_chunk)))
+                room_profile_models.extend(room_profile_result.scalars().all())
+            room_profile_models.sort(key=lambda profile: profile.room_id)
             room_profiles = [BackupService._room_profile_to_dict(profile) for profile in room_profile_models]
             profile_media_paths.update(profile.avatar_path for profile in room_profile_models if profile.avatar_path)
             referenced_media_hashes.update(profile.avatar_file_hash for profile in room_profile_models if profile.avatar_file_hash)
         if user_ids:
-            user_profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_ids)).order_by(UserProfile.user_id.asc()))
-            user_profile_models = list(user_profile_result.scalars().all())
+            user_profile_models: list[UserProfile] = []
+            for user_id_chunk in BackupService._iter_query_chunks(user_ids):
+                user_profile_result = await db.execute(select(UserProfile).where(UserProfile.user_id.in_(user_id_chunk)))
+                user_profile_models.extend(user_profile_result.scalars().all())
+            user_profile_models.sort(key=lambda profile: profile.user_id)
             user_profiles = [BackupService._user_profile_to_dict(profile) for profile in user_profile_models]
             profile_media_paths.update(profile.avatar_path for profile in user_profile_models if profile.avatar_path)
             referenced_media_hashes.update(profile.avatar_file_hash for profile in user_profile_models if profile.avatar_file_hash)
@@ -766,14 +789,17 @@ class BackupService:
         media_assets: list[dict[str, Any]] = []
         media_files: list[dict[str, Any]] = []
         if media_paths or referenced_media_hashes:
-            media_conditions = []
-            if media_paths:
-                media_conditions.append(MediaAsset.local_path.in_(media_paths))
-            if referenced_media_hashes:
-                media_conditions.append(MediaAsset.file_hash.in_(referenced_media_hashes))
-                media_conditions.append(MediaAsset.content_sha256.in_(referenced_media_hashes))
-            media_result = await db.execute(select(MediaAsset).where(or_(*media_conditions)).order_by(MediaAsset.file_hash.asc()))
-            assets = list(media_result.scalars().all())
+            assets_by_hash: dict[str, MediaAsset] = {}
+            for media_path_chunk in BackupService._iter_query_chunks(media_paths):
+                media_result = await db.execute(select(MediaAsset).where(MediaAsset.local_path.in_(media_path_chunk)))
+                assets_by_hash.update((asset.file_hash, asset) for asset in media_result.scalars().all())
+            referenced_hashes = sorted(referenced_media_hashes)
+            for media_hash_chunk in BackupService._iter_query_chunks(referenced_hashes):
+                media_result = await db.execute(select(MediaAsset).where(MediaAsset.file_hash.in_(media_hash_chunk)))
+                assets_by_hash.update((asset.file_hash, asset) for asset in media_result.scalars().all())
+                media_result = await db.execute(select(MediaAsset).where(MediaAsset.content_sha256.in_(media_hash_chunk)))
+                assets_by_hash.update((asset.file_hash, asset) for asset in media_result.scalars().all())
+            assets = sorted(assets_by_hash.values(), key=lambda asset: asset.file_hash)
             media_assets = [
                 BackupService._media_asset_to_dict(asset, storage_root=storage_root, public_storage_prefix=public_storage_prefix)
                 for asset in assets
