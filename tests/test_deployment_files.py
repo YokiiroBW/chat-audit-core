@@ -62,7 +62,7 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 
     services = compose["services"]
-    assert set(services) == {"app"}
+    assert set(services) == {"app", "backup-worker"}
     # 端口保留可覆盖的绑定地址前缀，默认仍对所有网卡开放。
     assert any(entry.endswith("8000:8000") for entry in services["app"]["ports"])
     assert all(entry.startswith("${APP_BIND_ADDRESS:-0.0.0.0}:") for entry in services["app"]["ports"])
@@ -82,6 +82,19 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
     assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"
     assert services["app"]["environment"]["STORAGE_ROOT"] == "/app/data/storage"
     assert services["app"]["environment"]["BACKUP_ROOT"] == "/app/data/backups"
+    assert services["app"]["mem_limit"] == "${APP_MEMORY_LIMIT:-1g}"
+    assert services["app"]["memswap_limit"] == "${APP_MEMORY_LIMIT:-1g}"
+
+    worker = services["backup-worker"]
+    assert worker["command"] == ["python", "-m", "app.backup.worker", "run"]
+    assert worker["mem_limit"] == "${BACKUP_WORKER_MEMORY_LIMIT:-768m}"
+    assert worker["memswap_limit"] == "${BACKUP_WORKER_MEMORY_LIMIT:-768m}"
+    assert "${DATABASE_DATA_PATH:-./data/database}:/app/data/database:ro" in worker["volumes"]
+    assert "${MEDIA_STORAGE_PATH:-./data/storage}:/app/data/storage:ro" in worker["volumes"]
+    assert "${BACKUP_STORAGE_PATH:-./data/backups}:/app/data/backups" in worker["volumes"]
+    assert worker["environment"]["BACKUP_WORKER_ADDRESS_SPACE_LIMIT_BYTES"] == "${BACKUP_WORKER_ADDRESS_SPACE_LIMIT_BYTES:-671088640}"
+    assert worker["healthcheck"]["test"] == ["CMD", "python", "-m", "app.backup.worker", "healthcheck"]
+    assert worker["networks"] == ["default"]
 
     app_healthcheck = " ".join(services["app"]["healthcheck"]["test"])
     assert "python" in app_healthcheck
@@ -97,9 +110,11 @@ def test_optional_postgres_compose_override_defines_database_service():
     compose = yaml.safe_load((ROOT / "docker-compose.postgres.yml").read_text(encoding="utf-8"))
 
     services = compose["services"]
-    assert set(services) == {"app", "postgres"}
+    assert set(services) == {"app", "backup-worker", "postgres"}
     assert services["app"]["depends_on"]["postgres"]["condition"] == "service_healthy"
     assert services["app"]["environment"]["DATABASE_URL"] == "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+    assert services["backup-worker"]["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert services["backup-worker"]["environment"]["DATABASE_URL"] == "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
     assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD}"
     assert "healthcheck" in services["postgres"]
     assert "postgres_data" in compose["volumes"]

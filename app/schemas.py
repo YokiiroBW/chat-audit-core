@@ -158,6 +158,8 @@ class BackupStatusResponse(BaseModel):
     # healthy schedule while the loop was unable to run a single backup.
     cron_error: str | None = None
     next_run_at: str | None = None
+    worker_healthy: bool = False
+    active_job: dict[str, Any] | None = None
 
 
 class BackupSettingsUpdateRequest(BaseModel):
@@ -171,8 +173,21 @@ class BackupSettingsUpdateRequest(BaseModel):
 
 
 class BackupRunResponse(BaseModel):
-    path: str
-    filename: str
+    job_id: str
+    state: str
+    backup_type: str
+    created_at: str | None = None
+    updated_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    path: str | None = None
+    filename: str | None = None
+    size_bytes: int | None = None
+    duration_seconds: float | None = None
+    peak_rss_mib: float | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
+    retention_removed: list[str] = Field(default_factory=list)
+    error: str | None = None
 
 
 class AuditLogResponse(BaseModel):

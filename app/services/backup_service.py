@@ -1,12 +1,13 @@
 import asyncio
 import base64
-import contextlib
 import datetime as dt
 import gzip
 import hashlib
 import hmac
+import io
 import json
 import logging
+import os
 import re
 import secrets
 from pathlib import Path
@@ -22,7 +23,7 @@ from app.import_contract import (
     SQL_INTEGER_MAX,
     SQL_INTEGER_MIN,
 )
-from app.atomic_io import atomic_write_bytes, atomic_write_text
+from app.atomic_io import atomic_write_bytes
 from app.conversation_identity import resolve_conversation_message_type
 from app.message_scope import apply_robot_message_scope
 from app.models import (
@@ -263,26 +264,39 @@ class BackupService:
         return isinstance(value, expected_type)
 
     @staticmethod
-    def calculate_package_checksum(package: dict[str, Any]) -> str:
-        canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
-        manifest = canonical_package.get("manifest")
+    def _iter_package_integrity_bytes(package: dict[str, Any]) -> Iterable[bytes]:
+        manifest = package.get("manifest")
         if not isinstance(manifest, dict):
             raise ValueError("manifest must be an object")
-        manifest.pop("checksum", None)
-        manifest.pop("signature", None)
-        payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        integrity_manifest = dict(manifest)
+        integrity_manifest.pop("checksum", None)
+        integrity_manifest.pop("signature", None)
+        integrity_package = dict(package)
+        integrity_package["manifest"] = integrity_manifest
+        encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for chunk in encoder.iterencode(integrity_package):
+            yield chunk.encode("utf-8")
+
+    @staticmethod
+    def _calculate_package_integrity(package: dict[str, Any], signing_key: str | None = None) -> tuple[str, str | None]:
+        checksum = hashlib.sha256()
+        signature = hmac.new(signing_key.encode("utf-8"), digestmod=hashlib.sha256) if signing_key else None
+        for chunk in BackupService._iter_package_integrity_bytes(package):
+            checksum.update(chunk)
+            if signature is not None:
+                signature.update(chunk)
+        return checksum.hexdigest(), signature.hexdigest() if signature is not None else None
+
+    @staticmethod
+    def calculate_package_checksum(package: dict[str, Any]) -> str:
+        checksum, _signature = BackupService._calculate_package_integrity(package)
+        return checksum
 
     @staticmethod
     def calculate_package_signature(package: dict[str, Any], signing_key: str) -> str:
-        canonical_package = json.loads(json.dumps(package, ensure_ascii=False))
-        manifest = canonical_package.get("manifest")
-        if not isinstance(manifest, dict):
-            raise ValueError("manifest must be an object")
-        manifest.pop("checksum", None)
-        manifest.pop("signature", None)
-        payload = json.dumps(canonical_package, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hmac.new(signing_key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        _checksum, signature = BackupService._calculate_package_integrity(package, signing_key)
+        assert signature is not None
+        return signature
 
     @staticmethod
     def attach_package_checksum(package: dict[str, Any]) -> dict[str, Any]:
@@ -306,6 +320,25 @@ class BackupService:
             "algorithm": BACKUP_SIGNATURE_ALGORITHM,
             "key_id": system_id,
             "value": BackupService.calculate_package_signature(package, signing_key),
+        }
+        return package
+
+    @staticmethod
+    def attach_package_integrity(package: dict[str, Any], *, system_id: str, signing_key: str) -> dict[str, Any]:
+        manifest = package.setdefault("manifest", {})
+        manifest["source"] = {
+            "system": "chat-audit-core",
+            "instance_id": system_id,
+        }
+        manifest.pop("checksum", None)
+        manifest.pop("signature", None)
+        checksum, signature = BackupService._calculate_package_integrity(package, signing_key)
+        assert signature is not None
+        manifest["checksum"] = {"algorithm": "sha256", "value": checksum}
+        manifest["signature"] = {
+            "algorithm": BACKUP_SIGNATURE_ALGORITHM,
+            "key_id": system_id,
+            "value": signature,
         }
         return package
 
@@ -590,6 +623,8 @@ class BackupService:
         max_media_bytes: int | None = None,
         system_id: str | None = None,
         signing_key: str | None = None,
+        max_messages: int = 10000,
+        max_total_media_bytes: int = 64 * 1024 * 1024,
     ) -> dict[str, Any]:
         if room_id is not None:
             message_type = await resolve_conversation_message_type(
@@ -609,10 +644,14 @@ class BackupService:
             stmt = stmt.where(Message.timestamp >= start_timestamp)
         if end_timestamp is not None:
             stmt = stmt.where(Message.timestamp <= end_timestamp)
-        stmt = stmt.order_by(Message.timestamp.asc(), Message.msg_hash.asc())
+        stmt = stmt.order_by(Message.timestamp.asc(), Message.msg_hash.asc()).limit(max_messages + 1)
 
         result = await db.execute(stmt)
         messages = list(result.scalars().unique().all())
+        if len(messages) > max_messages:
+            raise ValueError(
+                f"legacy JSON export exceeds {max_messages} messages; use the isolated v4 full backup worker"
+            )
         msg_hashes = [message.msg_hash for message in messages]
         room_ids = sorted({message.room_id for message in messages if message.message_type == "group"})
         user_ids = sorted(
@@ -805,11 +844,27 @@ class BackupService:
                 for asset in assets
             ]
             if storage_root is not None:
-                media_files = [
-                    file_item
-                    for asset in assets
-                    if (file_item := BackupService._media_file_to_dict(asset, storage_root, public_storage_prefix, max_media_bytes)) is not None
-                ]
+                total_media_bytes = 0
+                for asset in assets:
+                    file_path = BackupService._local_media_file_path(asset.local_path, storage_root, public_storage_prefix)
+                    if file_path is None or not file_path.is_file():
+                        continue
+                    file_size = file_path.stat().st_size
+                    if max_media_bytes is not None and file_size > max_media_bytes:
+                        continue
+                    if total_media_bytes + file_size > max_total_media_bytes:
+                        raise ValueError(
+                            "legacy JSON export media exceeds its bounded total; use the isolated v4 full backup worker"
+                        )
+                    file_item = BackupService._media_file_to_dict(
+                        asset,
+                        storage_root,
+                        public_storage_prefix,
+                        max_media_bytes,
+                    )
+                    if file_item is not None:
+                        media_files.append(file_item)
+                        total_media_bytes += file_item["file_size"]
 
         package = {
             "manifest": {
@@ -852,9 +907,9 @@ class BackupService:
             "identity_aliases": identity_aliases,
             "profile_change_records": profile_change_records,
         }
-        BackupService.attach_package_checksum(package)
         if system_id and signing_key:
-            BackupService.attach_package_signature(package, system_id=system_id, signing_key=signing_key)
+            BackupService.attach_package_integrity(package, system_id=system_id, signing_key=signing_key)
+        else:
             BackupService.attach_package_checksum(package)
         return package
 
@@ -867,8 +922,19 @@ class BackupService:
         return gzip.compress(BackupService.package_to_json_bytes(package), compresslevel=compresslevel)
 
     @staticmethod
-    def decode_package_bytes(data: bytes) -> dict[str, Any]:
-        payload = gzip.decompress(data) if data.startswith(b"\x1f\x8b") else data
+    def decode_package_bytes(data: bytes, *, max_decoded_bytes: int | None = None) -> dict[str, Any]:
+        if max_decoded_bytes is not None and len(data) > max_decoded_bytes:
+            raise ValueError(f"legacy import exceeds {max_decoded_bytes} bytes")
+        if data.startswith(b"\x1f\x8b"):
+            if max_decoded_bytes is None:
+                payload = gzip.decompress(data)
+            else:
+                with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as compressed:
+                    payload = compressed.read(max_decoded_bytes + 1)
+                if len(payload) > max_decoded_bytes:
+                    raise ValueError(f"legacy import expands beyond {max_decoded_bytes} bytes")
+        else:
+            payload = data
         package = json.loads(payload.decode("utf-8"))
         if not isinstance(package, dict):
             raise ValueError("backup package must be a JSON object")
@@ -887,6 +953,8 @@ class BackupService:
         max_media_bytes: int | None = None,
         system_id: str | None = None,
         signing_key: str | None = None,
+        max_messages: int = 10000,
+        max_total_media_bytes: int = 64 * 1024 * 1024,
     ) -> bytes:
         package = await BackupService.export_package(
             db,
@@ -900,6 +968,8 @@ class BackupService:
             max_media_bytes=max_media_bytes,
             system_id=system_id,
             signing_key=signing_key,
+            max_messages=max_messages,
+            max_total_media_bytes=max_total_media_bytes,
         )
         return BackupService.compress_package(package)
 
@@ -914,38 +984,10 @@ class BackupService:
         system_id: str | None = None,
         signing_key: str | None = None,
     ) -> Path:
-        backup_root.mkdir(parents=True, exist_ok=True)
-        package = await BackupService.export_package(
-            db,
-            storage_root=storage_root,
-            public_storage_prefix=public_storage_prefix,
-            max_media_bytes=max_media_bytes,
-            system_id=system_id,
-            signing_key=signing_key,
+        del db, backup_root, storage_root, public_storage_prefix, max_media_bytes, keep_latest, system_id, signing_key
+        raise RuntimeError(
+            "in-process v3 full backups are disabled; enqueue the isolated v4 backup worker instead"
         )
-        package["manifest"]["backup_type"] = "auto"
-        package["manifest"]["created_by"] = "auto_backup_scheduler"
-        BackupService.attach_package_checksum(package)
-        if system_id and signing_key:
-            BackupService.attach_package_signature(package, system_id=system_id, signing_key=signing_key)
-            BackupService.attach_package_checksum(package)
-
-        timestamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
-        backup_path = backup_root / f"auto-backup-{timestamp}-{secrets.token_hex(4)}.json"
-        while backup_path.exists():
-            backup_path = backup_root / f"auto-backup-{timestamp}-{secrets.token_hex(4)}.json"
-
-        # A half-written backup is indistinguishable from the newest good one
-        # when the scheduler picks the latest file, so this must land atomically.
-        atomic_write_text(backup_path, json.dumps(package, ensure_ascii=False, indent=2))
-
-        if keep_latest > 0:
-            backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name))
-            for old_path in backups[:-keep_latest]:
-                with contextlib.suppress(FileNotFoundError):
-                    old_path.unlink()
-
-        return backup_path
 
     @staticmethod
     def _parse_cron_field(raw: str, low: int, high: int, cron_expr: str) -> list[int]:
@@ -1732,12 +1774,30 @@ class BackupService:
     def write_failure_log(backup_root: Path, event: str, error: str, context: dict[str, Any] | None = None) -> Path:
         backup_root.mkdir(parents=True, exist_ok=True)
         log_path = backup_root / "failures.log"
+        error_text = str(error).replace("\x00", "?")
+        if len(error_text) > 2000:
+            error_text = error_text[:1997] + "..."
+        raw_context = json.dumps(context or {}, ensure_ascii=False, sort_keys=True, default=str)
+        bounded_context: dict[str, Any]
+        if len(raw_context.encode("utf-8")) > 4096:
+            bounded_context = {
+                "truncated": True,
+                "sha256": hashlib.sha256(raw_context.encode("utf-8")).hexdigest(),
+            }
+        else:
+            parsed_context = json.loads(raw_context)
+            bounded_context = parsed_context if isinstance(parsed_context, dict) else {}
         record = {
             "created_at": format_utc_z(utc_now()),
             "event": event,
-            "error": error,
-            "context": context or {},
+            "error": error_text,
+            "context": bounded_context,
         }
+        # Preserve the previous diagnostics instead of growing one hot file
+        # without bound. Rotation never deletes a log or a backup.
+        if log_path.exists() and log_path.stat().st_size >= 10 * 1024 * 1024:
+            rotated = backup_root / f"failures-{utc_now().strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}.log"
+            os.replace(log_path, rotated)
         with log_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
         return log_path
@@ -2141,6 +2201,8 @@ class BackupService:
 
 async def _auto_backup_loop(settings, sessionmaker) -> None:
     from app.services.backup_config_service import BackupConfigService
+    from app.backup.jobs import BackupAlreadyRunningError, enqueue_backup_job
+    from app.backup.worker import worker_is_healthy
 
     # Remembers which cron value was already reported as unusable. Without it an
     # expression this scheduler cannot parse produced one log line and one
@@ -2184,22 +2246,39 @@ async def _auto_backup_loop(settings, sessionmaker) -> None:
             await asyncio.sleep(seconds_until_run)
             async with sessionmaker() as session:
                 backup_config = await BackupConfigService.get_effective_config(session, settings)
-                if not backup_config.enabled:
-                    continue
-                backup_path = await BackupService.write_auto_backup_file(
-                    session,
-                    backup_root=settings.backup_root,
-                    storage_root=settings.storage_root,
-                    public_storage_prefix=settings.public_storage_prefix,
-                    max_media_bytes=getattr(settings, "media_max_bytes", None),
+            if not backup_config.enabled:
+                continue
+            if not worker_is_healthy(settings):
+                error = "isolated backup worker is unavailable"
+                BackupService.write_failure_log(
+                    settings.backup_root,
+                    event="auto_backup_worker",
+                    error=error,
+                    context={"cron": backup_config.cron},
+                )
+                logger.error(error, extra={"cron": backup_config.cron})
+                continue
+            try:
+                job = enqueue_backup_job(
+                    settings.backup_root,
+                    backup_type="auto",
+                    created_by="auto_backup_scheduler",
                     keep_latest=backup_config.keep_latest,
-                    system_id=getattr(settings, "system_instance_id", None),
-                    signing_key=getattr(settings, "app_secret_key", None),
                 )
-                logger.info(
-                    "Auto backup completed",
-                    extra={"backup_path": str(backup_path), "cron": backup_config.cron, "keep_latest": backup_config.keep_latest},
+            except BackupAlreadyRunningError as exc:
+                logger.warning(
+                    "Auto backup was not queued because another backup is active",
+                    extra={
+                        "cron": backup_config.cron,
+                        "active_job_id": exc.job.get("job_id"),
+                        "active_job_state": exc.job.get("state"),
+                    },
                 )
+                continue
+            logger.info(
+                "Auto backup queued for the isolated worker",
+                extra={"job_id": job["job_id"], "cron": backup_config.cron, "keep_latest": backup_config.keep_latest},
+            )
         except Exception as exc:
             # Report the cron actually in force; the database override wins over
             # the environment value, so logging the latter pointed at settings

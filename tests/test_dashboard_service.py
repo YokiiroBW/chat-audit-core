@@ -6,7 +6,6 @@ from app.database import get_db_session
 from app.main import app
 from app.models import AuditLog, BotProfile, MediaAsset, SystemSetting
 from app.services.backup_config_service import BackupConfigService
-from app.services.backup_service import BackupService
 from app.services.dashboard_service import DashboardService
 from app.services.message_service import MessageService
 
@@ -61,6 +60,19 @@ async def test_dashboard_service_returns_global_summary(db_session, tmp_path):
         "backups": 1,
         "latest_backup": "auto-backup-20260705T030000Z.json",
     }
+
+
+@pytest.mark.asyncio
+async def test_dashboard_service_counts_completed_v4_but_not_failed_backup(db_session, tmp_path):
+    completed = tmp_path / "manual-backup-20260901T000000Z-12345678.cacb"
+    completed.write_bytes(b"complete")
+    failed = tmp_path / ".manual-backup-20260901T000001Z-12345678.cacb.deadbeef.failed"
+    failed.write_bytes(b"failed")
+
+    summary = await DashboardService.get_summary(db_session, backup_root=tmp_path)
+
+    assert summary["backups"] == 1
+    assert summary["latest_backup"] == completed.name
 
 
 @pytest.mark.asyncio
@@ -119,6 +131,8 @@ async def test_backup_status_api_returns_scheduler_settings(db_session, tmp_path
         "cron_source": "env",
         "keep_latest_source": "env",
         "cron_error": None,
+        "worker_healthy": False,
+        "active_job": None,
     }
     assert next_run_at.endswith("T03:15:00Z")
 
@@ -221,7 +235,9 @@ async def test_backup_settings_api_can_reset_to_env(db_session, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_backup_run_api_writes_signed_backup_file(db_session, tmp_path):
+async def test_backup_run_api_only_enqueues_the_isolated_worker(db_session, tmp_path):
+    from app.backup.jobs import write_worker_heartbeat
+
     storage_root = tmp_path / "storage"
     backup_root = tmp_path / "backups"
     settings = Settings(
@@ -243,6 +259,7 @@ async def test_backup_run_api_writes_signed_backup_file(db_session, tmp_path):
             "timestamp": 1783000100,
         },
     )
+    write_worker_heartbeat(backup_root)
 
     async def override_db_session():
         yield db_session
@@ -256,8 +273,28 @@ async def test_backup_run_api_writes_signed_backup_file(db_session, tmp_path):
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    backup_path = backup_root / response.json()["filename"]
-    assert backup_path.exists()
-    package = __import__("json").loads(backup_path.read_text(encoding="utf-8"))
-    assert package["manifest"]["source"]["instance_id"] == "test-instance"
-    BackupService.validate_package_signature(package, "test-secret")
+    payload = response.json()
+    assert payload["state"] == "queued"
+    assert payload["backup_type"] == "manual"
+    assert payload["filename"] is None
+    assert not list(backup_root.glob("*.cacb"))
+    assert (backup_root / ".backup-jobs" / f"{payload['job_id']}.request.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_backup_run_api_rejects_when_isolated_worker_is_unavailable(db_session, tmp_path):
+    settings = Settings(backup_root=tmp_path / "backups")
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/backup/run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert not list((tmp_path / "backups" / ".backup-jobs").glob("*.request.json"))

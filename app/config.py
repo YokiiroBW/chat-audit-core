@@ -60,6 +60,19 @@ class Settings(BaseSettings):
 
     auto_backup_cron: str = "0 3 * * *"
     auto_backup_keep_latest: int = 7
+    backup_chunk_bytes: int = 8388608
+    backup_min_free_bytes: int = 536870912
+    backup_worker_poll_seconds: float = 5.0
+    # A second boundary below the worker container's 768 MiB cgroup limit. The
+    # archive implementation targets <=512 MiB RSS; RLIMIT_AS turns an
+    # accidental regression into a failed job before it can pressure dockerd.
+    backup_worker_address_space_limit_bytes: int = 671088640
+    backup_worker_heartbeat_max_age_seconds: int = 120
+    # v3 JSON remains only as a bounded compatibility export. Full backups use
+    # the worker's v4 archive and can never reach this in-process path.
+    backup_legacy_export_max_messages: int = 10000
+    backup_legacy_export_max_total_media_bytes: int = 67108864
+    backup_legacy_import_max_bytes: int = 134217728
     # Reject import packages that carry no checksum or no verifiable signature.
     # Off by default so unsigned legacy packages stay importable; turn it on to
     # require that every imported archive proves where it came from.

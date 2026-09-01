@@ -303,6 +303,31 @@ async def test_backup_service_exports_filtered_messages_and_manifest(db_session)
 
 
 @pytest.mark.asyncio
+async def test_legacy_json_export_rejects_message_count_above_hard_limit(db_session):
+    for index in range(2):
+        await MessageService.process_incoming_message(
+            db_session,
+            "robot-bounded-export",
+            "qq",
+            {
+                "room_id": "room-bounded-export",
+                "message_type": "group",
+                "sender_id": f"user-{index}",
+                "nickname": f"User {index}",
+                "raw_message": f"bounded export {index}",
+                "timestamp": 10_000 + index,
+            },
+        )
+
+    with pytest.raises(ValueError, match="isolated v4 full backup worker"):
+        await BackupService.export_package(
+            db_session,
+            robot_id="robot-bounded-export",
+            max_messages=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_backup_export_chunks_large_robot_message_lookups(db_session, monkeypatch):
     original_execute = db_session.execute
     association_chunk_sizes: list[int] = []
@@ -618,7 +643,38 @@ async def test_export_import_api_accepts_gzip_package(db_session):
 
 
 @pytest.mark.asyncio
-async def test_backup_service_writes_auto_backup_file_and_prunes_old_files(db_session, tmp_path):
+async def test_legacy_import_api_rejects_oversized_body_and_gzip_expansion(db_session, tmp_path):
+    from app.api import get_settings
+    from app.config import Settings
+
+    settings = Settings(
+        storage_root=tmp_path / "storage",
+        backup_root=tmp_path / "backups",
+        backup_legacy_import_max_bytes=64,
+    )
+
+    async def override_db_session():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = override_db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            oversized = await client.post("/api/import/validate", content=b"x" * 65)
+            compressed_expansion = await client.post(
+                "/api/import/validate",
+                content=gzip.compress(b"x" * 65),
+                headers={"Content-Type": "application/gzip"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert oversized.status_code == 413
+    assert compressed_expansion.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_legacy_in_process_full_backup_is_disabled_without_touching_old_files(db_session, tmp_path):
     await MessageService.process_incoming_message(
         db_session,
         "robot-auto",
@@ -637,22 +693,16 @@ async def test_backup_service_writes_auto_backup_file_and_prunes_old_files(db_se
     old_a.write_text("{}", encoding="utf-8")
     old_b.write_text("{}", encoding="utf-8")
 
-    backup_path = await BackupService.write_auto_backup_file(
-        db_session,
-        backup_root=tmp_path,
-        keep_latest=2,
-    )
+    with pytest.raises(RuntimeError, match="isolated v4 backup worker"):
+        await BackupService.write_auto_backup_file(
+            db_session,
+            backup_root=tmp_path,
+            keep_latest=2,
+        )
 
-    assert backup_path.exists()
-    assert backup_path.name.startswith("auto-backup-")
-    assert backup_path.suffix == ".json"
-    assert __import__("re").fullmatch(r"auto-backup-\d{8}T\d{6}Z-[0-9a-f]{8}\.json", backup_path.name)
-    package = __import__("json").loads(backup_path.read_text(encoding="utf-8"))
-    assert package["manifest"]["schema"] == "chat-audit-core.backup.v3"
-    assert package["manifest"]["backup_type"] == "auto"
-    assert package["messages"][0]["raw_message"] == "auto backup payload"
-    remaining = sorted(path.name for path in tmp_path.glob("auto-backup-*.json"))
-    assert remaining == sorted([old_b.name, backup_path.name])
+    assert old_a.read_text(encoding="utf-8") == "{}"
+    assert old_b.read_text(encoding="utf-8") == "{}"
+    assert sorted(path.name for path in tmp_path.glob("auto-backup-*.json")) == [old_a.name, old_b.name]
 
 
 def test_backup_service_calculates_next_daily_cron_run():
@@ -1120,6 +1170,47 @@ async def test_backup_service_skips_embedding_media_file_over_size_limit(db_sess
     assert package["manifest"]["counts"]["media_assets"] == 1
     assert package["manifest"]["counts"]["media_files"] == 0
     assert package["media_files"] == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_json_export_rejects_total_media_above_hard_limit(db_session, tmp_path):
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    media_file = storage_root / "media-total-limit.jpg"
+    media_file.write_bytes(b"0123456789")
+
+    await MessageService.process_incoming_message(
+        db_session,
+        "robot-media-total-limit",
+        "qq",
+        {
+            "room_id": "room-media-total-limit",
+            "message_type": "group",
+            "sender_id": "user-media-total-limit",
+            "nickname": "Media Total Limit User",
+            "raw_message": "photo",
+            "local_message": "/static/storage/media-total-limit.jpg",
+            "timestamp": 1700,
+        },
+    )
+    db_session.add(
+        MediaAsset(
+            file_hash="media-total-limit",
+            file_type="image",
+            file_size=10,
+            local_path="/static/storage/media-total-limit.jpg",
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(ValueError, match="media exceeds its bounded total"):
+        await BackupService.export_package(
+            db_session,
+            robot_id="robot-media-total-limit",
+            storage_root=storage_root,
+            public_storage_prefix="/static/storage",
+            max_total_media_bytes=9,
+        )
 
 
 def test_backup_service_reports_media_file_checksum_mismatch(tmp_path):

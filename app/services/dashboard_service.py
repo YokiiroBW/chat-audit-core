@@ -3,6 +3,7 @@ from pathlib import Path
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backup.jobs import list_completed_backups
 from app.models import BotProfile, MediaAsset, Message, MessageMediaReference, RobotMessage
 
 
@@ -48,10 +49,7 @@ class DashboardService:
         backups_count = 0
         latest_backup: str | None = None
         if backup_root is not None:
-            backup_paths = sorted(
-                Path(backup_root).glob("*.json"),
-                key=lambda path: (path.stat().st_mtime, path.name),
-            )
+            backup_paths = list_completed_backups(Path(backup_root))
             backups_count = len(backup_paths)
             if backup_paths:
                 latest_backup = backup_paths[-1].name

@@ -18,6 +18,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.backup.jobs import (
+    BackupAlreadyRunningError,
+    active_backup_job,
+    enqueue_backup_job,
+    get_backup_job,
+    list_completed_backups,
+)
+from app.backup.worker import worker_is_healthy
 from app.conversation_identity import AmbiguousConversationError
 from app.database import LIGHTWEIGHT_MIGRATIONS, get_db_session
 from app.metrics import metrics_registry
@@ -709,7 +717,7 @@ async def get_dashboard_summary(
 
 def _backup_status_response(settings: Settings, backup_config: EffectiveBackupConfig) -> BackupStatusResponse:
     backup_root = settings.backup_root
-    backups = sorted(backup_root.glob("auto-backup-*.json"), key=lambda path: (path.stat().st_mtime, path.name)) if backup_root.exists() else []
+    backups = list_completed_backups(backup_root)
     latest = backups[-1].name if backups else None
     cron_error: str | None = None
     next_run_at: str | None = None
@@ -730,6 +738,8 @@ def _backup_status_response(settings: Settings, backup_config: EffectiveBackupCo
         keep_latest_source=backup_config.keep_latest_source,
         cron_error=cron_error,
         next_run_at=next_run_at,
+        worker_healthy=worker_is_healthy(settings),
+        active_job=active_backup_job(backup_root),
     )
 
 
@@ -788,22 +798,42 @@ async def run_backup_now(
     action = "backup.run"
     _enforce_high_risk_rate_limit(request, action, settings)
     backup_config = await BackupConfigService.get_effective_config(db, settings)
+    if not worker_is_healthy(settings):
+        detail = "isolated backup worker is unavailable"
+        await _audit(db, request, action=action, status_="failed", detail={"error": detail})
+        raise HTTPException(status_code=503, detail=detail)
     try:
-        path = await BackupService.write_auto_backup_file(
-            db,
-            backup_root=settings.backup_root,
-            storage_root=settings.storage_root,
-            public_storage_prefix=settings.public_storage_prefix,
-            max_media_bytes=settings.media_max_bytes,
+        job = enqueue_backup_job(
+            settings.backup_root,
+            backup_type="manual",
+            created_by="manual_api",
             keep_latest=backup_config.keep_latest,
-            system_id=settings.system_instance_id,
-            signing_key=settings.app_secret_key,
         )
+    except BackupAlreadyRunningError as exc:
+        await _audit(
+            db,
+            request,
+            action=action,
+            status_="failed",
+            detail={"error": str(exc), "active_job_id": exc.job.get("job_id")},
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         await _audit(db, request, action=action, status_="failed", detail={"error": str(exc)})
         raise
-    await _audit(db, request, action=action, status_="success", target=path.name)
-    return BackupRunResponse(path=str(path), filename=path.name)
+    await _audit(db, request, action=action, status_="success", target=job["job_id"], detail={"state": "queued"})
+    return BackupRunResponse(**job)
+
+
+@router.get("/backup/jobs/{job_id}", response_model=BackupRunResponse)
+async def get_backup_job_status(
+    job_id: str,
+    settings: Settings = Depends(get_settings),
+) -> BackupRunResponse:
+    job = get_backup_job(settings.backup_root, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="backup job not found")
+    return BackupRunResponse(**job)
 
 
 @router.get("/audit/logs", response_model=list[AuditLogResponse])
@@ -1750,7 +1780,7 @@ def _rewrite_forward_segment_with_local_path(local_message: str, forward_id: str
 @router.get(
     "/export",
     summary="Export chat backup package",
-    description="Export messages, robot views, profiles, and cached media. Set compressed=true to download a .json.gz package.",
+    description="Bounded v3 compatibility export for filtered/small datasets. Full backups must use /api/backup/run and the isolated v4 worker. Set compressed=true to download a .json.gz package.",
     responses={
         200: {
             "description": "Backup package as JSON or gzip",
@@ -1785,9 +1815,13 @@ async def export_data(
                 max_media_bytes=settings.media_max_bytes,
                 system_id=settings.system_instance_id,
                 signing_key=settings.app_secret_key,
+                max_messages=settings.backup_legacy_export_max_messages,
+                max_total_media_bytes=settings.backup_legacy_export_max_total_media_bytes,
             )
         except AmbiguousConversationError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
         filename = f"chat-audit-export-{int(time.time())}.json.gz"
         return Response(
             content=payload,
@@ -1807,15 +1841,37 @@ async def export_data(
             max_media_bytes=settings.media_max_bytes,
             system_id=settings.system_instance_id,
             signing_key=settings.app_secret_key,
+            max_messages=settings.backup_legacy_export_max_messages,
+            max_total_media_bytes=settings.backup_legacy_export_max_total_media_bytes,
         )
     except AmbiguousConversationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
 
 
-async def _read_import_package_request(request: Request) -> dict[str, Any]:
+async def _read_import_package_request(request: Request, *, max_bytes: int) -> dict[str, Any]:
+    if max_bytes <= 0:
+        raise HTTPException(status_code=503, detail="legacy import is disabled by its size limit")
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > max_bytes:
+                raise HTTPException(status_code=413, detail=f"legacy import exceeds {max_bytes} bytes")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid Content-Length header") from exc
+    payload = bytearray()
+    async for chunk in request.stream():
+        if len(payload) + len(chunk) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"legacy import exceeds {max_bytes} bytes")
+        payload.extend(chunk)
     try:
-        return BackupService.decode_package_bytes(await request.body())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return BackupService.decode_package_bytes(bytes(payload), max_decoded_bytes=max_bytes)
+    except ValueError as exc:
+        if str(exc).startswith("legacy import"):
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=f"invalid import package: {exc}") from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail=f"invalid import package: {exc}") from exc
 
 
@@ -1823,14 +1879,14 @@ async def _read_import_package_request(request: Request) -> dict[str, Any]:
     "/import/validate",
     response_model=ImportValidationResponse,
     summary="Validate an import package",
-    description="Preview checksum, signature, and database diff for a JSON or gzip backup package before importing.",
+    description="Preview a bounded legacy v1-v3 JSON/gzip package before importing. Use the backup CLI to validate or restore v4 .cacb archives and large legacy packages.",
 )
 async def validate_import_data(
     request: Request,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> ImportValidationResponse:
-    package = await _read_import_package_request(request)
+    package = await _read_import_package_request(request, max_bytes=settings.backup_legacy_import_max_bytes)
     report = await BackupService.preview_import_package(
         db,
         package,
@@ -1847,7 +1903,7 @@ async def validate_import_data(
     response_model=ImportResultResponse,
     response_model_exclude_defaults=True,
     summary="Import a backup package",
-    description="Import a JSON or gzip backup package. Requires admin role because existing records may be updated.",
+    description="Import a bounded legacy v1-v3 JSON/gzip package. Requires admin role because existing records may be updated. Full v4 restore uses the isolated backup CLI and an empty target.",
     responses={400: {"description": "Package validation failed"}, 403: {"description": "Admin role required"}},
 )
 async def import_data(
@@ -1858,7 +1914,7 @@ async def import_data(
 ) -> ImportResultResponse:
     action = "import.run"
     _enforce_high_risk_rate_limit(request, action, settings)
-    package = await _read_import_package_request(request)
+    package = await _read_import_package_request(request, max_bytes=settings.backup_legacy_import_max_bytes)
     manifest = package.get("manifest") if isinstance(package.get("manifest"), dict) else {}
     package_schema = manifest.get("schema")
     try:

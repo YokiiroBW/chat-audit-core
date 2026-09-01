@@ -1164,6 +1164,7 @@
       el('backupKeepLatestInput').value = status.keep_latest === null || status.keep_latest === undefined ? '' : status.keep_latest;
       el('saveBackupSettingsButton').disabled = state.backupSettingsSaving;
       el('resetBackupSettingsButton').disabled = state.backupSettingsSaving;
+      el('runBackupButton').disabled = !status.worker_healthy || Boolean(status.active_job);
       // 计划无法解析时，自动备份一次都不会执行，所以"开启"必须同时说明这一点，
       // 否则界面会在备份实际停摆的情况下显示一切正常。
       const cronBroken = Boolean(status.cron_error);
@@ -1176,7 +1177,15 @@
         ['保留来源', status.keep_latest_source || '-'],
         ['备份数量', status.backups],
         ['最近备份', status.latest_backup || '-'],
+        ['隔离 worker', status.worker_healthy ? '健康' : '不可用', status.worker_healthy ? 'ok' : 'bad'],
       ];
+      if (status.active_job) {
+        rows.push([
+          '当前任务',
+          `${status.active_job.job_id || '-'} / ${status.active_job.state || '-'}`,
+          status.active_job.state === 'failed' ? 'bad' : undefined,
+        ]);
+      }
       if (cronBroken) {
         rows.push(['计划错误', status.cron_error, 'bad']);
       } else if (status.next_run_at) {
@@ -1184,7 +1193,12 @@
         rows.push(['下次运行', new Date(status.next_run_at).toLocaleString()]);
       }
       if (state.backupRunResult) {
-        rows.push(['手动备份', state.backupRunResult.filename || '-', 'ok']);
+        const result = state.backupRunResult;
+        rows.push([
+          '手动备份',
+          result.filename || `${result.job_id || '-'} / ${result.state || '-'}`,
+          result.state === 'failed' ? 'bad' : (result.state === 'succeeded' ? 'ok' : undefined),
+        ]);
       }
       rows.forEach(([name, value, className]) => {
         const row = document.createElement('div');
@@ -2842,6 +2856,16 @@
 
     async function runManualBackup() {
       state.backupRunResult = await apiSend('/api/backup/run', 'POST');
+      renderAll();
+      while (['queued', 'running'].includes(state.backupRunResult.state)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        state.backupRunResult = await apiGet(`/api/backup/jobs/${encodeURIComponent(state.backupRunResult.job_id)}`);
+        state.backupStatus = await apiGet('/api/backup/status');
+        renderAll();
+      }
+      if (state.backupRunResult.state !== 'succeeded') {
+        throw new Error(state.backupRunResult.error || '备份 worker 执行失败');
+      }
       state.backupStatus = await apiGet('/api/backup/status');
       state.dashboard = await apiGet('/api/dashboard');
       renderAll();

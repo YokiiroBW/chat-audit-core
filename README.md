@@ -132,7 +132,26 @@ docker compose -f docker-compose.yml -f docker-compose.ffmpeg.yml up -d --build
 
 ## 备份和恢复
 
-系统默认每天自动备份一次。你也可以在网页设置里修改备份时间、手动备份、导出数据或导入旧备份。
+系统默认按 UTC 每天 03:00 自动备份（北京时间 11:00）。自动备份和网页里的“立即备份”都会把任务交给独立的 `backup-worker`：数据库按游标输出为有界 JSONL 分块，媒体作为 `.cacb` 归档中的独立成员流式写入，不会再把全部媒体转成 Base64 放进一个巨型 JSON。
+
+`backup-worker` 默认有 768 MiB 的容器硬上限、相同的 memory+swap 上限（即不使用容器 swap）和 640 MiB 进程地址空间上限。完整文件只有在写入、刷盘并重新校验 checksum/HMAC 后才原子发布；中断或磁盘满只会留下隐藏的失败证据，不会伪装成可恢复备份。
+
+查看 worker 和任务状态：
+
+```bash
+docker compose ps backup-worker
+docker compose exec backup-worker python -m app.backup.worker healthcheck
+docker compose exec app python -m app.backup.cli status <job-id>
+```
+
+旧 v1-v3 JSON/JSON.GZ 的小包仍可从网页导入。大型旧包应使用有界转换器生成 v4 `.cacb`，新旧文件并存，转换不会覆盖原文件：
+
+```bash
+docker compose run --rm --no-deps backup-worker \
+  python -m app.backup.cli convert-legacy /app/data/backups/<legacy-file>.json
+```
+
+完整校验和隔离恢复命令见 [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)。网页的旧 JSON 导出/导入只保留为有硬大小上限的兼容功能；生产全量备份必须使用 worker 路径。
 
 建议同时备份：
 
