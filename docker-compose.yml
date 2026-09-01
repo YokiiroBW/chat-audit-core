@@ -32,6 +32,7 @@ services:
       # 容器内数据目录必须与下面的 /app/data 挂载保持一致。
       STORAGE_ROOT: /app/data/storage
       BACKUP_ROOT: /app/data/backups
+      PUBLIC_STORAGE_PREFIX: ${PUBLIC_STORAGE_PREFIX:-/media}
 
       # NapCat / OneBot 连接凭据。
       ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN}
@@ -80,7 +81,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/database/chat_audit.sqlite3}
       STORAGE_ROOT: /app/data/storage
       BACKUP_ROOT: /app/data/backups
-      PUBLIC_STORAGE_PREFIX: ${PUBLIC_STORAGE_PREFIX:-/static/storage}
+      PUBLIC_STORAGE_PREFIX: ${PUBLIC_STORAGE_PREFIX:-/media}
       BACKUP_CHUNK_BYTES: ${BACKUP_CHUNK_BYTES:-8388608}
       BACKUP_MIN_FREE_BYTES: ${BACKUP_MIN_FREE_BYTES:-536870912}
       BACKUP_WORKER_POLL_SECONDS: ${BACKUP_WORKER_POLL_SECONDS:-5}

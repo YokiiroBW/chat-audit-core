@@ -119,6 +119,56 @@ async def test_v4_full_backup_validates_and_restores_to_isolated_sqlite(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_v4_backup_and_restore_include_current_and_legacy_media_prefixes(tmp_path):
+    database_url, storage, source_engine, source_sessions = await _source_database(tmp_path / "source")
+    current_content = b"current-prefix-media"
+    (storage / "current.bin").write_bytes(current_content)
+    async with source_sessions() as db:
+        db.add(
+            MediaAsset(
+                file_hash="asset-current",
+                file_type="file",
+                file_size=len(current_content),
+                local_path="/media/current.bin",
+            )
+        )
+        await db.commit()
+
+    backup = await create_full_backup_archive(
+        database_url=database_url,
+        storage_root=storage,
+        backup_root=tmp_path / "backups",
+        public_storage_prefix="/media",
+        signing_key="test-signing-key",
+        system_id="test-instance",
+        backup_type="manual",
+        created_by="pytest",
+        min_free_bytes=0,
+    )
+    validation = validate_backup_archive(backup.path, signing_key="test-signing-key")
+    restored = await restore_backup_archive(
+        backup.path,
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'restore.sqlite3'}",
+        storage_root=tmp_path / "restore-media",
+        public_storage_prefix="/media",
+        signing_key="test-signing-key",
+    )
+
+    assert validation.counts["media_assets"] == 2
+    assert validation.counts["media_files"] == 2
+    assert validation.counts["missing_media_files"] == 0
+    assert restored.media_files_created == 2
+    assert (tmp_path / "restore-media" / "asset.bin").read_bytes() == b"media-content"
+    assert (tmp_path / "restore-media" / "current.bin").read_bytes() == current_content
+    assert BackupService._local_media_file_path("/media/current.bin", storage, "/static/storage") == (
+        storage / "current.bin"
+    ).resolve()
+    assert BackupService._local_media_file_path("/other/current.bin", storage, "/media") is None
+    assert BackupService._local_media_file_path("/media/../outside.bin", storage, "/media") is None
+    await source_engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_v4_restore_preserves_all_logical_sections_and_media_relationships(tmp_path):
     database_url, storage, source_engine, source_sessions = await _source_database(tmp_path / "source")
     async with source_sessions() as db:

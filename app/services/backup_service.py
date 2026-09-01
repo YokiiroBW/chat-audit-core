@@ -1063,8 +1063,23 @@ class BackupService:
     def _local_media_file_path(local_path: Any, storage_root: Path, public_storage_prefix: str) -> Path | None:
         if not isinstance(local_path, str) or not local_path:
             return None
-        prefix = public_storage_prefix.rstrip("/") + "/"
-        if not local_path.startswith(prefix):
+        # Both routes are served by the application and both exist in production
+        # data after the public URL changed from /static/storage to /media.  The
+        # configured prefix stays first-class, while the two route aliases keep
+        # backup, audit, and restore from silently treating one generation as
+        # missing.  Longest-first also keeps a configured "/" from swallowing a
+        # known alias before its storage-relative portion is removed.
+        prefixes = sorted(
+            {
+                public_storage_prefix.rstrip("/") + "/",
+                "/media/",
+                "/static/storage/",
+            },
+            key=len,
+            reverse=True,
+        )
+        prefix = next((candidate for candidate in prefixes if local_path.startswith(candidate)), None)
+        if prefix is None:
             return None
         relative = local_path[len(prefix):].lstrip("/")
         candidate = (storage_root / relative).resolve()

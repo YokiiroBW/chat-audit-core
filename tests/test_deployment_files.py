@@ -82,6 +82,7 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
     assert services["app"]["environment"]["MEDIA_TRANSCODE_ENABLED"] == "${MEDIA_TRANSCODE_ENABLED:-false}"
     assert services["app"]["environment"]["STORAGE_ROOT"] == "/app/data/storage"
     assert services["app"]["environment"]["BACKUP_ROOT"] == "/app/data/backups"
+    assert services["app"]["environment"]["PUBLIC_STORAGE_PREFIX"] == "${PUBLIC_STORAGE_PREFIX:-/media}"
     assert services["app"]["mem_limit"] == "${APP_MEMORY_LIMIT:-1g}"
     assert services["app"]["memswap_limit"] == "${APP_MEMORY_LIMIT:-1g}"
 
@@ -93,6 +94,7 @@ def test_docker_compose_defaults_to_sqlite_and_app_healthcheck():
     assert "${MEDIA_STORAGE_PATH:-./data/storage}:/app/data/storage:ro" in worker["volumes"]
     assert "${BACKUP_STORAGE_PATH:-./data/backups}:/app/data/backups" in worker["volumes"]
     assert worker["environment"]["BACKUP_WORKER_ADDRESS_SPACE_LIMIT_BYTES"] == "${BACKUP_WORKER_ADDRESS_SPACE_LIMIT_BYTES:-671088640}"
+    assert worker["environment"]["PUBLIC_STORAGE_PREFIX"] == services["app"]["environment"]["PUBLIC_STORAGE_PREFIX"]
     assert worker["healthcheck"]["test"] == ["CMD", "python", "-m", "app.backup.worker", "healthcheck"]
     assert worker["networks"] == ["default"]
 
