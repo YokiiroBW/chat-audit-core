@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     system_instance_id: str = "chat-audit-core"
     admin_api_token: str = ""
     admin_api_tokens: str = ""
+    # Product-local, read-only evidence candidate. Empty/invalid denies access;
+    # independent hashed service credentials and exact channel registrations.
+    evidence_read_config: str = ""
 
     database_url: str = "sqlite+aiosqlite:///./data/chat_audit.sqlite3"
     database_pool_size: int = 20

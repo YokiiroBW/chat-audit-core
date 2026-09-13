@@ -1,0 +1,96 @@
+{
+  "status": "product-local candidate; not published I06",
+  "configuration": {
+    "mappings": [
+      {
+        "mapping_id": "group-a",
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "robot_id": "account-a",
+        "room_id": "42",
+        "message_type": "group"
+      },
+      {
+        "mapping_id": "private-a",
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "private:42",
+          "thread_id": null
+        },
+        "robot_id": "account-a",
+        "room_id": "42",
+        "message_type": "private"
+      },
+      {
+        "mapping_id": "group-b",
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-b",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "robot_id": "account-b",
+        "room_id": "42",
+        "message_type": "group"
+      }
+    ],
+    "readers": [
+      {
+        "service_id": "group-reader",
+        "token_sha256": "4921c57c411ed04c413a62f6acffed97e4af5f54d6ff8cfe617fbf3c60683ff3",
+        "mapping_ids": [
+          "group-a"
+        ]
+      },
+      {
+        "service_id": "private-reader",
+        "token_sha256": "8c5f0309a24535fde169aa673c5edc2f9508d02e16645220e3c357e0dce56e5d",
+        "mapping_ids": [
+          "private-a"
+        ]
+      }
+    ]
+  },
+  "request": {
+    "channel": {
+      "namespace": "qq",
+      "binding_id": "binding-a",
+      "channel_conversation_id": "group:42",
+      "thread_id": null
+    },
+    "message_id": "7"
+  },
+  "response": {
+    "status": "archive_observed",
+    "current_source_state": "not_checked",
+    "channel": {
+      "namespace": "qq",
+      "binding_id": "binding-a",
+      "channel_conversation_id": "group:42",
+      "thread_id": null
+    },
+    "id_kind": "external",
+    "target": {
+      "locator": "audit-evidence:0:94f7101e4278ca7df9223bf7b36f9e4fdff6d11c04ab0ce2818ef2480fd624b6:a:23a17b581379e1a95386e9305aaeb3d05ae5697e7487475d54fd26ca130240c6",
+      "archive_observation_id": "audit-observation:b338c86276c06fa8c3256e4ac29cb09f09dbd119599195f81f25ce001a5da9ae",
+      "stored_content_sha256": "23a17b581379e1a95386e9305aaeb3d05ae5697e7487475d54fd26ca130240c6",
+      "text": "raw a",
+      "text_representation": "stored_text",
+      "sender_id": "sender-a",
+      "timestamp": 100,
+      "source_sequence": null,
+      "external_message_id": "7",
+      "media_state": "unavailable"
+    },
+    "context": {
+      "before": [],
+      "after": [],
+      "complete": false
+    }
+  }
+}

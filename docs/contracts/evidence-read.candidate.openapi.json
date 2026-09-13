@@ -1,0 +1,305 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Chat Audit evidence read: product-local candidate",
+    "version": "candidate.0"
+  },
+  "paths": {
+    "/internal/evidence/read": {
+      "post": {
+        "tags": [
+          "Evidence candidate"
+        ],
+        "summary": "Read Evidence",
+        "operationId": "read_evidence_internal_evidence_read_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceReadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceReadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid independent service credential"
+          },
+          "404": {
+            "description": "Unauthorized scope, absent, ambiguous or contradictory reference"
+          },
+          "413": {
+            "description": "Evidence cannot be completely provided within size limits"
+          },
+          "422": {
+            "description": "Invalid request or no safe complete text representation"
+          },
+          "503": {
+            "description": "Evidence bridge is unconfigured or configuration is invalid"
+          }
+        },
+        "security": [
+          {
+            "EvidenceServiceBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EvidenceChannel": {
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "const": "qq",
+            "title": "Namespace"
+          },
+          "binding_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Binding Id"
+          },
+          "channel_conversation_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Channel Conversation Id"
+          },
+          "thread_id": {
+            "type": "null",
+            "title": "Thread Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "namespace",
+          "binding_id",
+          "channel_conversation_id",
+          "thread_id"
+        ],
+        "title": "EvidenceChannel"
+      },
+      "EvidenceContext": {
+        "properties": {
+          "before": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
+            },
+            "type": "array",
+            "title": "Before"
+          },
+          "after": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRecord"
+            },
+            "type": "array",
+            "title": "After"
+          },
+          "complete": {
+            "type": "boolean",
+            "const": false,
+            "title": "Complete",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "before",
+          "after"
+        ],
+        "title": "EvidenceContext"
+      },
+      "EvidenceReadRequest": {
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/EvidenceChannel"
+          },
+          "message_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Message Id"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locator"
+          },
+          "before": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Before",
+            "default": 0
+          },
+          "after": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "After",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel",
+          "message_id"
+        ],
+        "title": "EvidenceReadRequest"
+      },
+      "EvidenceReadResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "archive_observed",
+            "title": "Status",
+            "default": "archive_observed"
+          },
+          "current_source_state": {
+            "type": "string",
+            "const": "not_checked",
+            "title": "Current Source State",
+            "default": "not_checked"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/EvidenceChannel"
+          },
+          "id_kind": {
+            "type": "string",
+            "enum": [
+              "external",
+              "qqnt_source",
+              "qqnt_platform"
+            ],
+            "title": "Id Kind"
+          },
+          "target": {
+            "$ref": "#/components/schemas/EvidenceRecord"
+          },
+          "context": {
+            "$ref": "#/components/schemas/EvidenceContext"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "channel",
+          "id_kind",
+          "target",
+          "context"
+        ],
+        "title": "EvidenceReadResponse"
+      },
+      "EvidenceRecord": {
+        "properties": {
+          "locator": {
+            "type": "string",
+            "title": "Locator"
+          },
+          "archive_observation_id": {
+            "type": "string",
+            "title": "Archive Observation Id"
+          },
+          "stored_content_sha256": {
+            "type": "string",
+            "title": "Stored Content Sha256"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "text_representation": {
+            "type": "string",
+            "enum": [
+              "stored_text",
+              "text_with_unavailable_segments"
+            ],
+            "title": "Text Representation"
+          },
+          "sender_id": {
+            "type": "string",
+            "title": "Sender Id"
+          },
+          "timestamp": {
+            "type": "integer",
+            "title": "Timestamp"
+          },
+          "source_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sequence"
+          },
+          "external_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Message Id"
+          },
+          "media_state": {
+            "type": "string",
+            "const": "unavailable",
+            "title": "Media State",
+            "default": "unavailable"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "locator",
+          "archive_observation_id",
+          "stored_content_sha256",
+          "text",
+          "text_representation",
+          "sender_id",
+          "timestamp",
+          "source_sequence",
+          "external_message_id"
+        ],
+        "title": "EvidenceRecord"
+      }
+    },
+    "securitySchemes": {
+      "EvidenceServiceBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

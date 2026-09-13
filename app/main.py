@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.api import media_router, public_router as public_api_router, require_admin_api_token, router as api_router
 from app.config import Settings, get_settings
+from app.evidence_api import create_evidence_router
 from app.database import AsyncSessionLocal, backfill_bot_profiles, create_all_tables, engine as default_engine, ensure_schema_compatibility, get_db_session
 from app.logging_config import setup_logging
 from app.metrics import metrics_registry
@@ -294,6 +295,7 @@ def create_app(
     )
     app.include_router(public_api_router, prefix="/api")
     app.include_router(api_router, prefix="/api")
+    app.include_router(create_evidence_router(active_settings))
     app.include_router(media_router)
     app.include_router(ws_router)
 
