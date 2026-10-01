@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.tmp/
+.runtime/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# uv transient lock until dependencies move from requirements.txt to pyproject.toml
+uv.lock
+
+# Node / frontend cache
+node_modules/
+dist/
+build/
+.vite/
+
+# Runtime data
+data/storage/*
+data/backups/*
+!data/storage/.gitkeep
+!data/backups/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+# SQLite WAL/SHM 伴生文件，防止数据库碎片随提交入库
+*.sqlite3-*
+data/database/*
+
+# Logs
+logs/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 误创建的杂物：NUL 是 Windows 保留设备名，一旦被跟踪会破坏 checkout；
+# $root/ 来自未展开的 shell 变量。两者都不应进入仓库。
+NUL
+$root/
+
+# Secrets / credentials
+collector.toml
+*.dpapi
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx

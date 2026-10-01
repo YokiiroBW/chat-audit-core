@@ -1,0 +1,19 @@
+{
+  "bundle_version": "2026.10.01-rc.1",
+  "source_commit": "93fb30cdc46c86c9b498fb14c49ccc94c8646ddb",
+  "source_repo": "YokiiroBW/chat-audit-core",
+  "source_merge_parents": [
+    "e6d8e2156cff45cb22e6e8b17f27b33acf3d64b4",
+    "e07f2fa1c6a2250a6f8eb6cf98440b3b0b311e05"
+  ],
+  "remote_main_preserved": "e07f2fa1c6a2250a6f8eb6cf98440b3b0b311e05",
+  "excluded_paths": [
+    "vendor/wheels/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl"
+  ],
+  "changed_source_code": false,
+  "new_history": "source-only version branch; original local and existing remote history retained",
+  "ffmpeg_binary_distribution": "excluded_pending_corresponding_source_review",
+  "publication_receipt": "coordinator must verify remote ref after push",
+  "inherited_full_tree_whitespace_warnings": 23,
+  "whitespace_scope": "original source bytes preserved; newly added provenance and wheel notice checked separately"
+}

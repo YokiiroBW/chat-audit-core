@@ -1,0 +1,476 @@
+import asyncio
+import html
+import json
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
+
+from sqlalchemy import and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Message, MessageMediaReference, RobotMessage, SystemSetting
+from app.services.media_service import (
+    MediaService,
+    _CQ_PATTERN,
+    _URL_PATTERN,
+    _build_cq_segment,
+    _looks_like_media_url,
+    _looks_like_card_page_url,
+    _parse_cq_params,
+    _parse_cq_media_segments_with_ordinals,
+    _sort_card_page_candidates,
+    parse_cq_media_segments,
+)
+
+
+ForwardPayloadLoader = Callable[[str, str], Awaitable[dict[str, Any]]]
+
+BACKFILL_FAILURE_DETAILS = {
+    "download_failed_or_expired": (
+        "媒体下载失败或源地址已过期",
+        "确认机器人可访问源消息；如果无法恢复，可使用 finalize_unavailable 生成占位缓存。",
+    ),
+    "snapshot_failed_or_unavailable": (
+        "卡片网页快照下载失败",
+        "确认网页仍可访问；如果不可恢复，可使用 finalize_unavailable 生成缺失快照。",
+    ),
+    "forward_loader_unavailable": (
+        "缺少合并转发拉取通道",
+        "需要机器人在线并提供 get_forward_msg 能力后重新回填。",
+    ),
+    "forward_payload_unavailable": (
+        "合并转发详情拉取失败",
+        "确认对应机器人在线、消息仍可拉取；无法恢复时可生成缺失占位。",
+    ),
+}
+
+
+@dataclass
+class MediaBackfillFailure:
+    msg_hash: str
+    kind: str
+    target: str
+    reason: str
+    label: str | None = None
+    action: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.label is not None and self.action is not None:
+            return
+        label, action = BACKFILL_FAILURE_DETAILS.get(self.reason, ("回填失败", "检查源消息、网络和抓取策略后重试。"))
+        if self.label is None:
+            self.label = label
+        if self.action is None:
+            self.action = action
+
+
+@dataclass
+class MediaBackfillReport:
+    scanned: int = 0
+    candidates: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    failed: int = 0
+    media_failed: int = 0
+    forward_failed: int = 0
+    reason_summary: dict[str, int] = field(default_factory=dict)
+    failures: list[MediaBackfillFailure] = field(default_factory=list)
+
+    def add_failure(self, failure: MediaBackfillFailure, failure_limit: int) -> None:
+        self.failed += 1
+        self.reason_summary[failure.reason] = self.reason_summary.get(failure.reason, 0) + 1
+        if failure.kind == "forward":
+            self.forward_failed += 1
+        else:
+            self.media_failed += 1
+        if len(self.failures) < failure_limit:
+            self.failures.append(failure)
+
+
+def _iter_card_media_urls(value: Any, key: str | None = None) -> list[str]:
+    if isinstance(value, dict):
+        urls: list[str] = []
+        for child_key, child_value in value.items():
+            urls.extend(_iter_card_media_urls(child_value, str(child_key)))
+        return urls
+    if isinstance(value, list):
+        urls = []
+        for item in value:
+            urls.extend(_iter_card_media_urls(item, key))
+        return urls
+    if isinstance(value, str) and _looks_like_media_url(value, key):
+        return [value]
+    return []
+
+
+def _find_card_media_urls(local_message: str) -> list[str]:
+    urls: list[str] = []
+    for match in _CQ_PATTERN.finditer(local_message):
+        if match.group("kind") not in {"json", "xml"}:
+            continue
+        params = _parse_cq_params(match.group("params"))
+        data = params.get("data")
+        if not data:
+            continue
+        decoded = html.unescape(data)
+        try:
+            payload = json.loads(decoded)
+        except json.JSONDecodeError:
+            for url_match in _URL_PATTERN.finditer(decoded):
+                url = url_match.group(0)
+                if _looks_like_media_url(url):
+                    urls.append(url)
+        else:
+            urls.extend(_iter_card_media_urls(payload))
+    return urls
+
+
+def _iter_uncached_card_page_urls(value: Any, key: str | None = None) -> list[tuple[str, str | None]]:
+    if isinstance(value, dict):
+        urls: list[tuple[str, str | None]] = []
+        has_local_page = bool(value.get("local_page"))
+        for child_key, child_value in value.items():
+            urls.extend(_iter_uncached_card_page_urls(child_value, str(child_key)))
+            if not has_local_page and isinstance(child_value, str) and _looks_like_card_page_url(child_value, str(child_key)):
+                urls.append((child_value, str(child_key)))
+        return urls
+    if isinstance(value, list):
+        urls = []
+        for item in value:
+            urls.extend(_iter_uncached_card_page_urls(item, key))
+        return urls
+    return []
+
+
+def _find_uncached_card_page_urls(local_message: str) -> list[str]:
+    urls: list[tuple[str, str | None]] = []
+    for match in _CQ_PATTERN.finditer(local_message):
+        if match.group("kind") not in {"json", "xml"}:
+            continue
+        params = _parse_cq_params(match.group("params"))
+        data = params.get("data")
+        if not data:
+            continue
+        try:
+            payload = json.loads(html.unescape(data))
+        except json.JSONDecodeError:
+            continue
+        urls.extend(_iter_uncached_card_page_urls(payload))
+    return _sort_card_page_candidates(urls)
+
+
+def _find_uncached_forward_ids(local_message: str) -> list[str]:
+    forward_ids: list[str] = []
+    for match in _CQ_PATTERN.finditer(local_message):
+        if match.group("kind") != "forward":
+            continue
+        params = _parse_cq_params(match.group("params"))
+        forward_id = params.get("id")
+        if forward_id and not params.get("local"):
+            forward_ids.append(forward_id)
+    return forward_ids
+
+
+def _find_uncached_media_urls(
+    local_message: str,
+    *,
+    skip_media_ordinals: set[int] | None = None,
+    public_prefix: str | None = None,
+) -> list[str]:
+    if skip_media_ordinals is None:
+        urls = [segment.url for segment in parse_cq_media_segments(local_message)]
+    else:
+        urls = [
+            segment.url
+            for ordinal, segment in _parse_cq_media_segments_with_ordinals(local_message, public_prefix)
+            if ordinal not in skip_media_ordinals
+        ]
+    urls.extend(_find_card_media_urls(local_message))
+    return urls
+
+
+def _needs_backfill(local_message: str) -> bool:
+    return bool(_find_uncached_forward_ids(local_message) or _find_uncached_media_urls(local_message) or _find_uncached_card_page_urls(local_message))
+
+
+class MediaBackfillService:
+    _backfill_lock = asyncio.Lock()
+
+    @staticmethod
+    async def backfill_historical_media(
+        db: AsyncSession,
+        *,
+        limit: int = 100,
+        dry_run: bool = False,
+        failure_limit: int = 20,
+        http_client: Any | None = None,
+        storage_root: str | None = None,
+        public_prefix: str | None = None,
+        max_bytes: int | None = None,
+        forward_payload_loader: ForwardPayloadLoader | None = None,
+        finalize_unavailable: bool = False,
+        batch_size: int = 50,
+        forward_depth: int = 3,
+    ) -> MediaBackfillReport:
+        async with MediaBackfillService._backfill_lock:
+            return await MediaBackfillService._backfill_historical_media_locked(
+                db,
+                limit=limit,
+                dry_run=dry_run,
+                failure_limit=failure_limit,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+                forward_payload_loader=forward_payload_loader,
+                finalize_unavailable=finalize_unavailable,
+                batch_size=batch_size,
+                forward_depth=forward_depth,
+            )
+
+    @staticmethod
+    async def _backfill_historical_media_locked(
+        db: AsyncSession,
+        *,
+        limit: int,
+        dry_run: bool,
+        failure_limit: int,
+        http_client: Any | None,
+        storage_root: str | None,
+        public_prefix: str | None,
+        max_bytes: int | None,
+        forward_payload_loader: ForwardPayloadLoader | None,
+        finalize_unavailable: bool,
+        batch_size: int,
+        forward_depth: int,
+    ) -> MediaBackfillReport:
+        report = MediaBackfillReport()
+        normalized_batch_size = max(1, batch_size)
+        # "http" already covers http://, https:// and the escaped forms; the
+        # extra terms only made the planner test the same column five times.
+        pending_media = or_(
+            Message.local_message.contains("http"),
+            Message.local_message.contains("[CQ:forward,"),
+        )
+
+        def _page(after: tuple[int, str] | None):
+            statement = select(Message).where(pending_media)
+            if after is not None:
+                timestamp, msg_hash = after
+                statement = statement.where(
+                    or_(
+                        Message.timestamp > timestamp,
+                        and_(Message.timestamp == timestamp, Message.msg_hash > msg_hash),
+                    )
+                )
+            return statement.order_by(Message.timestamp.asc(), Message.msg_hash.asc()).limit(limit)
+
+        # Resume after the last message the previous run looked at. Always
+        # starting from the oldest meant a head of permanently dead URLs was
+        # rescanned every run while everything behind it was never reached.
+        cursor = await MediaBackfillService._load_cursor(db)
+        result = await db.execute(_page(cursor))
+        messages = list(result.scalars().unique().all())
+        if len(messages) < limit and cursor is not None:
+            # Tail reached: wrap to the start so the run stays full-sized and the
+            # whole archive keeps being revisited.
+            seen = {message.msg_hash for message in messages}
+            wrapped = await db.execute(_page(None))
+            for message in wrapped.scalars().unique().all():
+                if len(messages) >= limit:
+                    break
+                if message.msg_hash not in seen:
+                    messages.append(message)
+        structured_media_ordinals: dict[str, set[int]] = {}
+        if messages:
+            structured_result = await db.execute(
+                select(MessageMediaReference.msg_hash, MessageMediaReference.ordinal)
+                .where(MessageMediaReference.msg_hash.in_([message.msg_hash for message in messages]))
+            )
+            for msg_hash, ordinal in structured_result.all():
+                structured_media_ordinals.setdefault(str(msg_hash), set()).add(int(ordinal))
+        structured_message_hashes = set(structured_media_ordinals)
+        batch_candidates = 0
+
+        for message in messages:
+            report.scanned += 1
+            if not _needs_backfill(message.local_message):
+                continue
+            report.candidates += 1
+            if dry_run:
+                report.unchanged += 1
+                continue
+            batch_candidates += 1
+
+            before = message.local_message
+            skip_media_ordinals = structured_media_ordinals.get(message.msg_hash)
+            before_media_urls = set(
+                _find_uncached_media_urls(
+                    before,
+                    skip_media_ordinals=skip_media_ordinals,
+                    public_prefix=public_prefix,
+                )
+            )
+            before_card_page_urls = set(_find_uncached_card_page_urls(before))
+            before_forward_ids = set(_find_uncached_forward_ids(before))
+
+            rewritten = await MediaService.rewrite_cq_media_to_local_paths(
+                db,
+                raw_message=before,
+                http_client=http_client,
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+                max_bytes=max_bytes,
+                unavailable_placeholders=finalize_unavailable,
+                skip_media_ordinals=skip_media_ordinals,
+            )
+            if before_forward_ids and forward_payload_loader is not None:
+                robot_ids = await MediaBackfillService._robot_ids_for_message(db, message.msg_hash)
+                loader = MediaBackfillService._build_forward_loader(robot_ids, forward_payload_loader)
+                rewritten = await MediaService.cache_cq_forward_payloads(
+                    db,
+                    local_message=rewritten,
+                    forward_loader=loader,
+                    http_client=http_client,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                    max_bytes=max_bytes,
+                    unavailable_placeholders=finalize_unavailable,
+                    allowed_media_types=set() if message.msg_hash in structured_message_hashes else None,
+                    forward_depth=forward_depth,
+                )
+            if before_forward_ids and finalize_unavailable:
+                rewritten = await MediaBackfillService._finalize_unavailable_forwards(
+                    db,
+                    rewritten,
+                    storage_root=storage_root,
+                    public_prefix=public_prefix,
+                )
+
+            if rewritten != before:
+                message.local_message = rewritten
+                report.updated += 1
+            else:
+                report.unchanged += 1
+
+            after_media_urls = set(
+                _find_uncached_media_urls(
+                    rewritten,
+                    skip_media_ordinals=skip_media_ordinals,
+                    public_prefix=public_prefix,
+                )
+            )
+            for url in sorted(before_media_urls & after_media_urls):
+                report.add_failure(
+                    MediaBackfillFailure(message.msg_hash, "media", url, "download_failed_or_expired"),
+                    failure_limit,
+                )
+
+            after_card_page_urls = set(_find_uncached_card_page_urls(rewritten))
+            for url in sorted(before_card_page_urls & after_card_page_urls):
+                report.add_failure(
+                    MediaBackfillFailure(message.msg_hash, "card_page", url, "snapshot_failed_or_unavailable"),
+                    failure_limit,
+                )
+
+            after_forward_ids = set(_find_uncached_forward_ids(rewritten))
+            for forward_id in sorted(before_forward_ids & after_forward_ids):
+                reason = "forward_loader_unavailable" if forward_payload_loader is None else "forward_payload_unavailable"
+                report.add_failure(
+                    MediaBackfillFailure(message.msg_hash, "forward", forward_id, reason),
+                    failure_limit,
+                )
+            if batch_candidates >= normalized_batch_size:
+                await db.commit()
+                batch_candidates = 0
+
+        if not dry_run and batch_candidates:
+            await db.commit()
+        if not dry_run and messages:
+            # A dry run must not move the cursor, or the next real run would skip
+            # everything the dry run merely looked at.
+            last = messages[-1]
+            await MediaBackfillService._save_cursor(db, (int(last.timestamp), str(last.msg_hash)))
+            await db.commit()
+        return report
+
+    BACKFILL_CURSOR_KEY = "media_backfill.cursor"
+
+    @staticmethod
+    async def _load_cursor(db: AsyncSession) -> tuple[int, str] | None:
+        record = await db.get(SystemSetting, MediaBackfillService.BACKFILL_CURSOR_KEY)
+        if record is None:
+            return None
+        try:
+            timestamp, msg_hash = json.loads(record.value_json)
+        except (TypeError, ValueError):
+            return None
+        return int(timestamp), str(msg_hash)
+
+    @staticmethod
+    async def _save_cursor(db: AsyncSession, cursor: tuple[int, str]) -> None:
+        value_json = json.dumps([cursor[0], cursor[1]], ensure_ascii=False)
+        record = await db.get(SystemSetting, MediaBackfillService.BACKFILL_CURSOR_KEY)
+        if record is None:
+            db.add(SystemSetting(key=MediaBackfillService.BACKFILL_CURSOR_KEY, value_json=value_json))
+            return
+        record.value_json = value_json
+
+    @staticmethod
+    async def _robot_ids_for_message(db: AsyncSession, msg_hash: str) -> list[str]:
+        result = await db.execute(select(RobotMessage.robot_id).where(RobotMessage.msg_hash == msg_hash).order_by(RobotMessage.robot_id.asc()))
+        return [str(robot_id) for robot_id in result.scalars().all()]
+
+    @staticmethod
+    def _build_forward_loader(robot_ids: list[str], forward_payload_loader: ForwardPayloadLoader) -> Callable[[str], Awaitable[dict[str, Any]]]:
+        async def load_forward(forward_id: str) -> dict[str, Any]:
+            last_error: Exception | None = None
+            for robot_id in robot_ids:
+                try:
+                    return await forward_payload_loader(robot_id, forward_id)
+                except Exception as exc:
+                    last_error = exc
+            if last_error is not None:
+                raise last_error
+            raise LookupError("message has no robot view for forward payload lookup")
+
+        return load_forward
+
+    @staticmethod
+    async def _finalize_unavailable_forwards(
+        db: AsyncSession,
+        local_message: str,
+        storage_root: str | None = None,
+        public_prefix: str | None = None,
+    ) -> str:
+        from app.services.message_service import MessageService
+
+        rewritten = local_message
+        for match in list(_CQ_PATTERN.finditer(local_message)):
+            if match.group("kind") != "forward":
+                continue
+            params = _parse_cq_params(match.group("params"))
+            forward_id = params.get("id")
+            if not forward_id or params.get("local"):
+                continue
+            payload = {
+                "status": "unavailable",
+                "data": {
+                    "messages": [
+                        {
+                            "sender": {"nickname": "本地缓存"},
+                            "raw_message": f"合并转发 {forward_id} 未缓存，且当前无法从 OneBot 重新获取。",
+                        }
+                    ]
+                },
+            }
+            local_path = await MessageService.save_media_asset(
+                db,
+                file_content=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                file_type="forward_missing",
+                ext="json",
+                storage_root=storage_root,
+                public_prefix=public_prefix,
+            )
+            params["local"] = local_path
+            rewritten = rewritten.replace(match.group(0), _build_cq_segment("forward", params), 1)
+        return rewritten

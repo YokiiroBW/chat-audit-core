@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QQ社交资产审计平台</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="stylesheet" href="/assets/app.min.css?v=20260827-1" />
+</head>
+<body>
+  <div id="appRoot" class="app">
+    <aside class="rail">
+      <div>
+        <div class="brand">AUDIT V4</div>
+        <div class="brand-subtitle">CHAT EVIDENCE CONSOLE</div>
+        <div id="accountList" class="account-stack"></div>
+      </div>
+      <div class="rail-footer">
+        <div class="account-count-chip"><span id="accountCount">0</span> 账号</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar-title">
+          <strong id="roomTitle">请选择会话</strong>
+          <span id="robotView" class="hint"></span>
+        </div>
+        <div class="topbar-config">
+          <strong>配置栏</strong>
+          <span id="topbarConfigText" class="truncate">选择账号后查看会话与聊天记录</span>
+        </div>
+        <div class="top-actions">
+          <div class="day-night-toggle" id="themeToggleButton" aria-label="日夜模式">
+            <button id="dayModeButton" type="button" aria-label="白天模式" title="白天模式">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v2"></path>
+                <path d="M12 20v2"></path>
+                <path d="m4.93 4.93 1.41 1.41"></path>
+                <path d="m17.66 17.66 1.41 1.41"></path>
+                <path d="M2 12h2"></path>
+                <path d="M20 12h2"></path>
+                <path d="m6.34 17.66-1.41 1.41"></path>
+                <path d="m19.07 4.93-1.41 1.41"></path>
+              </svg>
+            </button>
+            <button id="nightModeButton" type="button" aria-label="夜间模式" title="夜间模式">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20.99 13.64A9 9 0 1 1 10.36 3.01 7 7 0 0 0 20.99 13.64Z"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="palette-card" title="调色盘">
+            <button id="paletteToggleButton" class="icon-button" type="button" aria-label="调色盘" title="调色盘">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="13.5" cy="6.5" r=".5"></circle>
+                <circle cx="17.5" cy="10.5" r=".5"></circle>
+                <circle cx="8.5" cy="7.5" r=".5"></circle>
+                <circle cx="6.5" cy="12.5" r=".5"></circle>
+                <path d="M12 22a10 10 0 1 1 10-10 4 4 0 0 1-4 4h-1.5a2.5 2.5 0 0 0 0 5H12Z"></path>
+              </svg>
+            </button>
+            <div class="palette-panel">
+              <input id="primaryColorInput" class="palette-swatch" type="color" aria-label="主色调" title="主色调" />
+              <input id="secondaryColorInput" class="palette-swatch" type="color" aria-label="复色调" title="复色调" />
+              <input id="contrastColorInput" class="palette-swatch" type="color" aria-label="映衬色" title="映衬色" />
+              <button id="resetPaletteButton" class="btn link" type="button">恢复默认</button>
+            </div>
+          </div>
+          <div id="topLogCard" class="top-log-card">
+            <button id="openLogButton" class="top-log-toggle icon-button" type="button" aria-label="操作记录" title="操作记录">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path>
+                <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+                <path d="M10 9H8"></path>
+                <path d="M16 13H8"></path>
+                <path d="M16 17H8"></path>
+              </svg>
+              <span id="topLogSummary" class="sr-only">暂无记录</span>
+            </button>
+            <div id="topLogPanel" class="top-log-panel">
+              <div id="activityLogList" class="log-list"></div>
+            </div>
+          </div>
+          <button id="settingsToggle" class="settings-button icon-button" type="button" aria-label="设置页面" title="设置页面">
+            <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
+              <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.1 2.1 0 0 1-2.97 2.97l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.09 1.65V21a2.1 2.1 0 0 1-4.2 0v-.08a1.8 1.8 0 0 0-1.09-1.65 1.8 1.8 0 0 0-1.98.36l-.05.05a2.1 2.1 0 0 1-2.97-2.97l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.65-1.09H3a2.1 2.1 0 0 1 0-4.2h.08A1.8 1.8 0 0 0 4.73 8.6a1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.1 2.1 0 0 1 7.29 3.6l.05.05a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 10.41 2.4V2a2.1 2.1 0 0 1 4.2 0v.08a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.05-.05a2.1 2.1 0 0 1 2.97 2.97l-.05.05a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.09H22a2.1 2.1 0 0 1 0 4.2h-.08A1.8 1.8 0 0 0 19.4 15Z"></path>
+            </svg>
+          </button>
+          <div id="topAccountAvatar" class="avatar top-account"></div>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="sidebar">
+          <div class="side-head">
+            <h1>聊天界面</h1>
+            <div class="hint">当前账号下的会话、搜索和抓取配置 · green/red/gray</div>
+            <div id="dashboardSummary" class="dashboard-strip"></div>
+            <div class="search-row">
+              <select id="mediaStateFilter" aria-label="媒体状态筛选">
+                <option value="all">全部消息</option>
+                <option value="any">全部媒体</option>
+                <option value="complete">完整归档</option>
+                <option value="not_downloaded">未下载媒体</option>
+                <option value="missing">源文件丢失</option>
+                <option value="failed">解析失败</option>
+              </select>
+              <input id="searchInput" type="search" aria-label="搜索当前机器人视角消息" placeholder="搜索当前机器人视角消息..." />
+              <button id="searchButton" class="btn primary">搜索</button>
+            </div>
+            <div class="toolbar-secondary">
+              <button id="refreshButton" class="btn">刷新</button>
+              <button id="openOfflineAuditButton" class="btn">离线验收</button>
+              <button id="openImportButton" class="btn">导入 JSON</button>
+              <button id="openExportButton" class="btn primary">高级过滤导出</button>
+            </div>
+          </div>
+
+      <div id="settingsPanel" class="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-hidden="true" tabindex="-1">
+        <div class="settings-page-head">
+          <div>
+            <strong id="settingsTitle">设置页面</strong>
+            <div id="authActor" class="hint truncate">未登录</div>
+          </div>
+          <div class="button-row">
+            <button id="loginButton" class="btn primary">登录</button>
+            <button id="logoutButton" class="btn">退出</button>
+            <button id="closeSettingsButton" class="btn">关闭</button>
+          </div>
+        </div>
+        <div class="settings-stack">
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>登录状态</h3>
+                <p>当前管理身份、权限和接口令牌状态。</p>
+              </div>
+              <button id="refreshAuthButton" class="btn link">刷新</button>
+            </div>
+            <div id="authStatusReport" class="report" role="status" aria-live="polite"></div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>角色抓取策略</h3>
+                <p>空策略默认记录所有会话；文件下载默认关闭。白名单存在时仅抓取白名单目标。</p>
+              </div>
+              <button id="refreshCapturePoliciesButton" class="btn link">刷新策略</button>
+            </div>
+            <div id="capturePolicyList" class="capture-policy-list"></div>
+          </section>
+
+          <section id="adapterOverview" class="settings-section-card adapter-console" aria-label="账号设置">
+            <span class="sr-only">账号设置 green red gray</span>
+            <div class="adapter-hero">
+              <div class="adapter-hero-icon" aria-hidden="true">
+                <svg viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M32 9v8"></path>
+                  <path d="M18 22h28a9 9 0 0 1 9 9v13a9 9 0 0 1-9 9H18a9 9 0 0 1-9-9V31a9 9 0 0 1 9-9Z"></path>
+                  <path d="M9 37H4"></path>
+                  <path d="M60 37h-5"></path>
+                  <circle cx="24" cy="37" r="4" fill="currentColor" stroke="none"></circle>
+                  <circle cx="40" cy="37" r="4" fill="currentColor" stroke="none"></circle>
+                </svg>
+              </div>
+              <div>
+                <h2>适配器</h2>
+                <p>管理平台适配器实例，连接到不同的消息平台。</p>
+              </div>
+              <button id="newAdapterButton" class="btn primary">新增适配器</button>
+            </div>
+            <div id="adapterList" class="adapter-card-list"></div>
+          </section>
+
+          <div id="adapterEditorBackdrop" class="adapter-editor-backdrop" hidden></div>
+          <section id="adapterEditor" class="settings-section-card adapter-editor" role="dialog" aria-modal="true" aria-labelledby="adapterEditorTitle" tabindex="-1" hidden>
+            <div class="adapter-editor-head">
+              <h2 id="adapterEditorTitle">编辑适配器</h2>
+              <button id="clearAdapterButton" class="btn">取消</button>
+            </div>
+            <div class="adapter-step">
+              <div class="step-number">1</div>
+              <div>
+                <h3>选择适配器类型</h3>
+                <p>选择这个适配器要连接的消息平台。连接成功后会自动读取账号身份并建立对应档案。</p>
+                <div class="platform-fieldset">
+                  <label for="adapterPlatform">适配器类型</label>
+                  <select id="adapterPlatform">
+                    <option value="qq">qq</option>
+                    <option value="custom">custom</option>
+                  </select>
+                </div>
+                <div class="adapter-form-rows">
+                  <div class="adapter-form-row">
+                    <div>
+                      <label for="adapterId"><strong>适配器标识</strong></label>
+                      <span>用于区分不同连接实例，建议填写 BOT 的 self_id 或端口备注；编辑已有适配器时不可修改。</span>
+                    </div>
+                    <input id="adapterId" aria-describedby="adapterFormError" placeholder="适配器标识 / self_id" />
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <strong id="adapterEnabledLabel">启用</strong>
+                      <span>未启用的适配器不会作为在线抓取入口。</span>
+                    </div>
+                    <label class="switch-control">
+                      <input id="adapterEnabledSwitch" type="checkbox" aria-labelledby="adapterEnabledLabel" />
+                      <span class="switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <label for="adapterWsHost"><strong>反向 WebSocket 主机</strong></label>
+                      <span>适配器接收反向连接时使用的监听主机。</span>
+                    </div>
+                    <input id="adapterWsHost" aria-describedby="adapterFormError" placeholder="0.0.0.0" />
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <label for="adapterWsPort"><strong>反向 WebSocket 端口</strong></label>
+                      <span>对应 NapCat / OneBot 反向 WebSocket 端口。</span>
+                    </div>
+                    <input id="adapterWsPort" inputmode="numeric" aria-describedby="adapterFormError" placeholder="26109" />
+                  </div>
+                  <div class="adapter-form-row">
+                    <div>
+                      <label for="adapterWsToken"><strong>反向 WebSocket Token</strong></label>
+                      <span>未设置则不启用 Token 验证。</span>
+                    </div>
+                    <input id="adapterWsToken" type="password" autocomplete="off" aria-describedby="adapterFormError" placeholder="token" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="adapter-step">
+              <div class="step-number">2</div>
+              <div>
+                <h3>黑白名单与抓取配置</h3>
+                <p>配置此适配器下不同会话的抓取范围和抓取项目；高级参数仍会存入适配器 config_json。</p>
+                <div class="adapter-config-box">
+                  <label class="sr-only" for="adapterConfig">适配器高级 JSON 配置</label>
+                  <textarea id="adapterConfig" aria-describedby="adapterFormError" placeholder='高级 JSON，例如 {"token":"..."}'></textarea>
+                  <div class="adapter-config-table">
+                    <div class="adapter-config-table-row">
+                      <strong>黑白名单（目标类型:会话 ID）</strong>
+                      <strong>抓取规则</strong>
+                      <strong>操作</strong>
+                    </div>
+                    <div class="adapter-config-table-row">
+                      <span>默认规则：全部会话</span>
+                      <span>default</span>
+                      <span>-</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="adapter-editor-actions">
+                  <button id="saveAdapterButton" class="btn primary">添加适配器</button>
+                </div>
+                <div id="adapterFormError" class="form-error" role="alert" aria-live="assertive" hidden></div>
+              </div>
+            </div>
+            <select id="adapterStatus" class="sr-only" aria-hidden="true" tabindex="-1">
+              <option value="gray">gray</option>
+              <option value="green">green</option>
+              <option value="red">red</option>
+            </select>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>自动备份</h3>
+                <p>固定设置备份频率、执行时间和本地保留数量；高级 cron 仍可手动填写。</p>
+              </div>
+              <div class="settings-card-actions">
+                <button id="runBackupButton" class="btn">立即备份</button>
+                <button id="saveBackupSettingsButton" class="btn primary">保存配置</button>
+                <button id="resetBackupSettingsButton" class="btn">恢复 .env</button>
+              </div>
+            </div>
+            <div class="backup-plan">
+              <div class="backup-options">
+                <div class="backup-presets" role="radiogroup" aria-label="备份频率">
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="off" />
+                    <strong>关闭</strong>
+                    <span>不自动备份</span>
+                  </label>
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="daily" />
+                    <strong>每天</strong>
+                    <span>按固定时间执行</span>
+                  </label>
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="weekly" />
+                    <strong>每周</strong>
+                    <span>指定星期执行</span>
+                  </label>
+                  <label class="preset-card">
+                    <input type="radio" name="backupPreset" value="custom" />
+                    <strong>自定义</strong>
+                    <span>手写 cron</span>
+                  </label>
+                </div>
+                <div class="backup-time-grid">
+                  <label class="settings-field-card">执行时间
+                    <input id="backupTimeInput" type="time" step="60" />
+                    <span>每日或每周的触发时间。</span>
+                  </label>
+                  <label class="settings-field-card">星期
+                    <select id="backupWeekdayInput">
+                      <option value="1">周一</option>
+                      <option value="2">周二</option>
+                      <option value="3">周三</option>
+                      <option value="4">周四</option>
+                      <option value="5">周五</option>
+                      <option value="6">周六</option>
+                      <option value="0">周日</option>
+                    </select>
+                    <span>仅每周备份使用。</span>
+                  </label>
+                  <label class="settings-field-card">保留数量
+                    <input id="backupKeepLatestInput" type="number" min="0" max="365" step="1" />
+                    <span>0 表示不自动清理旧备份。</span>
+                  </label>
+                </div>
+                <label id="backupCronCustomField" class="settings-field-card">高级 cron
+                  <input id="backupCronInput" placeholder="0 3 * * * / off" />
+                  <span>自定义模式下生效；固定模式会自动生成。</span>
+                </label>
+              </div>
+              <div class="backup-status-card">
+                <div id="backupStatusReport" class="report"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>管理令牌</h3>
+                <p>创建和查看可访问控制台接口的管理令牌。</p>
+              </div>
+              <button id="createAdminTokenButton" class="btn link">创建令牌</button>
+            </div>
+            <div class="settings-mini-grid">
+              <label class="label">令牌名称<input id="adminTokenName" aria-describedby="adminTokenCreateReport" placeholder="令牌名称" /></label>
+              <label class="label">令牌角色<select id="adminTokenRole" aria-describedby="adminTokenCreateReport">
+                <option value="viewer">viewer</option>
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select></label>
+            </div>
+            <div id="adminTokenCreateReport" class="report" role="alert" aria-live="assertive" hidden></div>
+            <div id="adminTokenList" class="adapter-list"></div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>数据库用户</h3>
+                <p>维护本地登录用户和权限角色。</p>
+              </div>
+              <button id="createAdminUserButton" class="btn link">创建用户</button>
+            </div>
+            <div class="settings-mini-grid">
+              <label class="label">用户名<input id="adminUsername" autocomplete="username" aria-describedby="adminUserCreateReport" placeholder="username" /></label>
+              <label class="label">初始密码<input id="adminPassword" type="password" autocomplete="new-password" aria-describedby="adminUserCreateReport" placeholder="password" /></label>
+              <label class="label">显示名称<input id="adminDisplayName" aria-describedby="adminUserCreateReport" placeholder="display name" /></label>
+              <label class="label">用户角色<select id="adminUserRole" aria-describedby="adminUserCreateReport">
+                <option value="viewer">viewer</option>
+                <option value="operator">operator</option>
+                <option value="admin">admin</option>
+              </select></label>
+            </div>
+            <div id="adminUserCreateReport" class="report" role="alert" aria-live="assertive" hidden></div>
+            <div id="adminUserList" class="adapter-list"></div>
+          </section>
+
+          <section class="settings-section-card">
+            <div class="settings-card-head">
+              <div>
+                <h3>登录会话</h3>
+                <p>查看和强制下线当前管理登录会话。</p>
+              </div>
+              <button id="refreshAdminSessionsButton" class="btn link">刷新会话</button>
+            </div>
+            <div id="adminSessionList" class="adapter-list"></div>
+          </section>
+        </div>
+      </div>
+
+      <div id="searchPanel" class="search-box">
+        <div class="search-head">
+          <span>搜索结果 · <span id="searchResultCount">0</span></span>
+          <button id="clearSearchButton" class="btn link">返回会话</button>
+        </div>
+        <div id="searchResults" class="search-results"></div>
+      </div>
+
+          <div id="roomList" class="rooms"></div>
+        </section>
+
+        <main class="main">
+          <div id="chatEmpty" class="chat-empty">请选择机器人账号和会话</div>
+          <div id="chatWindow" class="chat-scroll" hidden></div>
+          <div id="selectionToolbar" class="selection-toolbar" aria-live="polite">
+            <div id="selectionCount" class="selection-count">已选 0 条</div>
+            <div class="selection-actions">
+              <button id="selectAllVisibleButton" class="btn link" type="button">全选当前页</button>
+              <button id="exportSelectedButton" class="btn link" type="button">导出选定记录</button>
+              <button id="renderSelectedImageButton" class="btn primary" type="button">渲染为图片</button>
+              <button id="cancelSelectionButton" class="btn" type="button">取消</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div id="importModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="importModalTitle" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header">
+        <strong id="importModalTitle">导入 JSON</strong>
+        <button class="btn" data-close-modal="importModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <label class="label">备份包 JSON<textarea id="importPackageText" class="import-package-textarea" data-initial-focus aria-describedby="importValidationReport" placeholder="粘贴 /api/export 导出的 JSON 包"></textarea></label>
+        <div id="importValidationReport" class="report" role="alert" aria-live="assertive" hidden></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close-modal="importModal">取消</button>
+        <button id="validateImportButton" class="btn">校验</button>
+        <button id="submitImportButton" class="btn primary">确认导入</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="exportModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header">
+        <strong id="exportModalTitle">高级过滤导出</strong>
+        <button class="btn" data-close-modal="exportModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <label class="label">机器人视角 robot_id<input id="exportRobotId" data-initial-focus placeholder="robot_id" /></label>
+        <label class="label">会话 room_id（可留空导出当前机器人全部会话）<input id="exportRoomId" placeholder="room_id" /></label>
+        <label class="label">会话类型 message_type<select id="exportMessageType"><option value="">全部 / 自动识别</option><option value="group">群聊</option><option value="private">私聊</option></select></label>
+        <div class="grid-two">
+          <label class="label">开始时间戳 start_timestamp<input id="exportStartTimestamp" type="number" placeholder="可选" /></label>
+          <label class="label">结束时间戳 end_timestamp<input id="exportEndTimestamp" type="number" placeholder="可选" /></label>
+        </div>
+        <div class="hint">导出包为 JSON，文件名以 chat-audit-export 开头。</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close-modal="exportModal">取消</button>
+        <button id="downloadExportButton" class="btn primary">下载 JSON</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="offlineAuditModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="offlineAuditModalTitle" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header">
+        <strong id="offlineAuditModalTitle">离线验收</strong>
+        <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="offlineAuditReport" class="report" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-close-modal="offlineAuditModal">关闭</button>
+        <button id="repairOfflineAuditButton" class="btn">自动修复并复验</button>
+        <button id="runOfflineAuditButton" class="btn primary">重新验收</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="messageDetailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="messageDetailModalTitle" aria-hidden="true">
+    <div class="modal message-detail-modal">
+      <div class="modal-header">
+        <strong id="messageDetailModalTitle">消息与媒体详情</strong>
+        <button class="btn" data-close-modal="messageDetailModal">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="messageDetailReport" class="message-detail-report"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn primary" data-close-modal="messageDetailModal">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="imagePreviewModal" class="modal-backdrop image-preview-backdrop" role="dialog" aria-modal="true" aria-labelledby="imagePreviewTitle" aria-hidden="true">
+    <div class="image-preview">
+      <strong id="imagePreviewTitle" class="sr-only">图片预览</strong>
+      <button class="btn image-preview-close" data-close-modal="imagePreviewModal">关闭</button>
+      <div class="image-preview-controls" aria-label="图片预览控制">
+        <button id="imageZoomOutButton" class="btn" type="button" aria-label="缩小图片">−</button>
+        <button id="imageResetButton" class="btn" type="button">重置</button>
+        <button id="imageZoomInButton" class="btn" type="button" aria-label="放大图片">＋</button>
+        <button id="imagePanLeftButton" class="btn" type="button" aria-label="向左移动图片">←</button>
+        <button id="imagePanUpButton" class="btn" type="button" aria-label="向上移动图片">↑</button>
+        <button id="imagePanDownButton" class="btn" type="button" aria-label="向下移动图片">↓</button>
+        <button id="imagePanRightButton" class="btn" type="button" aria-label="向右移动图片">→</button>
+      </div>
+      <div id="imagePreviewStage" class="image-preview-stage">
+        <img id="imagePreviewImg" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="" draggable="false" />
+      </div>
+      <div id="imagePreviewCaption" class="image-preview-caption"></div>
+    </div>
+  </div>
+
+  <div id="forwardPreviewModal" class="modal-backdrop forward-preview-backdrop" role="dialog" aria-modal="true" aria-labelledby="forwardPreviewTitle" aria-hidden="true">
+    <div class="forward-preview-card">
+      <div class="forward-preview-head">
+        <div>
+          <strong id="forwardPreviewTitle">合并转发消息</strong>
+          <span id="forwardPreviewCaption"></span>
+        </div>
+        <button class="btn" data-close-modal="forwardPreviewModal">关闭</button>
+      </div>
+      <div id="forwardPreviewBody" class="forward-preview-body"></div>
+    </div>
+  </div>
+
+  <div id="authModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="authModalTitle" aria-hidden="true">
+    <form id="authForm" class="modal" novalidate>
+      <div class="modal-header"><strong id="authModalTitle">管理登录</strong><button class="btn" type="button" data-close-modal="authModal">关闭</button></div>
+      <div class="modal-body">
+        <label class="label">用户名<input id="loginUsername" data-initial-focus autocomplete="username" aria-describedby="authFormError" /></label>
+        <label class="label">密码<input id="loginPassword" type="password" autocomplete="current-password" aria-describedby="authFormError" /></label>
+        <div class="form-divider" role="separator">或者使用 API Token</div>
+        <label class="label">API Token<input id="loginApiToken" type="password" autocomplete="off" aria-describedby="authFormError" /></label>
+        <div id="authFormError" class="form-error" role="alert" aria-live="assertive" hidden></div>
+      </div>
+      <div class="modal-footer"><button class="btn" type="button" data-close-modal="authModal">取消</button><button id="loginWithTokenButton" class="btn" type="button">使用 Token</button><button id="loginWithPasswordButton" class="btn primary" type="submit">登录</button></div>
+    </form>
+  </div>
+
+  <div id="passwordResetModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="passwordResetTitle" aria-hidden="true">
+    <form id="passwordResetForm" class="modal" novalidate>
+      <div class="modal-header"><strong id="passwordResetTitle">重置用户密码</strong><button class="btn" type="button" data-close-modal="passwordResetModal">关闭</button></div>
+      <div class="modal-body"><label class="label">新密码<input id="passwordResetInput" type="password" autocomplete="new-password" data-initial-focus aria-describedby="passwordResetError" /></label><div id="passwordResetError" class="form-error" role="alert" aria-live="assertive" hidden></div></div>
+      <div class="modal-footer"><button class="btn" type="button" data-close-modal="passwordResetModal">取消</button><button id="submitPasswordResetButton" class="btn primary" type="submit">确认重置</button></div>
+    </form>
+  </div>
+
+  <div id="confirmModal" class="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalDescription" aria-hidden="true">
+    <div class="modal confirmation-modal">
+      <div class="modal-header"><strong id="confirmModalTitle">确认操作</strong></div>
+      <div class="modal-body"><p id="confirmModalDescription"></p></div>
+      <div class="modal-footer"><button id="cancelConfirmButton" class="btn" type="button">取消</button><button id="acceptConfirmButton" class="btn danger" type="button">确认</button></div>
+    </div>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js?v=20260827-1', { updateViaCache: 'none' }).then((registration) => registration.update()).catch(() => {});
+      });
+    }
+  </script>
+  <script src="/assets/app.min.js?v=20260827-1" defer></script>
+</body>
+</html>

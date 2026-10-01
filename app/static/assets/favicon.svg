@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Chat Audit Collector">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="16" x2="236" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#172554"/>
+      <stop offset="0.55" stop-color="#4338CA"/>
+      <stop offset="1" stop-color="#0F766E"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="68" y1="42" x2="208" y2="218" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A5F3FC"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#020617" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#bg)"/>
+  <circle cx="128" cy="128" r="88" fill="none" stroke="#FFFFFF" stroke-opacity=".12" stroke-width="3"/>
+  <path d="M66 104c0-26 22-47 49-47h28c27 0 49 21 49 47s-22 47-49 47h-11l-30 24v-25c-21-5-36-22-36-46Z" fill="#FFFFFF" filter="url(#shadow)"/>
+  <path d="M88 105h61M88 124h43" stroke="#4338CA" stroke-width="10" stroke-linecap="round"/>
+  <path d="M177 163c20 4 35 20 35 40 0 7-2 14-5 20l12 14-25-5c-7 5-16 8-25 8-25 0-45-17-45-39" fill="#99F6E4" stroke="#FFFFFF" stroke-width="6" stroke-linejoin="round" filter="url(#shadow)"/>
+  <path d="m149 200 13 13 26-29" fill="none" stroke="#0F766E" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="52" cy="57" r="9" fill="#A5F3FC"/>
+  <circle cx="211" cy="62" r="6" fill="#99F6E4"/>
+</svg>
