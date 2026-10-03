@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,12 +74,22 @@ class MessageService:
         sender_id = msg_data["sender_id"]
         event_identity = msg_data.get("message_id")
         if event_identity is None:
-            event_identity = f"{msg_data['timestamp']}_{raw_message}"
+            # Without a source ID there is no proof that equal text at the same
+            # second is a replay. Preserve each delivery rather than lose a row.
+            event_identity = "unidentified:" + uuid4().hex
         raw_string = f"{platform}_{room_id}_{sender_id}_{event_identity}"
         msg_hash = MessageService.generate_md5(raw_string.encode("utf-8"))
 
         result = await db.execute(select(Message).where(Message.msg_hash == msg_hash))
         existing_msg = result.scalar_one_or_none()
+        if existing_msg is not None and existing_msg.message_type != msg_data["message_type"]:
+            # Retain existing hashes for matching messages while separating the
+            # same source ID reused in a private and a group conversation.
+            msg_hash = MessageService.generate_md5(
+                f"{msg_hash}_{msg_data['message_type']}".encode("utf-8")
+            )
+            result = await db.execute(select(Message).where(Message.msg_hash == msg_hash))
+            existing_msg = result.scalar_one_or_none()
         if existing_msg is None:
             local_message = msg_data.get("local_message", raw_message)
             if media_http_client is not None:

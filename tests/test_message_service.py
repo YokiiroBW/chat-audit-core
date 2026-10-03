@@ -6,6 +6,7 @@ from app.services.message_service import MessageService
 @pytest.mark.asyncio
 async def test_same_message_is_stored_once_but_bound_to_multiple_robot_views(db_session):
     payload = {
+        "message_id": "onebot-stable-message",
         "room_id": "group-10001",
         "message_type": "group",
         "sender_id": "user-42",
@@ -92,6 +93,54 @@ async def test_same_external_message_id_is_bound_once_across_robot_views(db_sess
         ("robot-a", first_hash),
         ("robot-b", first_hash),
     }
+
+
+@pytest.mark.asyncio
+async def test_identical_unidentified_deliveries_at_the_same_second_are_preserved(db_session):
+    payload = {
+        "room_id": "group-10001",
+        "message_type": "group",
+        "sender_id": "user-42",
+        "raw_message": "same short text",
+        "timestamp": 1783000000,
+    }
+    first = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=payload
+    )
+    second = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=payload
+    )
+    assert first != second
+    assert len(await MessageService.list_messages(db_session)) == 2
+    assert len(await MessageService.list_robot_messages(db_session)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_type,second_type", [("group", "private"), ("private", "group")])
+async def test_shared_external_id_cannot_merge_private_and_group_messages(
+    db_session, first_type, second_type
+):
+    payload = {
+        "message_id": "shared-id",
+        "room_id": "10001",
+        "sender_id": "user-42",
+        "message_type": first_type,
+        "raw_message": "same text",
+        "timestamp": 1783000000,
+    }
+    first_hash = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=payload
+    )
+    second_payload = {**payload, "message_type": second_type}
+    second_hash = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=second_payload
+    )
+    assert first_hash != second_hash
+    assert await MessageService.process_incoming_message(
+        db_session, robot_id="robot-b", platform="qq", msg_data=second_payload
+    ) == second_hash
+    assert len(await MessageService.list_messages(db_session)) == 2
+    assert len(await MessageService.list_robot_messages(db_session)) == 3
 
 
 @pytest.mark.asyncio
