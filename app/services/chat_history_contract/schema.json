@@ -1,0 +1,1024 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tianshu.local/contracts/chat-history/candidate-v1/schema.json",
+  "title": "Scoped archive history, locator checks and group interactions",
+  "$defs": {
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "namespace": {
+          "const": "qq"
+        },
+        "binding_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "channel_conversation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "thread_id": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "namespace",
+        "binding_id",
+        "channel_conversation_id",
+        "thread_id"
+      ]
+    },
+    "native_alias": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "const": "qq"
+        },
+        "account_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "message_type": {
+          "enum": [
+            "group",
+            "private"
+          ]
+        },
+        "id_kind": {
+          "enum": [
+            "external",
+            "qqnt_source",
+            "qqnt_platform"
+          ]
+        },
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "import_source_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^\\S+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "platform",
+        "account_id",
+        "room_id",
+        "message_type",
+        "id_kind",
+        "message_id",
+        "import_source_id"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "id_kind": {
+                "const": "external"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "import_source_id": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "import_source_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^\\S+$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "locator": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^audit-evidence:0:[a-f0-9]{64}:[A-Za-z0-9_-]{1,64}:[a-f0-9]{64}$"
+        },
+        "archive_observation_id": {
+          "type": "string",
+          "pattern": "^audit-observation:[a-f0-9]{64}$"
+        },
+        "stored_content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "text_representation": {
+          "enum": [
+            "stored_text",
+            "text_with_unavailable_segments"
+          ]
+        },
+        "sender_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "timestamp": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "source_sequence": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "external_message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "media_state": {
+          "const": "unavailable"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^\\S+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native_aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/native_alias"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "locator",
+        "archive_observation_id",
+        "stored_content_sha256",
+        "text",
+        "text_representation",
+        "sender_id",
+        "timestamp",
+        "source_sequence",
+        "external_message_id",
+        "media_state",
+        "message_id",
+        "native_aliases"
+      ]
+    },
+    "filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keyword": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sender_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^\\S+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start_timestamp": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end_timestamp": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "keyword",
+        "sender_id",
+        "start_timestamp",
+        "end_timestamp"
+      ]
+    },
+    "search_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "filters": {
+          "$ref": "#/$defs/filters"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "filters",
+        "cursor",
+        "limit"
+      ]
+    },
+    "search_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "consistency": {
+          "const": "live_keyset"
+        },
+        "returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "consistency",
+        "returned",
+        "has_more"
+      ]
+    },
+    "search_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "status": {
+          "const": "archive_observed"
+        },
+        "current_source_state": {
+          "const": "not_checked"
+        },
+        "id_kind": {
+          "enum": [
+            "external",
+            "qqnt_source",
+            "qqnt_platform"
+          ]
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record"
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/search_coverage"
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "status",
+        "current_source_state",
+        "id_kind",
+        "records",
+        "next_cursor",
+        "coverage"
+      ]
+    },
+    "read_locator_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "locator": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^audit-evidence:0:[a-f0-9]{64}:[A-Za-z0-9_-]{1,64}:[a-f0-9]{64}$"
+        },
+        "expected_stored_content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "locator",
+        "expected_stored_content_sha256",
+        "before",
+        "after"
+      ]
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record"
+          },
+          "minItems": 0,
+          "maxItems": 10
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record"
+          },
+          "minItems": 0,
+          "maxItems": 10
+        },
+        "complete": {
+          "const": false
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "complete"
+      ]
+    },
+    "read_locator_current": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "core_source_state": {
+          "const": "not_observed"
+        },
+        "id_kind": {
+          "enum": [
+            "external",
+            "qqnt_source",
+            "qqnt_platform"
+          ]
+        },
+        "status": {
+          "const": "archive_current"
+        },
+        "target": {
+          "$ref": "#/$defs/record"
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "core_source_state",
+        "id_kind",
+        "status",
+        "target",
+        "context"
+      ]
+    },
+    "read_locator_unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "core_source_state": {
+          "const": "not_observed"
+        },
+        "id_kind": {
+          "enum": [
+            "external",
+            "qqnt_source",
+            "qqnt_platform"
+          ]
+        },
+        "status": {
+          "enum": [
+            "changed",
+            "missing"
+          ]
+        },
+        "target": {
+          "type": "null"
+        },
+        "context": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "core_source_state",
+        "id_kind",
+        "status",
+        "target",
+        "context"
+      ]
+    },
+    "read_locator_response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/read_locator_current"
+        },
+        {
+          "$ref": "#/$defs/read_locator_unavailable"
+        }
+      ]
+    },
+    "check_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "locator": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^audit-evidence:0:[a-f0-9]{64}:[A-Za-z0-9_-]{1,64}:[a-f0-9]{64}$"
+        },
+        "expected_stored_content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "locator",
+        "expected_stored_content_sha256"
+      ]
+    },
+    "check_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check_item"
+          },
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "items"
+      ]
+    },
+    "check_result_current": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "locator": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^audit-evidence:0:[a-f0-9]{64}:[A-Za-z0-9_-]{1,64}:[a-f0-9]{64}$"
+        },
+        "status": {
+          "enum": [
+            "archive_current",
+            "changed"
+          ]
+        },
+        "current_stored_content_sha256": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "locator",
+        "status",
+        "current_stored_content_sha256"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "archive_current"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "current_stored_content_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "check_result_missing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "locator": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^audit-evidence:0:[a-f0-9]{64}:[A-Za-z0-9_-]{1,64}:[a-f0-9]{64}$"
+        },
+        "status": {
+          "const": "missing"
+        },
+        "current_stored_content_sha256": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "locator",
+        "status",
+        "current_stored_content_sha256"
+      ]
+    },
+    "check_result": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/check_result_current"
+        },
+        {
+          "$ref": "#/$defs/check_result_missing"
+        }
+      ]
+    },
+    "check_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "core_source_state": {
+          "const": "not_observed"
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check_result"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "core_source_state",
+        "observed_at",
+        "results"
+      ]
+    },
+    "stats_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start_timestamp": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "end_timestamp": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "bucket_seconds": {
+          "enum": [
+            3600,
+            86400
+          ]
+        },
+        "timezone_offset_minutes": {
+          "type": "integer",
+          "minimum": -840,
+          "maximum": 840
+        }
+      },
+      "required": [
+        "start_timestamp",
+        "end_timestamp",
+        "bucket_seconds",
+        "timezone_offset_minutes"
+      ]
+    },
+    "group_stats_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "start_timestamp": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "end_timestamp": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "bucket_seconds": {
+          "enum": [
+            3600,
+            86400
+          ]
+        },
+        "timezone_offset_minutes": {
+          "type": "integer",
+          "minimum": -840,
+          "maximum": 840
+        },
+        "message_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "start_timestamp",
+        "end_timestamp",
+        "bucket_seconds",
+        "timezone_offset_minutes",
+        "message_limit"
+      ]
+    },
+    "author": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sender_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "messages": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sender_id",
+        "messages"
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from_sender_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "to_sender_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^\\S+$"
+        },
+        "reply_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mention_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interaction_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_locators": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^audit-evidence:0:[a-f0-9]{64}:[A-Za-z0-9_-]{1,64}:[a-f0-9]{64}$"
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "from_sender_id",
+        "to_sender_id",
+        "reply_count",
+        "mention_count",
+        "interaction_count",
+        "evidence_locators"
+      ]
+    },
+    "bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start_timestamp": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "messages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_senders": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reply_messages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mention_messages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "broadcast_messages": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start_timestamp",
+        "messages",
+        "active_senders",
+        "reply_messages",
+        "mention_messages",
+        "broadcast_messages"
+      ]
+    },
+    "stats_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "consistency": {
+          "const": "live_observation"
+        },
+        "messages_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "unresolved_reply": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_mention": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "broadcast_messages": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relation_unavailable_messages": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "consistency",
+        "messages_scanned",
+        "has_more",
+        "complete",
+        "unresolved_reply",
+        "unresolved_mention",
+        "broadcast_messages",
+        "relation_unavailable_messages"
+      ]
+    },
+    "group_stats_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "status": {
+          "const": "archive_observed"
+        },
+        "current_source_state": {
+          "const": "not_checked"
+        },
+        "window": {
+          "$ref": "#/$defs/stats_window"
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/author"
+          },
+          "minItems": 0
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/edge"
+          },
+          "minItems": 0
+        },
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/bucket"
+          },
+          "minItems": 0
+        },
+        "coverage": {
+          "$ref": "#/$defs/stats_coverage"
+        }
+      },
+      "required": [
+        "schema_version",
+        "channel",
+        "status",
+        "current_source_state",
+        "window",
+        "authors",
+        "edges",
+        "buckets",
+        "coverage"
+      ]
+    }
+  }
+}

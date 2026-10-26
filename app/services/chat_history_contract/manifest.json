@@ -1,0 +1,11 @@
+{
+  "name": "chat-history",
+  "version": "1.0.0-candidate.1",
+  "state": "isolated-development-candidate",
+  "hash_basis": "UTF-8 LF-normalized",
+  "sha256": {
+    "schema.json": "6806d99f681206cae13404004b352b03531c18264680ef04d4c52b5658f86ccb",
+    "examples.json": "2261c1122c252c4fda7d6b39a883b1a3eb836061e21620381c57fcedb01d4f7b",
+    "README.md": "dc7d281fafa925b93bda3849306cb473b9849b1028bec762375dbc8edec7e707"
+  }
+}

@@ -1,0 +1,329 @@
+{
+  "positive": [
+    {
+      "id": "search_request",
+      "definition": "search_request",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "filters": {
+          "keyword": null,
+          "sender_id": null,
+          "start_timestamp": null,
+          "end_timestamp": null
+        },
+        "cursor": null,
+        "limit": 50
+      }
+    },
+    {
+      "id": "search_response",
+      "definition": "search_response",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "status": "archive_observed",
+        "current_source_state": "not_checked",
+        "id_kind": "external",
+        "records": [
+          {
+            "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:message-a:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "archive_observation_id": "audit-observation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "stored_content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "text": "原作者的完整原话",
+            "text_representation": "stored_text",
+            "sender_id": "sender-a",
+            "timestamp": 100,
+            "source_sequence": null,
+            "external_message_id": "7",
+            "media_state": "unavailable",
+            "message_id": "7",
+            "native_aliases": [
+              {
+                "platform": "qq",
+                "account_id": "account-a",
+                "room_id": "42",
+                "message_type": "group",
+                "id_kind": "external",
+                "message_id": "7",
+                "import_source_id": null
+              }
+            ]
+          }
+        ],
+        "next_cursor": null,
+        "coverage": {
+          "consistency": "live_keyset",
+          "returned": 1,
+          "has_more": false
+        }
+      }
+    },
+    {
+      "id": "read_locator_request",
+      "definition": "read_locator_request",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:message-a:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expected_stored_content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "before": 2,
+        "after": 2
+      }
+    },
+    {
+      "id": "read_locator_current",
+      "definition": "read_locator_current",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "status": "archive_current",
+        "core_source_state": "not_observed",
+        "id_kind": "external",
+        "target": {
+          "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:message-a:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "archive_observation_id": "audit-observation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "stored_content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "text": "原作者的完整原话",
+          "text_representation": "stored_text",
+          "sender_id": "sender-a",
+          "timestamp": 100,
+          "source_sequence": null,
+          "external_message_id": "7",
+          "media_state": "unavailable",
+          "message_id": "7",
+          "native_aliases": [
+            {
+              "platform": "qq",
+              "account_id": "account-a",
+              "room_id": "42",
+              "message_type": "group",
+              "id_kind": "external",
+              "message_id": "7",
+              "import_source_id": null
+            }
+          ]
+        },
+        "context": {
+          "before": [],
+          "after": [],
+          "complete": false
+        }
+      }
+    },
+    {
+      "id": "read_locator_changed",
+      "definition": "read_locator_unavailable",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "status": "changed",
+        "core_source_state": "not_observed",
+        "id_kind": "external",
+        "target": null,
+        "context": null
+      }
+    },
+    {
+      "id": "read_locator_missing",
+      "definition": "read_locator_unavailable",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "status": "missing",
+        "core_source_state": "not_observed",
+        "id_kind": "external",
+        "target": null,
+        "context": null
+      }
+    },
+    {
+      "id": "check_request",
+      "definition": "check_request",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "items": [
+          {
+            "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:message-a:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "expected_stored_content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      }
+    },
+    {
+      "id": "check_response",
+      "definition": "check_response",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "core_source_state": "not_observed",
+        "observed_at": 1793010000,
+        "results": [
+          {
+            "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:message-a:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "status": "archive_current",
+            "current_stored_content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      }
+    },
+    {
+      "id": "check_changed_missing_response",
+      "definition": "check_response",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "core_source_state": "not_observed",
+        "observed_at": 1793010000,
+        "results": [
+          {
+            "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:message-a:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "status": "changed",
+            "current_stored_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          },
+          {
+            "locator": "audit-evidence:0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:absent:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "status": "missing",
+            "current_stored_content_sha256": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "group_stats_request",
+      "definition": "group_stats_request",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "start_timestamp": 0,
+        "end_timestamp": 86400,
+        "bucket_seconds": 3600,
+        "timezone_offset_minutes": 480,
+        "message_limit": 10000
+      }
+    },
+    {
+      "id": "group_stats_response",
+      "definition": "group_stats_response",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "status": "archive_observed",
+        "current_source_state": "not_checked",
+        "window": {
+          "start_timestamp": 0,
+          "end_timestamp": 86400,
+          "bucket_seconds": 3600,
+          "timezone_offset_minutes": 480
+        },
+        "authors": [
+          {
+            "sender_id": "sender-a",
+            "messages": 1
+          }
+        ],
+        "edges": [],
+        "buckets": [
+          {
+            "start_timestamp": 0,
+            "messages": 1,
+            "active_senders": 1,
+            "reply_messages": 0,
+            "mention_messages": 0,
+            "broadcast_messages": 0
+          }
+        ],
+        "coverage": {
+          "consistency": "live_observation",
+          "messages_scanned": 1,
+          "has_more": false,
+          "complete": true,
+          "unresolved_reply": 0,
+          "unresolved_mention": 0,
+          "broadcast_messages": 0,
+          "relation_unavailable_messages": 0
+        }
+      }
+    }
+  ],
+  "negative": [
+    {
+      "id": "cannot-select-robot",
+      "definition": "search_request",
+      "document": {
+        "schema_version": 1,
+        "channel": {
+          "namespace": "qq",
+          "binding_id": "binding-a",
+          "channel_conversation_id": "group:42",
+          "thread_id": null
+        },
+        "filters": {
+          "keyword": null,
+          "sender_id": null,
+          "start_timestamp": null,
+          "end_timestamp": null
+        },
+        "cursor": null,
+        "limit": 50,
+        "robot_id": 999
+      }
+    }
+  ]
+}
