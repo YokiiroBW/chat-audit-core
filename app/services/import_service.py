@@ -5,7 +5,7 @@ import json
 import uuid
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -400,115 +400,16 @@ class ImportService:
         canonical_sender_id = str(message_data.canonical_sender_id or message_data.sender_id)
         canonical_room_id = str(message_data.canonical_room_id or message_data.room_id)
         incoming_local = message_data.local_message or message_data.raw_message
-        msg_hash = MessageService.message_hash(
+        msg_hash, message = await MessageService.resolve_existing_message(
+            db,
             platform=message_data.platform,
             room_id=canonical_room_id,
             sender_id=canonical_sender_id,
             event_identity=str(event_identity),
             message_type=message_data.message_type,
+            source_record=(source.id, item.source_record.source_table, item.source_record.source_key),
+            platform_message_id=ImportService._platform_message_id(item),
         )
-
-        message_result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
-        message = message_result.scalar_one_or_none()
-        if message is not None and message.message_type != message_data.message_type:
-            msg_hash = MessageService.generate_md5(f"{msg_hash}_{message_data.message_type}".encode("utf-8"))
-            message_result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
-            message = message_result.scalar_one_or_none()
-        if message is None and message_data.message_id:
-            existing_result = await db.execute(
-                select(Message).where(
-                    Message.platform == message_data.platform,
-                    Message.room_id == canonical_room_id,
-                    Message.sender_id == canonical_sender_id,
-                    Message.message_type == message_data.message_type,
-                    Message.external_message_id == message_data.message_id,
-                ).with_for_update()
-            )
-            message = existing_result.scalars().first()
-            if message is not None:
-                msg_hash = message.msg_hash
-
-        if message is None:
-            alias_result = await db.execute(
-                select(Message)
-                .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
-                .where(
-                    Message.platform == message_data.platform,
-                    Message.room_id == canonical_room_id,
-                    Message.sender_id == canonical_sender_id,
-                    MessageSourceRecord.source_external_message_id == message_data.message_id,
-                )
-                .with_for_update()
-            )
-            message = alias_result.scalars().first()
-            if message is not None:
-                msg_hash = message.msg_hash
-
-        platform_message_id = ImportService._platform_message_id(item)
-        if message is None and platform_message_id:
-            platform_result = await db.execute(
-                select(Message).where(
-                    Message.platform == message_data.platform,
-                    Message.room_id == canonical_room_id,
-                    Message.sender_id == canonical_sender_id,
-                    Message.external_message_id == platform_message_id,
-                ).with_for_update()
-            )
-            message = platform_result.scalars().first()
-            if message is not None:
-                msg_hash = message.msg_hash
-
-        if message is None:
-            # Last-resort semantic match, used to fold a message that arrived from
-            # another source (realtime capture) into the same archived row.
-            #
-            # It must never merge two *different rows of the same source database*:
-            # sending the same short text twice within one second is ordinary in a
-            # group, and those rows are separate messages even though session,
-            # sender, second and text all match. Without the guard below the second
-            # row attaches its source record to the first message and is never
-            # stored, which loses a message silently.
-            same_source_other_row = (
-                select(MessageSourceRecord.id)
-                .where(
-                    MessageSourceRecord.msg_hash == Message.msg_hash,
-                    MessageSourceRecord.source_id == source.id,
-                    or_(
-                        MessageSourceRecord.source_table != item.source_record.source_table,
-                        MessageSourceRecord.source_primary_key != item.source_record.source_key,
-                    ),
-                )
-                .exists()
-            )
-            semantic_conditions = [
-                Message.platform == message_data.platform,
-                Message.room_id == canonical_room_id,
-                Message.message_type == message_data.message_type,
-                Message.sender_id == canonical_sender_id,
-                Message.timestamp == message_data.timestamp,
-                Message.local_message == incoming_local,
-                ~same_source_other_row,
-            ]
-            if message_data.source_sequence is not None:
-                # A candidate that already carries a different sequence number is a
-                # different message; one with no sequence (realtime capture) may
-                # still be the same message seen from another source.
-                semantic_conditions.append(
-                    or_(
-                        Message.source_sequence.is_(None),
-                        Message.source_sequence == message_data.source_sequence,
-                    )
-                )
-            semantic_result = await db.execute(
-                select(Message)
-                .where(*semantic_conditions)
-                .order_by(Message.created_at.asc(), Message.msg_hash.asc())
-                .limit(1)
-                .with_for_update()
-            )
-            message = semantic_result.scalars().first()
-            if message is not None:
-                msg_hash = message.msg_hash
 
         created = message is None
         changed = created

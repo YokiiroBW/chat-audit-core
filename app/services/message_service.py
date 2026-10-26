@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -50,18 +51,13 @@ class MessageService:
         sender_id: str,
         event_identity: str,
         message_type: str | None = None,
-        timestamp: int | None = None,
-        raw_message: str | None = None,
+        source_record: tuple[str, str, str] | None = None,
+        platform_message_id: str | None = None,
     ) -> tuple[str, Message | None]:
-        """Find the row this event already lives in, if any.
+        """Resolve a stable source row or message ID within its conversation.
 
-        The import path carries a stable per-source key, so the same QQNT
-        message re-imported twice converges. A realtime NapCat event has only
-        its own connection-scoped message id, which never matches the id the
-        importer recorded, so archiving the same conversation both ways
-        produced two rows for one message -- and only in that order, since an
-        import arriving second does find the realtime row through the source
-        record lookup below.
+        Import IDs and platform IDs are aliases recorded on MessageSourceRecord.
+        Content and second-level timestamps do not establish message identity.
         """
         msg_hash = MessageService.message_hash(
             platform=platform,
@@ -70,20 +66,42 @@ class MessageService:
             event_identity=event_identity,
             message_type=message_type or "unknown",
         )
-        result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
-        message = result.scalar_one_or_none()
+        scope = [
+            Message.platform == platform,
+            Message.room_id == room_id,
+            Message.sender_id == sender_id,
+            *([Message.message_type == message_type] if message_type is not None else []),
+        ]
+        message = None
+        if source_record is not None:
+            source_id, table, key = source_record
+            result = await db.execute(
+                select(Message)
+                .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
+                .where(
+                    *scope,
+                    MessageSourceRecord.source_id == source_id,
+                    MessageSourceRecord.source_table == table,
+                    MessageSourceRecord.source_primary_key == key,
+                )
+                .with_for_update()
+            )
+            message = result.scalar_one_or_none()
+        if message is None:
+            result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
+            message = result.scalar_one_or_none()
         if message is not None and message_type is not None and message.message_type != message_type:
             msg_hash = MessageService.generate_md5(f"{msg_hash}_{message_type}".encode("utf-8"))
             result = await db.execute(select(Message).where(Message.msg_hash == msg_hash).with_for_update())
             message = result.scalar_one_or_none()
+        identities = {event_identity}
+        if platform_message_id:
+            identities.add(platform_message_id)
         if message is None:
             result = await db.execute(
                 select(Message).where(
-                    Message.platform == platform,
-                    Message.room_id == room_id,
-                    Message.sender_id == sender_id,
-                    *([Message.message_type == message_type] if message_type is not None else []),
-                    Message.external_message_id == event_identity,
+                    *scope,
+                    Message.external_message_id.in_(identities),
                 ).with_for_update()
             )
             message = result.scalars().first()
@@ -92,65 +110,16 @@ class MessageService:
                 select(Message)
                 .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
                 .where(
-                    Message.platform == platform,
-                    Message.room_id == room_id,
-                    Message.sender_id == sender_id,
-                    *([Message.message_type == message_type] if message_type is not None else []),
+                    *scope,
                     or_(
-                        MessageSourceRecord.source_external_message_id == event_identity,
-                        MessageSourceRecord.platform_message_id == event_identity,
+                        MessageSourceRecord.source_external_message_id.in_(identities),
+                        MessageSourceRecord.platform_message_id.in_(identities),
                     ),
                 )
                 .with_for_update()
             )
             message = result.scalars().first()
-        if message is None and message_type is not None and timestamp is not None and raw_message is not None:
-            message = await MessageService._resolve_imported_twin(
-                db,
-                platform=platform,
-                room_id=room_id,
-                sender_id=sender_id,
-                message_type=message_type,
-                timestamp=timestamp,
-                raw_message=raw_message,
-            )
         return (message.msg_hash if message is not None else msg_hash), message
-
-    @staticmethod
-    async def _resolve_imported_twin(
-        db: AsyncSession,
-        *,
-        platform: str,
-        room_id: str,
-        sender_id: str,
-        message_type: str,
-        timestamp: int,
-        raw_message: str,
-    ) -> Message | None:
-        """The already-imported row this realtime event is a second copy of.
-
-        Deliberately narrower than the importer's own semantic fallback. It only
-        considers rows that carry an import source record, so two realtime
-        events can never be merged into each other -- that is the failure this
-        avoids repeating, where a group member sending the same short text twice
-        in one second lost the second message. An imported row, by contrast,
-        cannot be the same realtime delivery arriving twice.
-        """
-        result = await db.execute(
-            select(Message)
-            .join(MessageSourceRecord, MessageSourceRecord.msg_hash == Message.msg_hash)
-            .where(
-                Message.platform == platform,
-                Message.room_id == room_id,
-                Message.sender_id == sender_id,
-                Message.message_type == message_type,
-                Message.timestamp == timestamp,
-                Message.raw_message == raw_message,
-            )
-            .order_by(Message.msg_hash.asc())
-            .with_for_update()
-        )
-        return result.scalars().first()
 
     @staticmethod
     async def save_media_asset(
@@ -225,8 +194,10 @@ class MessageService:
         room_id = str(msg_data.get("canonical_room_id") or raw_room_id)
         sender_id = str(msg_data.get("canonical_sender_id") or raw_sender_id)
         event_identity = msg_data.get("message_id")
-        if event_identity is None:
-            event_identity = f"{msg_data['timestamp']}_{raw_message}"
+        if not event_identity:
+            # Without a source ID there is no evidence that two deliveries are
+            # the same message. Preserve both instead of silently dropping one.
+            event_identity = "unidentified:" + uuid4().hex
         msg_hash, existing_msg = await MessageService.resolve_existing_message(
             db,
             platform=platform,
@@ -234,8 +205,6 @@ class MessageService:
             sender_id=sender_id,
             event_identity=str(event_identity),
             message_type=msg_data.get("message_type"),
-            timestamp=msg_data.get("timestamp"),
-            raw_message=raw_message,
         )
 
         local_message = msg_data.get("local_message", raw_message)

@@ -8,6 +8,7 @@ from app.services.message_service import MessageService
 @pytest.mark.asyncio
 async def test_same_message_is_stored_once_but_bound_to_multiple_robot_views(db_session):
     payload = {
+        "message_id": "onebot-stable-message",
         "room_id": "group-10001",
         "message_type": "group",
         "sender_id": "user-42",
@@ -97,6 +98,54 @@ async def test_same_external_message_id_is_bound_once_across_robot_views(db_sess
 
 
 @pytest.mark.asyncio
+async def test_identical_unidentified_deliveries_at_the_same_second_are_preserved(db_session):
+    payload = {
+        "room_id": "group-10001",
+        "message_type": "group",
+        "sender_id": "user-42",
+        "raw_message": "same short text",
+        "timestamp": 1783000000,
+    }
+    first = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=payload
+    )
+    second = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=payload
+    )
+    assert first != second
+    assert len(await MessageService.list_messages(db_session)) == 2
+    assert len(await MessageService.list_robot_messages(db_session)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_type,second_type", [("group", "private"), ("private", "group")])
+async def test_shared_external_id_cannot_merge_private_and_group_messages(
+    db_session, first_type, second_type
+):
+    payload = {
+        "message_id": "shared-id",
+        "room_id": "10001",
+        "sender_id": "user-42",
+        "message_type": first_type,
+        "raw_message": "same text",
+        "timestamp": 1783000000,
+    }
+    first_hash = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=payload
+    )
+    second_payload = {**payload, "message_type": second_type}
+    second_hash = await MessageService.process_incoming_message(
+        db_session, robot_id="robot-a", platform="qq", msg_data=second_payload
+    )
+    assert first_hash != second_hash
+    assert await MessageService.process_incoming_message(
+        db_session, robot_id="robot-b", platform="qq", msg_data=second_payload
+    ) == second_hash
+    assert len(await MessageService.list_messages(db_session)) == 2
+    assert len(await MessageService.list_robot_messages(db_session)) == 3
+
+
+@pytest.mark.asyncio
 async def test_media_asset_is_content_addressed_and_deduplicated(db_session, tmp_path):
     content = b"fake image bytes"
 
@@ -168,10 +217,15 @@ def test_normalize_message_segment_has_stable_face_fallback_for_object_raw_value
 
 
 @pytest.mark.asyncio
-async def test_realtime_event_converges_with_an_already_imported_message(db_session):
-    # A QQNT import and a NapCat capture of the same conversation produced two
-    # rows for one message, because the realtime event's connection-scoped id
-    # never matches the id the importer recorded.
+@pytest.mark.parametrize(
+    "platform_alias,incoming_id,converges",
+    [("napcat-4242", "napcat-4242", True), (None, "napcat-4242", False), ("napcat-4242", None, False)],
+)
+async def test_realtime_import_convergence_requires_recorded_identity(
+    db_session, platform_alias, incoming_id, converges
+):
+    # Only a recorded message alias proves that these are the same event.
+    # Equal text and second-level time must not collapse another delivery.
     source = ImportSource(
         id="qqnt-source-twin",
         source_type="qqnt_local_db",
@@ -202,6 +256,7 @@ async def test_realtime_event_converges_with_an_already_imported_message(db_sess
                 source_table="group_msg_table",
                 source_primary_key="row-1",
                 source_external_message_id="qqnt-9001",
+                platform_message_id=platform_alias,
             ),
         ]
     )
@@ -212,7 +267,7 @@ async def test_realtime_event_converges_with_an_already_imported_message(db_sess
         "robot-a",
         "qq",
         {
-            "message_id": "napcat-4242",
+            "message_id": incoming_id,
             "room_id": "group-twin",
             "message_type": "group",
             "sender_id": "user-a",
@@ -222,8 +277,23 @@ async def test_realtime_event_converges_with_an_already_imported_message(db_sess
         },
     )
 
-    assert msg_hash == "imported-twin-hash"
-    assert await db_session.scalar(select(func.count(Message.msg_hash))) == 1
+    if converges:
+        assert msg_hash == "imported-twin-hash"
+        assert await db_session.scalar(select(func.count(Message.msg_hash))) == 1
+    else:
+        assert msg_hash != "imported-twin-hash"
+        assert await db_session.scalar(select(func.count(Message.msg_hash))) == 2
+        if incoming_id is not None and platform_alias is None:
+            # Reimport still belongs to its exact source row even when its
+            # currently supplied platform alias already names another row.
+            replay_hash, replay = await MessageService.resolve_existing_message(
+                db_session,
+                platform="qq", room_id="group-twin", sender_id="user-a",
+                event_identity=incoming_id, message_type="group",
+                source_record=(source.id, "group_msg_table", "row-1"),
+            )
+            assert replay_hash == imported.msg_hash
+            assert replay.msg_hash == imported.msg_hash
 
 
 @pytest.mark.asyncio
