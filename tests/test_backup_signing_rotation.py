@@ -252,6 +252,32 @@ def test_invalid_registry_preserves_current_verification_and_redacts_diagnostic(
     assert BackupService.validate_import_package(package, signing_key=NEW_KEY, verification_policy=policy)["signature_valid"]
 
 
+def test_policy_rejects_unencodable_historical_key_without_disclosing_it():
+    with pytest.raises(ValueError, match="invalid historical backup keys") as error:
+        BackupVerificationPolicy({"previous": "synthetic-private-key-\ud800"}, {})
+    assert "synthetic-private-key" not in str(error.value)
+
+
+def test_surrogate_registry_does_not_block_current_legacy_or_v4(tmp_path, caplog):
+    package = _legacy_package()
+    path = tmp_path / "surrogate-key.json"
+    path.write_text(json.dumps({
+        "schema": BACKUP_TRUST_SCHEMA,
+        "historical_keys": {"previous": "synthetic-private-key-\ud800"},
+        "trusted_backups": {_legacy_pin(package): "previous"},
+    }), encoding="utf-8")
+    policy = load_backup_verification_policy(path)
+    assert not policy.historical_keys and not policy.trusted_backups
+    assert "historical verification disabled" in caplog.text
+    assert "synthetic-private-key" not in caplog.text and "ud800" not in caplog.text
+    assert not BackupService.validate_import_package(package, signing_key=NEW_KEY, verification_policy=policy)["valid"]
+    BackupService.attach_package_integrity(package, system_id="current-instance", signing_key=NEW_KEY)
+    assert BackupService.validate_import_package(package, signing_key=NEW_KEY, verification_policy=policy)["signature_valid"]
+    archive = tmp_path / "current.cacb"
+    _write_v4(archive, key=NEW_KEY)
+    assert public_validate_archive(archive, signing_key=NEW_KEY, verification_policy=policy).signature_valid
+
+
 def test_unsigned_semantics_and_cursor_rotation_remain_independent(tmp_path):
     signed = _legacy_package()
     _path, policy = _registry(tmp_path, [_legacy_pin(signed)])

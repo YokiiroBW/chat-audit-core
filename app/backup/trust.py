@@ -62,6 +62,11 @@ class BackupVerificationPolicy:
             for name, key in keys.items()
         ):
             raise ValueError("invalid historical backup keys")
+        for key in keys.values():
+            try:
+                key.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError("invalid historical backup keys") from None
         if any(
             not isinstance(pin, str) or not _SHA256_RE.fullmatch(pin)
             or not isinstance(name, str) or name not in keys
