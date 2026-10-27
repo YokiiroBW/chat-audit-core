@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, a
 from sqlalchemy.pool import NullPool, StaticPool
 
 from app.config import get_settings
-from app.models import Adapter, Base, BotProfile, RobotMessage
+from app.models import Adapter, Base, BotProfile, RobotMessage, SchemaMigration
 
 
 MigrationApply = Callable[[AsyncConnection], Awaitable[None]]
@@ -286,7 +286,12 @@ async def ensure_schema_compatibility(target_engine: AsyncEngine | None = None) 
     active_engine = target_engine or engine
     async with active_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        applied_versions = set((await conn.execute(select(SchemaMigration.version))).scalars())
         for migration in LIGHTWEIGHT_MIGRATION_REGISTRY:
+            # Completed migrations include one-time DDL/data work. Replaying it
+            # on every startup can wait on a full backup's read transaction.
+            if migration.version in applied_versions:
+                continue
             await migration.apply(conn)
             await _record_migration(conn, migration)
 
