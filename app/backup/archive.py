@@ -17,12 +17,18 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Mapping
+
+from app.backup.trust import (
+    BACKUP_SIGNATURE_ALGORITHM,
+    BackupVerificationPolicy,
+    backup_content_fingerprint,
+    canonical_json_bytes,
+)
 
 
 BACKUP_ARCHIVE_SCHEMA = "chat-audit-core.backup.v4"
 BACKUP_ARCHIVE_FORMAT = "tar+gzip"
-BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
 INTEGRITY_FRAMING = "cacb-member-frame-v1"
 DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
@@ -30,10 +36,6 @@ MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 
 _DB_MEMBER_RE = re.compile(r"^db/(?P<section>[a-z][a-z0-9_]*)/(?P<chunk>[0-9]{8})\.jsonl$")
 _MEDIA_MEMBER_RE = re.compile(r"^media/(?P<file_hash>[A-Za-z0-9._-]{1,160})$")
-
-
-def canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _fsync_directory(path: Path) -> None:
@@ -73,9 +75,15 @@ class ArchiveValidationError(ValueError):
 
 
 class _IntegrityAccumulator:
-    def __init__(self, signing_key: str):
+    def __init__(self, signing_key: str, historical_keys: Mapping[str, str] | None = None):
         self.sha256 = hashlib.sha256()
         self.hmac_sha256 = hmac.new(signing_key.encode("utf-8"), digestmod=hashlib.sha256)
+        # Streaming v4 needs the HMAC before the final manifest/pin is known.
+        # Only key_for_content() may select one of these for acceptance.
+        self.historical_hmacs = {
+            key_id: hmac.new(key.encode("utf-8"), digestmod=hashlib.sha256)
+            for key_id, key in (historical_keys or {}).items()
+        }
         self.members = 0
         self.uncompressed_bytes = 0
 
@@ -88,12 +96,16 @@ class _IntegrityAccumulator:
         framed = self._frame_header(name, size)
         self.sha256.update(framed)
         self.hmac_sha256.update(framed)
+        for signature in self.historical_hmacs.values():
+            signature.update(framed)
         self.members += 1
         self.uncompressed_bytes += size
 
     def update(self, content: bytes) -> None:
         self.sha256.update(content)
         self.hmac_sha256.update(content)
+        for signature in self.historical_hmacs.values():
+            signature.update(content)
 
 
 class _DigestingReader(io.RawIOBase):
@@ -147,6 +159,7 @@ class ArchiveValidationReport:
     uncompressed_bytes: int
     checksum_valid: bool
     signature_valid: bool
+    content_fingerprint: str
     extracted_root: Path | None = None
 
 
@@ -549,6 +562,7 @@ def _validate_manifest(
     integrity: _IntegrityAccumulator,
     signing_key: str | None,
     require_signature: bool,
+    verification_policy: BackupVerificationPolicy | None = None,
 ) -> tuple[bool, bool]:
     if manifest.get("schema") != BACKUP_ARCHIVE_SCHEMA:
         raise ArchiveValidationError(f"unsupported backup schema: {manifest.get('schema')!r}")
@@ -595,19 +609,6 @@ def _validate_manifest(
         raise ArchiveValidationError("backup archive payload checksum mismatch")
 
     payload_signature = values.get("payload_signature")
-    payload_signature_valid = False
-    if signing_key:
-        payload_signature_valid = (
-            isinstance(payload_signature, dict)
-            and payload_signature.get("algorithm") == BACKUP_SIGNATURE_ALGORITHM
-            and isinstance(payload_signature.get("value"), str)
-            and hmac.compare_digest(payload_signature["value"], integrity.hmac_sha256.hexdigest())
-        )
-        if not payload_signature_valid:
-            raise ArchiveValidationError("backup archive payload signature mismatch")
-    elif require_signature:
-        raise ArchiveValidationError("backup archive signature cannot be verified without a signing key")
-
     manifest_checksum = values.get("manifest_checksum")
     signature = values.get("signature")
     envelope = _manifest_envelope_bytes(manifest)
@@ -621,15 +622,31 @@ def _validate_manifest(
         raise ArchiveValidationError("backup manifest checksum mismatch")
     signature_valid = False
     if signing_key:
-        expected = hmac.new(signing_key.encode("utf-8"), envelope, hashlib.sha256).hexdigest()
-        signature_valid = (
-            isinstance(signature, dict)
-            and signature.get("algorithm") == BACKUP_SIGNATURE_ALGORITHM
-            and isinstance(signature.get("value"), str)
-            and hmac.compare_digest(signature["value"], expected)
-            and payload_signature_valid
+        def matches(block: Any, expected: str) -> bool:
+            return (
+                isinstance(block, dict)
+                and block.get("algorithm") == BACKUP_SIGNATURE_ALGORITHM
+                and isinstance(block.get("value"), str)
+                and hmac.compare_digest(block["value"], expected)
+            )
+
+        payload_signature_valid = matches(payload_signature, integrity.hmac_sha256.hexdigest())
+        signature_valid = payload_signature_valid and matches(
+            signature, hmac.new(signing_key.encode("utf-8"), envelope, hashlib.sha256).hexdigest()
         )
+        if not signature_valid and verification_policy is not None:
+            historical = verification_policy.key_for_content("v4", integrity.sha256.hexdigest(), manifest)
+            if historical is not None:
+                key_id, key = historical
+                payload_signature_valid = matches(
+                    payload_signature, integrity.historical_hmacs[key_id].hexdigest()
+                )
+                signature_valid = payload_signature_valid and matches(
+                    signature, hmac.new(key.encode("utf-8"), envelope, hashlib.sha256).hexdigest()
+                )
         if not signature_valid:
+            if not payload_signature_valid:
+                raise ArchiveValidationError("backup archive payload signature mismatch")
             raise ArchiveValidationError("backup manifest signature mismatch")
     elif require_signature:
         raise ArchiveValidationError("backup manifest signature cannot be verified without a signing key")
@@ -642,6 +659,7 @@ def validate_backup_archive(
     signing_key: str | None,
     require_signature: bool = True,
     extract_root: Path | None = None,
+    verification_policy: BackupVerificationPolicy | None = None,
 ) -> ArchiveValidationReport:
     """Validate every archive byte and optionally stage members for restore."""
 
@@ -651,7 +669,10 @@ def validate_backup_archive(
         extract_root.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix="cacb-validate-", dir=source_path.parent) as temporary:
         index = _validation_index(Path(temporary) / "index.sqlite3")
-        integrity = _IntegrityAccumulator(signing_key or "")
+        integrity = _IntegrityAccumulator(
+            signing_key or "",
+            verification_policy.historical_keys if verification_policy is not None and signing_key else None,
+        )
         counts: dict[str, int] = {}
         manifest: dict[str, Any] | None = None
         saw_manifest = False
@@ -734,6 +755,7 @@ def validate_backup_archive(
                 integrity=integrity,
                 signing_key=signing_key,
                 require_signature=require_signature,
+                verification_policy=verification_policy,
             )
             if extract_root is not None:
                 _fsync_directory(extract_root)
@@ -745,6 +767,7 @@ def validate_backup_archive(
                 uncompressed_bytes=integrity.uncompressed_bytes,
                 checksum_valid=checksum_valid,
                 signature_valid=signature_valid,
+                content_fingerprint=backup_content_fingerprint("v4", integrity.sha256.hexdigest(), manifest),
                 extracted_root=extract_root,
             )
         except Exception:

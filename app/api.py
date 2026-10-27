@@ -80,6 +80,7 @@ from app.services.admin_token_service import AdminTokenService, VALID_ADMIN_ROLE
 from app.services.audit_log_service import AuditLogService
 from app.services.bot_profile_service import BotProfileService
 from app.services.backup_service import BackupService
+from app.backup.trust import load_backup_verification_policy
 from app.services.backup_config_service import BackupConfigService, EffectiveBackupConfig
 from app.services.capture_policy_service import CapturePolicyService
 from app.services.admin_user_service import AdminUserService
@@ -1894,6 +1895,7 @@ async def validate_import_data(
         public_storage_prefix=settings.public_storage_prefix,
         signing_key=settings.app_secret_key,
         require_signature=settings.backup_import_require_signature,
+        verification_policy=load_backup_verification_policy(settings.backup_trust_registry),
     )
     return ImportValidationResponse(**report)
 
@@ -1925,6 +1927,7 @@ async def import_data(
             public_storage_prefix=settings.public_storage_prefix,
             signing_key=settings.app_secret_key,
             require_signature=settings.backup_import_require_signature,
+            verification_policy=load_backup_verification_policy(settings.backup_trust_registry),
         )
     except ValueError as exc:
         await db.rollback()

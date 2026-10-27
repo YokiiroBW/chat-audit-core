@@ -31,6 +31,7 @@ from app.models import (
     UserProfile,
 )
 from app.services.backup_service import BackupService
+from app.backup.trust import BackupVerificationPolicy
 from app.time_utils import parse_utc_datetime, utc_now
 
 
@@ -472,6 +473,7 @@ async def restore_backup_archive(
     signing_key: str,
     work_root: Path | None = None,
     cleanup_work_root: bool = True,
+    verification_policy: BackupVerificationPolicy | None = None,
 ) -> RestoreResult:
     """Validate and restore a full v4 archive into an empty isolated target."""
 
@@ -487,6 +489,7 @@ async def restore_backup_archive(
         signing_key=signing_key,
         require_signature=True,
         extract_root=extracted_root,
+        verification_policy=verification_policy,
     )
     journal = _media_journal(extracted_root / "restore-media.sqlite3")
     engine, sessionmaker = create_async_engine_and_sessionmaker(database_url)

@@ -16,6 +16,48 @@
 - manifest 的 payload checksum、payload HMAC、manifest checksum 和 manifest HMAC 都必须验证成功后才允许恢复。
 - worker 默认限制为 768 MiB 且禁止容器 swap；进程地址空间再限制为 640 MiB。不要提高上限来掩盖失败，应先保留任务状态和 `failures.log` 排查。
 
+## 签名密钥轮换与历史备份
+
+`APP_SECRET_KEY` 始终独占新 JSON 导出、v4 worker 备份、旧包转换结果和历史查询 cursor。
+轮换前，从已知受信的历史工件生成内容指纹。命令要求 checksum 和签名均验证成功；
+不要把攻击者上传、仅凭文件名/时间/目录判断的材料加入信任清单。知道旧 key 的人也能签任意内容，
+签名通过本身不能证明历史来源。
+
+```bash
+python -m app.backup.cli fingerprint /trusted/backup.json.gz --format legacy
+python -m app.backup.cli fingerprint /trusted/backup.cacb --format v4
+```
+
+命令仅输出 `content_fingerprint`，不注册信任、不改变输入；legacy 使用实际解析后重放的
+canonical JSON checksum，v4 使用实际流式重算的 member-framing checksum。两者都与完整
+manifest（包含 checksum、签名及其元数据）组成有明确格式域的 SHA-256 指纹。
+网页解析再序列化 JSON 不改变该内容指纹；修改 payload、manifest、key_id 或时间都会失配。
+
+由管理员把已核来源的指纹与对应旧 key 写入外置私密 JSON，再配置
+`BACKUP_TRUST_REGISTRY=/run/secrets/chat-backup-trust.json`。格式如下，示例值不能用于生产：
+
+```json
+{
+  "schema": "chat-audit-core.backup-trust.v1",
+  "historical_keys": {"before-rotation": "EXAMPLE-OLD-KEY-DO-NOT-USE"},
+  "trusted_backups": {"REPLACE_WITH_64_LOWERCASE_HEX_FINGERPRINT": "before-rotation"}
+}
+```
+
+该文件含旧 key，使用与部署凭据相同的访问保护，放在备份导出目录外并只读挂载到需要验证的
+app/CLI 容器；Compose override 可把宿主文件映射到上述容器路径。现有 Compose 为 app 与
+backup-worker 传递该可选路径，默认空，不自动创建挂载或相信某个目录。
+文件上限 2 MiB、历史 key 最多 16 个；缺失、重复 JSON key、无效 schema 或悬空指纹关联
+会记录不含文件内容/密钥的警告，并仅关闭历史验证，当前 key 验证继续工作。
+
+清单就位后切换 `APP_SECRET_KEY`。旧包只有完整内容指纹命中外置登记且旧签名也正确时，
+才可从现有 HTTP/核心验证、转换或隔离恢复入口通过。转换只用当前 key 签发新结果。
+指纹命令仍不会给后来的候选输入自登记；历史文件后续增加时，仍须核对受信来源并在受控离线
+环境以对应旧 key 验签。清单不参与 cursor；轮换前的 cursor 按原行为失效。
+
+`BACKUP_IMPORT_REQUIRE_SIGNATURE=false` 的现有管理员 unsigned 导入保持可用，
+`signature_valid` 仍为 `null`；加入清单不会把未签名输入变成验签成功。
+
 ## 恢复目标
 
 - RTO：普通单机/NAS 部署目标为 1 小时内恢复服务。

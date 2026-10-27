@@ -8,8 +8,9 @@ from pathlib import Path
 
 from app.backup.archive import validate_backup_archive
 from app.backup.jobs import enqueue_backup_job, get_backup_job
-from app.backup.legacy import convert_legacy_backup_to_v4
+from app.backup.legacy import convert_legacy_backup_to_v4, fingerprint_legacy_backup
 from app.backup.restore import restore_backup_archive
+from app.backup.trust import load_backup_verification_policy
 from app.backup.worker import _install_process_memory_limit
 from app.config import get_settings
 
@@ -28,6 +29,10 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = subparsers.add_parser("validate", help="stream-validate a v4 archive")
     validate.add_argument("archive", type=Path)
+
+    fingerprint = subparsers.add_parser("fingerprint", help="print a signed backup content pin; never register trust")
+    fingerprint.add_argument("archive", type=Path)
+    fingerprint.add_argument("--format", choices=("legacy", "v4"), required=True)
 
     restore = subparsers.add_parser("restore", help="restore a v4 archive into an empty target")
     restore.add_argument("archive", type=Path)
@@ -67,11 +72,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _install_process_memory_limit(settings)
+    verification_policy = load_backup_verification_policy(settings.backup_trust_registry)
+    if args.command == "fingerprint":
+        if args.format == "legacy":
+            fingerprint = fingerprint_legacy_backup(
+                args.archive, signing_key=settings.app_secret_key, verification_policy=verification_policy
+            )
+        else:
+            fingerprint = validate_backup_archive(
+                args.archive,
+                signing_key=settings.app_secret_key,
+                require_signature=True,
+                verification_policy=verification_policy,
+            ).content_fingerprint
+        _print({"format": args.format, "content_fingerprint": fingerprint})
+        return 0
     if args.command == "validate":
         report = validate_backup_archive(
             args.archive,
             signing_key=settings.app_secret_key,
             require_signature=True,
+            verification_policy=verification_policy,
         )
         _print(
             {
@@ -94,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             require_legacy_signature=args.require_legacy_signature,
             chunk_bytes=settings.backup_chunk_bytes,
             filename=args.filename,
+            verification_policy=verification_policy,
         )
         _print(
             {
@@ -114,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                 public_storage_prefix=settings.public_storage_prefix,
                 signing_key=settings.app_secret_key,
                 work_root=args.work_root,
+                verification_policy=verification_policy,
             )
         )
         _print(

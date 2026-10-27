@@ -16,6 +16,7 @@ from typing import Any, Iterable
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backup.trust import BACKUP_SIGNATURE_ALGORITHM, BackupVerificationPolicy
 from app.import_contract import (
     IMPORT_BATCH_MODES,
     IMPORT_BATCH_STATUSES,
@@ -49,7 +50,6 @@ BACKUP_SCHEMA_V2 = "chat-audit-core.backup.v2"
 LEGACY_BACKUP_SCHEMAS = frozenset({"chat-audit-core.backup.v1", BACKUP_SCHEMA_V2})
 SUPPORTED_BACKUP_SCHEMAS = frozenset({BACKUP_SCHEMA, *LEGACY_BACKUP_SCHEMAS})
 BACKUP_DETAIL_SCHEMAS = frozenset({BACKUP_SCHEMA_V2, BACKUP_SCHEMA})
-BACKUP_SIGNATURE_ALGORITHM = "hmac-sha256"
 logger = logging.getLogger(__name__)
 
 
@@ -362,7 +362,12 @@ class BackupService:
             raise ValueError("backup package checksum mismatch")
 
     @staticmethod
-    def validate_package_signature(package: dict[str, Any], signing_key: str) -> None:
+    def validate_package_signature(
+        package: dict[str, Any],
+        signing_key: str,
+        *,
+        verification_policy: BackupVerificationPolicy | None = None,
+    ) -> None:
         manifest = package.get("manifest")
         if not isinstance(manifest, dict):
             raise ValueError("manifest must be an object")
@@ -376,9 +381,17 @@ class BackupService:
         expected = signature.get("value")
         if not isinstance(expected, str):
             raise ValueError("backup package signature value must be a string")
-        actual = BackupService.calculate_package_signature(package, signing_key)
+        actual_checksum, actual = BackupService._calculate_package_integrity(package, signing_key)
+        assert actual is not None
         if not hmac.compare_digest(str(expected or ""), actual):
-            raise ValueError("backup package signature mismatch")
+            historical = (
+                verification_policy.key_for_content("legacy-json", actual_checksum, manifest)
+                if verification_policy is not None else None
+            )
+            if historical is None or not hmac.compare_digest(
+                expected, BackupService.calculate_package_signature(package, historical[1])
+            ):
+                raise ValueError("backup package signature mismatch")
 
     @staticmethod
     def _message_to_dict(message: Message) -> dict[str, Any]:
@@ -1446,6 +1459,7 @@ class BackupService:
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
         require_signature: bool = False,
+        verification_policy: BackupVerificationPolicy | None = None,
     ) -> dict[str, Any]:
         """Validate a backup package before import.
 
@@ -1494,7 +1508,9 @@ class BackupService:
                 errors.append("backup package signature must be an object")
             elif signing_key:
                 try:
-                    BackupService.validate_package_signature(package, signing_key)
+                    BackupService.validate_package_signature(
+                        package, signing_key, verification_policy=verification_policy
+                    )
                     signature_valid = True
                 except ValueError as exc:
                     signature_valid = False
@@ -1568,6 +1584,7 @@ class BackupService:
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
         require_signature: bool = False,
+        verification_policy: BackupVerificationPolicy | None = None,
     ) -> dict[str, Any]:
         report = BackupService.validate_import_package(
             package,
@@ -1575,6 +1592,7 @@ class BackupService:
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
             require_signature=require_signature,
+            verification_policy=verification_policy,
         )
         schema = report.get("schema")
         if not report["valid"]:
@@ -1825,6 +1843,7 @@ class BackupService:
         public_storage_prefix: str = "/static/storage",
         signing_key: str | None = None,
         require_signature: bool = False,
+        verification_policy: BackupVerificationPolicy | None = None,
     ) -> dict[str, int]:
         manifest_value = package.get("manifest")
         manifest = manifest_value if isinstance(manifest_value, dict) else {}
@@ -1837,6 +1856,7 @@ class BackupService:
             public_storage_prefix=public_storage_prefix,
             signing_key=signing_key,
             require_signature=require_signature,
+            verification_policy=verification_policy,
         )
         if not report["valid"]:
             raise ValueError("; ".join(report["errors"]))

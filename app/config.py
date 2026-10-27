@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # Off by default so unsigned legacy packages stay importable; turn it on to
     # require that every imported archive proves where it came from.
     backup_import_require_signature: bool = False
+    # Operator-owned JSON registry of exact historical backup content and keys.
+    # Empty/invalid disables history only; APP_SECRET_KEY signs all new output.
+    backup_trust_registry: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

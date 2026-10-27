@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator
@@ -18,6 +19,7 @@ import ijson
 
 from app.backup.archive import BackupArchiveWriter, canonical_json_bytes
 from app.backup.exporter import BackupExportResult, backup_filename
+from app.backup.trust import BackupVerificationPolicy, backup_content_fingerprint
 from app.services.backup_service import (
     BACKUP_SCHEMA,
     BACKUP_SCHEMA_V2,
@@ -191,7 +193,8 @@ def _validate_legacy_integrity(
     *,
     signing_key: str | None,
     require_signature: bool,
-) -> tuple[dict[str, Any], bool | None, bool | None]:
+    verification_policy: BackupVerificationPolicy | None = None,
+) -> tuple[dict[str, Any], bool | None, bool | None, str]:
     manifest_path = spools.get("manifest")
     if manifest_path is None:
         raise LegacyBackupValidationError("legacy backup manifest is missing")
@@ -235,10 +238,54 @@ def _validate_legacy_integrity(
                 and hmac.compare_digest(signature_block["value"], actual_signature)
             )
             if not signature_valid:
-                raise LegacyBackupValidationError("legacy backup signature mismatch")
+                historical = (
+                    verification_policy.key_for_content("legacy-json", actual_checksum, manifest)
+                    if verification_policy is not None else None
+                )
+                if historical is not None:
+                    # Replay only the stable parsed spools; never reopen the input
+                    # path after computing or selecting its trusted content pin.
+                    _checksum, historical_signature = _replay_legacy_canonical_package(
+                        spools, manifest=manifest, signing_key=historical[1]
+                    )
+                    signature_valid = (
+                        isinstance(signature_block, dict)
+                        and signature_block.get("algorithm") == BACKUP_SIGNATURE_ALGORITHM
+                        and isinstance(signature_block.get("value"), str)
+                        and historical_signature is not None
+                        and hmac.compare_digest(signature_block["value"], historical_signature)
+                    )
+                if not signature_valid:
+                    raise LegacyBackupValidationError("legacy backup signature mismatch")
     elif require_signature:
         raise LegacyBackupValidationError("legacy backup signature is required but missing")
-    return manifest, checksum_valid, signature_valid
+    fingerprint = backup_content_fingerprint("legacy-json", actual_checksum, manifest)
+    return manifest, checksum_valid, signature_valid, fingerprint
+
+
+def fingerprint_legacy_backup(
+    legacy_path: Path,
+    *,
+    signing_key: str,
+    verification_policy: BackupVerificationPolicy | None = None,
+) -> str:
+    """Read-only fingerprint for an operator-selected, signed legacy input.
+
+    This returns a candidate identifier, never writes trusted configuration,
+    and cannot establish the provenance of an attacker-supplied signed file.
+    """
+
+    legacy_path = Path(legacy_path)
+    with tempfile.TemporaryDirectory(prefix="cacb-fingerprint-", dir=legacy_path.parent) as temporary:
+        with _legacy_input(legacy_path) as source:
+            spools, _counts = _spool_legacy_top_level(source, Path(temporary))
+        _manifest, _checksum, _signature, fingerprint = _validate_legacy_integrity(
+            spools,
+            signing_key=signing_key,
+            require_signature=True,
+            verification_policy=verification_policy,
+        )
+        return fingerprint
 
 
 def _array_items(path: Path) -> Iterator[dict[str, Any]]:
@@ -335,6 +382,7 @@ def convert_legacy_backup_to_v4(
     require_legacy_signature: bool = False,
     chunk_bytes: int = 8 * 1024 * 1024,
     filename: str | None = None,
+    verification_policy: BackupVerificationPolicy | None = None,
 ) -> BackupExportResult:
     created_at = utc_now()
     final_path = Path(backup_root) / (filename or backup_filename("converted", created_at))
@@ -358,10 +406,11 @@ def convert_legacy_backup_to_v4(
         try:
             with _legacy_input(Path(legacy_path)) as source:
                 spools, _item_counts = _spool_legacy_top_level(source, archive.workspace)
-            manifest, checksum_valid, signature_valid = _validate_legacy_integrity(
+            manifest, checksum_valid, signature_valid, _fingerprint = _validate_legacy_integrity(
                 spools,
                 signing_key=signing_key,
                 require_signature=require_legacy_signature,
+                verification_policy=verification_policy,
             )
             schema = str(manifest["schema"])
             archive.metadata["legacy"] = {
